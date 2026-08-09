@@ -14,9 +14,11 @@ history and its own agents.
 - App name **Currawong**; bundle identifier **`au.charlesmartin.currawong`**.
   Extensions extend it (`au.charlesmartin.currawong.liveactivity`); the Keychain
   access group is `$(TeamID).au.charlesmartin.currawong`.
-- Separate repo from the library, depending on it via SPM. Local path
-  dependency (`../swift-hamvoip`) until the library's first release, then a
-  versioned git dependency.
+- Separate repo from the library, depending on it via SPM. **Versioned git
+  dependency** (`from: 0.1.0`) as of the library's first release — the build no
+  longer needs a sibling checkout, and the path dependency must not be
+  committed back. A sibling checkout is still how you *read* the plan and the
+  requirements, below.
 - **xcodegen** with `project.yml`. **The `.xcodeproj` is generated and never
   committed** — change `project.yml`, then `make generate`. So is
   `Sources/Currawong/Info.plist`; edit the `info.properties` block in

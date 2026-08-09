@@ -15,17 +15,20 @@ options:
   xcodeVersion: "16.0"
 
 packages:
-  # Local path dependency while the library is unpublished. At the library's
-  # first tagged release this becomes a versioned git dependency:
+  # Versioned git dependency as of swift-hamvoip v0.1.0. `from:` accepts any
+  # 0.1.x — the library is 0.x, so its own changelog warns the API may change
+  # in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
+  # pins the build, and it is generated, so a fresh `make generate` resolves
+  # forward. Pin exactly here if that ever bites.
+  #
+  # To work on the app and the library together, swap this for the path
+  # dependency below and regenerate. Do not commit the swap.
   #
   #   HamVoIP:
-  #     url: https://github.com/<owner>/swift-hamvoip
-  #     from: 0.1.0
-  #
-  # Until then the app and the library are developed together in sibling
-  # checkouts, and a path dependency is the only way to build them that way.
+  #     path: ../swift-hamvoip
   HamVoIP:
-    path: ../swift-hamvoip
+    url: https://github.com/cpmpercussion/swift-hamvoip
+    from: 0.1.0
 
 settings:
   base:

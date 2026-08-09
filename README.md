@@ -4,8 +4,8 @@ A SwiftUI client for internet-linked amateur radio voice modes, on iOS and
 macOS. Named for a bird with a distinctive, far-carrying call, locally notable
 in VK1.
 
-Currawong is the app half of the project. The protocols live next door in
-[`swift-hamvoip`](../swift-hamvoip) — AllStarLink/IAX2 today, M17 and possibly
+Currawong is the app half of the project. The protocols live in
+[`swift-hamvoip`](https://github.com/cpmpercussion/swift-hamvoip) — AllStarLink/IAX2 today, M17 and possibly
 EchoLink later — and **no protocol code lives in this repository**. The app
 talks to the libraries through `RadioCore.NetworkClient` and knows nothing about
 RFC 5456. The one place a concrete client is named is
@@ -43,14 +43,8 @@ Nothing here has been on the air.
 ## Building and testing from the terminal
 
 You need Xcode and [xcodegen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`), and a checkout of `swift-hamvoip` as a sibling
-directory:
-
-```
-ham-voip-project/
-├── swift-hamvoip
-└── currawong
-```
+(`brew install xcodegen`). The library is resolved from its tag, so this
+repository is all you need to clone.
 
 The `.xcodeproj` is generated from `project.yml` and is not in version control,
 so generate it first:
@@ -81,10 +75,19 @@ wants `DEVELOPMENT_TEAM=XXXXXXXXXX` on the command line, or
 
 ## Dependency on the library
 
-`project.yml` declares `swift-hamvoip` as a **local path dependency**
-(`../swift-hamvoip`), because the library is not published yet and the two are
-developed together. At the library's first tagged release this becomes an
-ordinary versioned git dependency; the comment in `project.yml` says so too.
+`project.yml` declares `swift-hamvoip` as an ordinary versioned SPM dependency,
+`from: 0.1.0`. Note that the library is 0.x and says in its own changelog that
+the API may change in any release, so `from:` is a looser promise here than it
+would be after 1.0.
+
+Nothing in this repository pins the resolved version: the `Package.resolved`
+that would do it lives inside the generated `.xcodeproj`, which is not in
+version control, so a fresh `make generate` takes the newest matching release.
+Pin the version in `project.yml` if that ever matters.
+
+To work on the app and the library together, swap the dependency for a path
+dependency on a sibling checkout and regenerate — there is a commented-out
+block in `project.yml` for it. Don't commit the swap.
 
 ## What the app is allowed to know
 
