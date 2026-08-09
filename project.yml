@@ -1,0 +1,125 @@
+# Currawong — XcodeGen project definition.
+#
+# The .xcodeproj is generated, never committed. Regenerate with `make generate`
+# (or `xcodegen generate`) after changing this file or adding source files.
+
+name: Currawong
+
+options:
+  bundleIdPrefix: au.charlesmartin
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+    macOS: "13.0"
+  minimumXcodeGenVersion: "2.42.0"
+  xcodeVersion: "16.0"
+
+packages:
+  # Local path dependency while the library is unpublished. At the library's
+  # first tagged release this becomes a versioned git dependency:
+  #
+  #   HamVoIP:
+  #     url: https://github.com/<owner>/swift-hamvoip
+  #     from: 0.1.0
+  #
+  # Until then the app and the library are developed together in sibling
+  # checkouts, and a path dependency is the only way to build them that way.
+  HamVoIP:
+    path: ../swift-hamvoip
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # PD-5: TestFlight (iOS) and Developer ID + notarisation (macOS) both need a
+    # team. Override on the command line or in a local xcconfig if you are
+    # building this under a different account:
+    #   xcodebuild ... DEVELOPMENT_TEAM=XXXXXXXXXX
+    # or drop signing entirely for a CI build:
+    #   xcodebuild ... CODE_SIGNING_ALLOWED=NO
+    DEVELOPMENT_TEAM: EDH387FRHA
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Currawong:
+    type: application
+    # One multiplatform target rather than two per-platform ones: the app is the
+    # same app on both, and the library targets iOS 16 / macOS 13 alike.
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: Sources/Currawong
+        excludes:
+          - Info.plist
+    dependencies:
+      # The app depends on the library products only. It talks to IAX2Kit
+      # through RadioCore's `NetworkClient`; the concrete `IAX2Client` is named
+      # in exactly one file, CompositionRoot.swift.
+      - package: HamVoIP
+        products:
+          - RadioCore
+          - IAX2Kit
+    info:
+      path: Sources/Currawong/Info.plist
+      properties:
+        CFBundleDisplayName: Currawong
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: "Copyright 2026 Currawong contributors. Apache-2.0."
+
+        # PD-2. `audio` keeps the call alive with the screen locked; a
+        # `bluetooth-central` app keeps its BLE PTT link in the background
+        # (PT-2). Neither needs Apple approval, and nothing else is requested —
+        # in particular there is no multicast entitlement (PD-3), no VoIP mode,
+        # and CallKit is not used (PD-4).
+        UIBackgroundModes:
+          - audio
+          - bluetooth-central
+
+        # Required. Without microphone access the app cannot transmit, which is
+        # most of what it is for.
+        NSMicrophoneUsageDescription:
+          "Currawong needs the microphone to transmit your voice to the node or reflector you are connected to."
+        # Needed by the BLE PTT accessory support in Phase 5 (PT-2, PT-3).
+        NSBluetoothAlwaysUsageDescription:
+          "Currawong connects to Bluetooth push-to-talk accessories so a physical button can key your transmission."
+
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: au.charlesmartin.currawong
+        PRODUCT_NAME: Currawong
+        GENERATE_INFOPLIST_FILE: NO
+        # Extensions extend the identifier (au.charlesmartin.currawong.liveactivity);
+        # the Keychain access group is $(TeamID).au.charlesmartin.currawong.
+    scheme:
+      testTargets:
+        - CurrawongTests
+      gatherCoverageData: true
+
+  CurrawongTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Tests/CurrawongTests
+    dependencies:
+      - target: Currawong
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: au.charlesmartin.currawong.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # Hosted by the app so `@testable import Currawong` links. The
+        # BUNDLE_EXECUTABLE_FOLDER_PATH indirection is what makes one setting
+        # correct for both iOS (executable at the bundle root) and macOS
+        # (Contents/MacOS).
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Currawong.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Currawong"
+        BUNDLE_LOADER: "$(TEST_HOST)"
