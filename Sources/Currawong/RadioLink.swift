@@ -47,6 +47,17 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// Touch-up on the PTT button. The ordinary case.
     case released
 
+    /// **PT-2.** The release edge from a learned Bluetooth accessory. Distinct
+    /// from ``released`` only so the tests can tell which input let go, which
+    /// matters because the accessory is the one input whose release can also go
+    /// missing — see ``accessoryLinkLost`` on `PTTSink`.
+    case accessoryReleased
+
+    /// **PT-4.** A latched remote-command transmission was unlatched — either
+    /// by a second press, or by the operator switching the remote input off
+    /// while it still held the key. Deliberate in both cases.
+    case remoteCommandToggled
+
     /// The finger left the button's bounds while still down. A finger that has
     /// slid off the button is a finger that is no longer paying attention to
     /// it, and a PTT that keeps transmitting in that state is a PTT that can
@@ -84,7 +95,8 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// does not know why they were unkeyed will simply key up again.
     var isUnexpected: Bool {
         switch self {
-        case .released, .draggedOffButton, .disconnecting:
+        case .released, .accessoryReleased, .remoteCommandToggled,
+            .draggedOffButton, .disconnecting:
             return false
         case .gestureCancelled, .viewDisappeared, .appBackgrounded,
             .audioInterrupted, .routeChanged, .watchdogExpired, .transmitFailed:
