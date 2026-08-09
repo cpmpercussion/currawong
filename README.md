@@ -23,9 +23,20 @@ backgrounding, on the view disappearing, on the gesture being cancelled or
 dragged off the button, and on the library's transmit watchdog firing (SF-1),
 which is shown on screen when it does. The secret is stored in the Keychain.
 
+**Phase 5 input layer (APP-5), partial.** PTTInput.swift defines PTTSource
+and PTTSink abstractions. The input controllers are in place: PTTMapping.swift
+(PT-3, learn-mode model), BLECentral.swift, CoreBluetoothCentral.swift and
+BLEPTTController.swift (PT-2, Bluetooth LE accessory), and RemoteCommandPTT.swift
+(PT-4, headset or remote button with toggle semantics). However, nothing is
+wired up. RadioSession does not conform to PTTSink, so these controllers have
+no consumer. SF-2 (Bluetooth link loss must drop transmit) is therefore not
+met. There are no tests for the mapping, the controller, or the remote-command
+path, and no learn-mode UI.
+
 Not yet: multiple stored nodes and settings CRUD (APP-4), the Live Activity
 that makes transmit state visible without unlocking (SF-4, APP-3), DTMF, and
-Bluetooth PTT (Phase 5).
+RadioSession support for Bluetooth PTT inputs, tests for the controllers, and
+the learn-mode UI.
 
 Nothing here has been on the air.
 
