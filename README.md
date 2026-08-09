@@ -13,10 +13,19 @@ RFC 5456. The one place a concrete client is named is
 
 ## Status
 
-**Scaffold (APP-1).** It builds, it launches, it runs its tests, and that is
-all it does. There is no connect screen, no PTT button, no audio and no
-settings; the root view is a placeholder that displays transmit state and says
-so. On-screen PTT and the connect screen are APP-2, Bluetooth PTT is Phase 5.
+**Connect screen and on-screen PTT (APP-2).** There is a form for one node —
+host, port, node number, callsign, username and secret — a connect/disconnect
+control, and a press-and-hold PTT button (PT-1). Audio is wired both ways:
+the microphone into the client while transmitting, received audio into
+playback. The safety requirements that could be met from here are met:
+transmission drops on audio interruption and route change (SF-3), on
+backgrounding, on the view disappearing, on the gesture being cancelled or
+dragged off the button, and on the library's transmit watchdog firing (SF-1),
+which is shown on screen when it does. The secret is stored in the Keychain.
+
+Not yet: multiple stored nodes and settings CRUD (APP-4), the Live Activity
+that makes transmit state visible without unlocking (SF-4, APP-3), DTMF, and
+Bluetooth PTT (Phase 5).
 
 Nothing here has been on the air.
 
