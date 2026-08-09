@@ -1,0 +1,72 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  spdx:
+    name: SPDX headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every Swift file carries an SPDX identifier
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            if ! head -3 "$f" | grep -q 'SPDX-License-Identifier'; then
+              echo "::error file=$f::missing SPDX identifier"
+              missing=1
+            fi
+          done < <(find Sources Tests -name '*.swift')
+          exit $missing
+
+  build-and-test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - name: Check out Currawong
+        uses: actions/checkout@v4
+        with:
+          path: currawong
+
+      # project.yml depends on the library by local path (../swift-hamvoip),
+      # because swift-hamvoip is not published yet. CI therefore has to check
+      # out both repositories side by side. When the library gains tagged
+      # releases and project.yml switches to a versioned git dependency, delete
+      # this step and the `path:` above.
+      - name: Check out swift-hamvoip alongside it
+        uses: actions/checkout@v4
+        with:
+          repository: cpmpercussion/swift-hamvoip
+          path: swift-hamvoip
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate the project
+        working-directory: currawong
+        run: xcodegen generate
+
+      # CODE_SIGNING_ALLOWED=NO so CI needs no signing identity and no team.
+      # DEVELOPMENT_TEAM in project.yml is for local device builds only.
+      - name: Build (iOS)
+        working-directory: currawong
+        run: |
+          xcodebuild build \
+            -scheme Currawong \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Test (iOS Simulator)
+        working-directory: currawong
+        run: |
+          xcodebuild test \
+            -scheme Currawong \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Test (macOS)
+        working-directory: currawong
+        run: |
+          xcodebuild test \
+            -scheme Currawong \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
