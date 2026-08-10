@@ -25,6 +25,7 @@ struct ConnectFormView: View {
     let connectAction: () -> Void
 
     @State private var portText = ""
+    @State private var timeoutText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -44,10 +45,18 @@ struct ConnectFormView: View {
             .controlSize(.large)
             .disabled(isBusy)
         }
-        .onAppear { portText = String(settings.port) }
+        .onAppear {
+            portText = String(settings.port)
+            timeoutText = String(Int(settings.transmitTimeout))
+        }
         .onChange(of: portText) { newValue in
             if let port = NodeSettings.parsePort(newValue) {
                 settings.port = port
+            }
+        }
+        .onChange(of: timeoutText) { newValue in
+            if let timeout = NodeSettings.parseTransmitTimeout(newValue) {
+                settings.transmitTimeout = timeout
             }
         }
     }
@@ -116,6 +125,30 @@ struct ConnectFormView: View {
             }
 
             Text("The secret is kept in the Keychain, not in the app's settings file.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("Safety")
+                .font(.headline)
+
+            LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
+                TextField(String(Int(NodeSettings.defaultTransmitTimeout)), text: $timeoutText)
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                        .keyboardType(.numberPad)
+                    #endif
+            }
+
+            // SF-1 is enforced in the library, not here, and it is not
+            // optional — the field sets the number, it cannot switch the
+            // watchdog off. Worth saying, so nobody goes looking for the switch.
+            Text(
+                "The longest a single transmission may last before Currawong unkeys for you. "
+                + "Between \(Int(NodeSettings.transmitTimeoutRange.lowerBound)) and "
+                + "\(Int(NodeSettings.transmitTimeoutRange.upperBound)) seconds; it cannot be "
+                + "turned off. A short value is the quickest way to prove the watchdog works.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

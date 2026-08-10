@@ -31,6 +31,7 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         case startTransmit
         case stopTransmit
         case send(frameCount: Int)
+        case sendDTMF(Character)
     }
 
     private let lock = NSLock()
@@ -39,6 +40,8 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
     private var storedConnectError: Error?
     private var storedStartTransmitError: Error?
     private var storedSentFrames: [[Int16]] = []
+    private var storedSentDigits: [Character] = []
+    private var storedDTMFError: Error?
 
     // MARK: NetworkClient
 
@@ -97,6 +100,36 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         storedSentFrames.append(pcm)
         storedCalls.append(.send(frameCount: pcm.count))
         lock.unlock()
+    }
+
+    /// Stands in for `IAX2Client.send(dtmf:)`, likewise absent from the
+    /// protocol. Throws `dtmfError` when a test has set one.
+    func send(dtmf digit: Character) throws {
+        lock.lock()
+        storedCalls.append(.sendDTMF(digit))
+        storedSentDigits.append(digit)
+        let error = storedDTMFError
+        lock.unlock()
+        if let error { throw error }
+    }
+
+    var sentDigits: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(storedSentDigits)
+    }
+
+    var dtmfError: Error? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedDTMFError
+        }
+        set {
+            lock.lock()
+            storedDTMFError = newValue
+            lock.unlock()
+        }
     }
 
     var calls: [Call] {
@@ -417,6 +450,7 @@ final class SessionHarness {
                     events: events,
                     receivedAudio: received,
                     sendCapturedFrame: { client.send(pcm: $0) },
+                    sendDTMF: { try client.send(dtmf: $0) },
                     close: { closedLinks.bump() })
             })
     }

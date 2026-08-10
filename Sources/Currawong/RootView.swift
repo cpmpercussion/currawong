@@ -24,8 +24,12 @@ import SwiftUI
 /// SwiftUI.
 struct RootView<Client: NetworkClient>: View {
     @ObservedObject var session: RadioSession<Client>
+    @ObservedObject var accessory: BLEPTTController
+    @ObservedObject var remoteCommand: RemoteCommandPTTController
 
     @Environment(\.scenePhase) private var scenePhase
+
+    @State private var isShowingAccessorySheet = false
 
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
@@ -55,6 +59,14 @@ struct RootView<Client: NetworkClient>: View {
                         onPress: { session.beginTransmit() },
                         onRelease: { session.endTransmit(reason: $0) })
 
+                    accessoryRow
+
+                    DTMFKeypadView(
+                        isEnabled: session.connection.isConnected,
+                        sent: session.sentDTMF,
+                        received: session.receivedDTMF,
+                        send: { digit in Task { await session.sendDTMF(digit) } })
+
                     Divider()
 
                     ConnectFormView(
@@ -75,6 +87,17 @@ struct RootView<Client: NetworkClient>: View {
             session.setForeground(phase == .active)
         }
         .onDisappear { session.viewDisappeared() }
+        .sheet(isPresented: $isShowingAccessorySheet) {
+            // `isTransmitting` is passed in because the sheet covers the banner
+            // at the top of this view, and "on air" must not be something the
+            // operator loses sight of by opening a settings screen — least of
+            // all this settings screen, where the whole activity is pressing a
+            // button that keys the radio.
+            AccessoryView(
+                accessory: accessory,
+                remoteCommand: remoteCommand,
+                isTransmitting: status.isTransmitting)
+        }
         .alert(
             session.alert?.title ?? "",
             isPresented: Binding(
@@ -102,23 +125,100 @@ struct RootView<Client: NetworkClient>: View {
     /// SF-4's near relative: the operator must not be able to miss this. Full
     /// bleed, red, at the top of the window, above everything that scrolls.
     /// (The lock-screen half of SF-4 is APP-3's Live Activity.)
+    ///
+    /// The second line is PT-4's requirement: it names the input that keyed the
+    /// radio and says whether letting go will stop it. A latched transmission
+    /// that the operator believes is momentary is the way this app would leave a
+    /// microphone open, so the answer is on screen rather than in the manual.
     private var transmitBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-            Text("TRANSMITTING")
-                .font(.headline.weight(.black))
-                .monospaced()
-            Spacer()
-            Text("ON AIR")
-                .font(.headline.weight(.black))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                Text("TRANSMITTING")
+                    .font(.headline.weight(.black))
+                    .monospaced()
+                Spacer()
+                Text("ON AIR")
+                    .font(.headline.weight(.black))
+            }
+            if let source = session.activeSource {
+                Text(source.holdDescription)
+                    .font(.caption.weight(.medium))
+            }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Transmitting. On air.")
+        .accessibilityLabel(
+            session.activeSource.map { "Transmitting. On air. \($0.holdDescription)" }
+                ?? "Transmitting. On air.")
+    }
+
+    /// The way in to the accessory screen, with the accessory's link state on
+    /// it. BLE-3's "UI indicator for accessory link state" — visible from the
+    /// screen the operator is actually looking at, not only from the screen that
+    /// configures it.
+    private var accessoryRow: some View {
+        Button {
+            isShowingAccessorySheet = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: accessoryIcon)
+                    .foregroundStyle(accessoryColour)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("PTT accessories")
+                        .font(.subheadline.weight(.medium))
+                    Text(accessorySummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var accessoryIcon: String {
+        if accessory.isAccessoryKeyed { return "dot.radiowaves.left.and.right" }
+        switch accessory.linkState {
+        case .connected: return "dot.circle"
+        case .noAccessory: return remoteCommand.isEnabled ? "headphones" : "dot.circle"
+        case .scanning, .connecting, .reconnecting: return "antenna.radiowaves.left.and.right"
+        case .unavailable, .failed: return "exclamationmark.triangle"
+        }
+    }
+
+    private var accessoryColour: Color {
+        switch accessory.linkState {
+        case .connected: return .green
+        case .reconnecting, .scanning, .connecting: return .orange
+        case .failed, .unavailable: return .orange
+        case .noAccessory: return remoteCommand.isEnabled ? .green : .secondary
+        }
+    }
+
+    /// One line covering both inputs, because "no accessory" and "no accessory
+    /// but the headset button is armed" are different situations and the
+    /// difference is whether a button in the operator's pocket can key a
+    /// transmitter.
+    private var accessorySummary: String {
+        switch (accessory.linkState, remoteCommand.isEnabled) {
+        case (.noAccessory, false):
+            return "None set up"
+        case (.noAccessory, true):
+            return PTTSource.remoteCommand.label
+        case (let state, false):
+            return state.label
+        case (let state, true):
+            return "\(state.label) · \(PTTSource.remoteCommand.label)"
+        }
     }
 
     private var header: some View {
@@ -166,6 +266,7 @@ struct RootView<Client: NetworkClient>: View {
         case .transmitWatchdog: return "Transmit watchdog stopped you"
         case .audioInterruption: return "Audio interrupted"
         case .routeChange: return "Audio route changed"
+        case .accessoryLinkLost: return "Accessory disconnected"
         }
     }
 
@@ -189,6 +290,20 @@ struct RootView<Client: NetworkClient>: View {
 
             Text(status.detail)
                 .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            // Diagnostics for a first contact with a node: what codec it agreed
+            // to, and how long the watchdog will let a transmission run. Both
+            // are things that are obvious in a packet capture and invisible
+            // from the app otherwise.
+            if let codec = session.negotiatedCodec {
+                Text("Codec: \(codec)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Transmit watchdog: \(Int(session.settings.transmitTimeout)) s")
+                .font(.caption)
                 .foregroundStyle(.secondary)
 
             if let reason = session.lastStopReason, reason.isUnexpected, session.safetyNotice == nil {
@@ -232,5 +347,9 @@ struct RootView<Client: NetworkClient>: View {
 }
 
 #Preview {
-    RootView(session: CompositionRoot().session)
+    let root = CompositionRoot()
+    return RootView(
+        session: root.session,
+        accessory: root.accessory,
+        remoteCommand: root.remoteCommand)
 }

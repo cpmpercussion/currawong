@@ -87,6 +87,20 @@ targets:
         NSBluetoothAlwaysUsageDescription:
           "Currawong connects to Bluetooth push-to-talk accessories so a physical button can key your transmission."
 
+        # Required to reach a node on the same network as the device — a node in
+        # a VM on the desk, on a Raspberry Pi, or anywhere else with a LAN
+        # address. iOS 14 and later gate *any* local-network traffic behind a
+        # user prompt, and without this key the system denies the connection
+        # instead of asking, which presents as a connect that times out for no
+        # visible reason.
+        #
+        # This is a usage description, not an entitlement: it is unrelated to
+        # `com.apple.developer.networking.multicast`, which PD-3 forbids and
+        # which is not requested. Nothing here browses or advertises Bonjour
+        # services either, so there is no NSBonjourServices list.
+        NSLocalNetworkUsageDescription:
+          "Currawong needs to reach AllStarLink nodes on your local network, such as a node running on your own computer or a Raspberry Pi."
+
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -14,29 +14,37 @@ RFC 5456. The one place a concrete client is named is
 ## Status
 
 **Connect screen and on-screen PTT (APP-2).** There is a form for one node —
-host, port, node number, callsign, username and secret — a connect/disconnect
-control, and a press-and-hold PTT button (PT-1). Audio is wired both ways:
-the microphone into the client while transmitting, received audio into
-playback. The safety requirements that could be met from here are met:
-transmission drops on audio interruption and route change (SF-3), on
-backgrounding, on the view disappearing, on the gesture being cancelled or
-dragged off the button, and on the library's transmit watchdog firing (SF-1),
-which is shown on screen when it does. The secret is stored in the Keychain.
+host, port, node number, callsign, username, secret and the transmit watchdog
+timeout — a connect/disconnect control, and a press-and-hold PTT button (PT-1).
+Audio is wired both ways: the microphone into the client while transmitting,
+received audio into playback. The secret is stored in the Keychain.
 
-**Phase 5 input layer (APP-5), partial.** PTTInput.swift defines PTTSource
-and PTTSink abstractions. The input controllers are in place: PTTMapping.swift
-(PT-3, learn-mode model), BLECentral.swift, CoreBluetoothCentral.swift and
-BLEPTTController.swift (PT-2, Bluetooth LE accessory), and RemoteCommandPTT.swift
-(PT-4, headset or remote button with toggle semantics). However, nothing is
-wired up. RadioSession does not conform to PTTSink, so these controllers have
-no consumer. SF-2 (Bluetooth link loss must drop transmit) is therefore not
-met. There are no tests for the mapping, the controller, or the remote-command
-path, and no learn-mode UI.
+**DTMF (FR-1.5).** A keypad, and a log of digits sent and digits heard back.
+Sending a digit deliberately does **not** key the transmitter — DTMF travels as
+its own reliable frame — which is the property the tests pin. Commanding an
+AllStar node means sending digit strings and watching what comes back, so the
+two directions are logged separately: "did that go out?" and "did the node hear
+it?" have different answers and different fixes.
 
-Not yet: multiple stored nodes and settings CRUD (APP-4), the Live Activity
-that makes transmit state visible without unlocking (SF-4, APP-3), DTMF, and
-RadioSession support for Bluetooth PTT inputs, tests for the controllers, and
-the learn-mode UI.
+**Phase 5 input layer, wired (PT-2, PT-3, PT-4).** `RadioSession` conforms to
+`PTTSink`, so all three inputs reach one release path. The Bluetooth accessory
+has a learn-mode UI (`AccessoryView.swift`): scan, press, release, press again,
+release again, and it refuses an accessory it cannot learn rather than storing a
+mapping that would key and never unkey. There is no device whitelist (PT-3). The
+headset/remote button (PT-4) is off until switched on, latches rather than being
+momentary, and says so wherever it can key the radio.
+
+### Safety requirements
+
+| | | |
+|---|---|---|
+| **SF-1** | transmit watchdog | Met. Enforced in the library; the timeout is per node and settable from 5 to 600 seconds, and cannot be switched off. Shown on screen when it fires. |
+| **SF-2** | BLE link loss drops transmit | Met. Unconditional on every disconnection, before the reconnect logic and before anything is awaited, whether or not the accessory was the input holding the key. |
+| **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. |
+| **SF-4** | transmit state visible without unlocking | **Not met** — the Live Activity is APP-3. There is a full-bleed banner while the app is on screen, and it names the input that keyed and whether letting go will unkey. |
+
+Not yet: the Live Activity (SF-4, APP-3) and multiple stored nodes (APP-4 —
+there is one node, with its watchdog timeout).
 
 Nothing here has been on the air.
 
@@ -72,6 +80,30 @@ xcodebuild test  -scheme Currawong -destination 'platform=iOS Simulator,name=iPh
 Signing is set to the maintainer's team. Building under a different account
 wants `DEVELOPMENT_TEAM=XXXXXXXXXX` on the command line, or
 `CODE_SIGNING_ALLOWED=NO` for an unsigned CI build.
+
+## Pointing it at a node on your own network
+
+Two permission prompts stand between a fresh install and audio, and both are
+easy to mistake for a bug:
+
+- **Local network** (iOS only). iOS gates all local-network traffic behind a
+  prompt, so connecting to a node at a LAN address asks for permission the
+  first time. Denying it presents as a connection that times out with nothing
+  on screen to explain why — the app never sees a refusal it could report.
+  Settings ▸ Privacy & Security ▸ Local Network is where to undo that.
+  `NSLocalNetworkUsageDescription` in `project.yml` is what makes the prompt
+  appear at all; this is unrelated to the multicast entitlement, which is
+  forbidden by PD-3 and is not requested.
+- **Microphone.** Refusing it leaves a PTT button that lights up and sends
+  silence, which is why `connect()` fails loudly rather than continuing when the
+  audio session will not configure.
+
+Set the transmit watchdog short — 10 or 15 seconds — for the first session. It
+is the quickest way to see SF-1 work, and on a strange node it is the
+difference between a mistake that is embarrassing and one that is rude.
+
+Running the macOS build is the shortest path to a first test if the node is in a
+VM on the same machine: no device, no provisioning, no local-network prompt.
 
 ## Dependency on the library
 

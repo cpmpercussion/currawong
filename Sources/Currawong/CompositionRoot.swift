@@ -30,10 +30,22 @@ import RadioCore
 ///    decoded PCM out.
 /// 3. **No way in for captured audio.** `IAX2Client.send(pcm:)` is not on the
 ///    protocol, so the microphone cannot be wired to a generic client.
+/// 4. **No DTMF.** `IAX2Client.send(dtmf:)` is not on the protocol either, and
+///    FR-1.5 is not optional for a client that has to command a node.
 ///
-/// A `NetworkClient` with an associated event enum, a `receivedAudio` stream
-/// and a `send(pcm:)` requirement would let ``RadioSession`` build its own
-/// link and delete most of this file. Until then, this is the containment.
+/// A `NetworkClient` with an associated event enum, a `receivedAudio` stream,
+/// a `send(pcm:)` and a `send(dtmf:)` requirement would let ``RadioSession``
+/// build its own link and delete most of this file. Until then, this is the
+/// containment.
+///
+/// ## What this file also owns
+///
+/// The **PTT input controllers** (PT-2, PT-3, PT-4). They are not protocol
+/// knowledge, but they are the other thing with a lifetime as long as the
+/// process and a wire that has to be connected exactly once: each takes a weak
+/// ``PTTSink``, and the session is it. Assembling that here is what makes SF-2
+/// real — before it, `BLEPTTController` computed correct press and release
+/// edges and delivered them to a `nil` sink.
 ///
 /// ## Client lifetime
 ///
@@ -49,22 +61,40 @@ final class CompositionRoot {
     /// place allowed to spell the concrete parameter.
     let session: RadioSession<IAX2Client>
 
+    /// **PT-2, PT-3.** The Bluetooth accessory. Owned here for the process
+    /// lifetime and pointed at ``session``; it constructs no `CBCentralManager`
+    /// and triggers no permission prompt until either an accessory has been
+    /// learned or the operator opens the accessory screen.
+    let accessory: BLEPTTController
+
+    /// **PT-4.** The headset or remote button. Off unless the operator turned it
+    /// on, and it touches nobody's media controls until then.
+    let remoteCommand: RemoteCommandPTTController
+
     /// Transmit state, for anything that only needs to display it.
     var transmitState: TransmitState { session.transmitState }
 
     /// - Parameters:
-    ///   - configuration: watchdog timeout (SF-1, 180 s by default), media
-    ///     grid, jitter buffer and leveller. Injectable so a test can build a
-    ///     root without waiting three minutes for anything.
+    ///   - configuration: media grid, jitter buffer and leveller. Injectable so
+    ///     a test can build a root without waiting for anything. Note that the
+    ///     **watchdog timeout is not taken from here** — it belongs to the
+    ///     operator, so it travels in `NodeSettings` and is applied per link;
+    ///     see ``makeIAX2Link(settings:secret:configuration:)``.
     ///   - audio: the microphone and speaker. Injectable so a test never opens
     ///     either.
     init(
         configuration: IAX2Client.Configuration = IAX2Client.Configuration(),
         audio: AudioIO = AudioPipelineIO(),
         settingsStore: SettingsStore = UserDefaultsSettingsStore(),
-        secretStore: SecretStore = KeychainSecretStore()
+        secretStore: SecretStore = KeychainSecretStore(),
+        // `nil` rather than a default-constructed controller: a default argument
+        // expression is evaluated in a nonisolated context, and both of these
+        // types are `@MainActor`. Built below instead, inside this initialiser,
+        // which is isolated.
+        accessory: BLEPTTController? = nil,
+        remoteCommand: RemoteCommandPTTController? = nil
     ) {
-        self.session = RadioSession(
+        let session = RadioSession(
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
@@ -72,6 +102,44 @@ final class CompositionRoot {
                 CompositionRoot.makeIAX2Link(
                     settings: settings, secret: secret, configuration: configuration)
             })
+        let accessory = accessory ?? BLEPTTController()
+        let remoteCommand = remoteCommand ?? RemoteCommandPTTController()
+
+        self.session = session
+        self.accessory = accessory
+        self.remoteCommand = remoteCommand
+
+        // The wire SF-2 depends on. Weak on the controllers' side, so this does
+        // not make the three of them immortal.
+        accessory.sink = session
+        remoteCommand.sink = session
+    }
+
+    /// Starts everything with a process-long lifetime. Idempotent, and called
+    /// once from ``CurrawongApp``.
+    ///
+    /// Separate from `init` because two of the three things it does have visible
+    /// side effects — a Bluetooth permission prompt and taking over the system's
+    /// transport controls — and a constructor that does those while SwiftUI is
+    /// still deciding whether to keep the value is a constructor that does them
+    /// at a surprising moment. Both are additionally gated on the operator
+    /// having asked for the feature at all.
+    func activate() {
+        session.start()
+        accessory.activateIfConfigured()
+        remoteCommand.activateIfEnabled()
+    }
+
+    /// **SF-1.** The operator's watchdog timeout, as the library wants it.
+    ///
+    /// A separate function purely so it can be tested: `IAX2Client` keeps its
+    /// configuration private, so there is no way to ask a built client what
+    /// timeout it got, and a wiring mistake here would be invisible until a
+    /// transmission ran for three minutes when the operator asked for ten
+    /// seconds. Returning a `Duration` rather than a `Configuration` also keeps
+    /// the test from having to import `IAX2Kit`.
+    static func watchdogTimeout(for settings: NodeSettings) -> Duration {
+        .seconds(settings.transmitTimeout)
     }
 
     /// Builds one IAX2 connection's worth of plumbing.
@@ -79,11 +147,20 @@ final class CompositionRoot {
     /// Opens nothing: `IAX2Client` builds its transport lazily inside
     /// `connect(to:)`, so an unused link costs two suspended tasks and is
     /// released by `close()`.
+    ///
+    /// **`settings.transmitTimeout` overrides `configuration.transmitTimeout`.**
+    /// SF-1 is enforced by the library, but the number is the operator's, and
+    /// this is where the two meet. `NodeSettings.validated()` has already
+    /// clamped it to something sane, and the settings the session hands over are
+    /// always validated ones.
     static func makeIAX2Link(
         settings: NodeSettings,
         secret: String,
         configuration: IAX2Client.Configuration = IAX2Client.Configuration()
     ) -> RadioLink<IAX2Client> {
+        var configuration = configuration
+        configuration.transmitTimeout = watchdogTimeout(for: settings)
+
         let client = IAX2Client(configuration: configuration)
         let destination = IAX2Destination(
             host: settings.host,
@@ -98,8 +175,7 @@ final class CompositionRoot {
         let eventContinuation = eventEscape!
 
         // Translation, not forwarding: `IAX2ClientEvent` is the library's
-        // vocabulary and must not escape this file. DTMF is dropped for now —
-        // there is nothing above to show it until APP-4 adds a keypad.
+        // vocabulary and must not escape this file.
         let clientEvents = client.events
         let eventPump = Task.detached {
             for await event in clientEvents {
@@ -126,6 +202,7 @@ final class CompositionRoot {
             events: events,
             receivedAudio: client.receivedAudio,
             sendCapturedFrame: { relay.submit($0) },
+            sendDTMF: { digit in try await client.send(dtmf: digit) },
             close: {
                 relay.finish()
                 sendPump.cancel()
@@ -143,8 +220,11 @@ final class CompositionRoot {
 extension RadioLinkEvent {
     fileprivate init?(_ event: IAX2ClientEvent) {
         switch event {
-        case .connected:
-            self = .connected
+        case .connected(let format):
+            // `MediaFormat.description` names the RFC's codecs and falls back to
+            // the raw bitmask for anything it does not recognise, which is
+            // exactly what someone staring at an unexpected negotiation needs.
+            self = .connected(codec: format.map(String.init(describing:)))
         case .transmitting:
             self = .transmitting
         case .receiving:
@@ -155,9 +235,8 @@ extension RadioLinkEvent {
             self = .mediaRejected("Incoming audio is being dropped: \(rejection).")
         case .disconnected(let termination):
             self = .disconnected(reason: termination.map { "The node ended the call: \($0)." })
-        case .dtmf:
-            // APP-4 adds a keypad and somewhere to show inbound digits.
-            return nil
+        case .dtmf(let digit):
+            self = .dtmfReceived(digit.character)
         }
     }
 }

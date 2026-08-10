@@ -78,6 +78,8 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
             case audioInterruption
             /// SF-3.
             case routeChange
+            /// SF-2.
+            case accessoryLinkLost
         }
 
         let kind: Kind
@@ -94,6 +96,13 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
     /// Two and a half frames — long enough not to flicker on the 20 ms grid,
     /// short enough to go out promptly when the far end unkeys.
     static var receiveActivityWindow: TimeInterval { 0.5 }
+
+    /// How many DTMF digits of history to keep in each direction. Enough for a
+    /// long node command and its reply, short enough to read at a glance.
+    /// A computed property rather than a `let`, because a generic type cannot
+    /// have static stored properties — the same reason
+    /// ``receiveActivityWindow`` is written this way.
+    static var dtmfLogLimit: Int { 24 }
 
     // MARK: - Published state
 
@@ -116,6 +125,28 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
     /// Whether the operator is holding the button down. Drives the button's
     /// own appearance so it responds on touch-down rather than on the network.
     @Published private(set) var isKeyDown = false
+
+    /// **PT-4's honesty requirement.** Which input keyed the radio, while it is
+    /// keyed. `nil` when nothing is.
+    ///
+    /// This exists so the transmit banner can say whether letting go will
+    /// unkey. The on-screen button and a Bluetooth accessory are momentary; a
+    /// remote-command button latches, and an operator who has to remember which
+    /// is which is an operator who will eventually leave a microphone open.
+    @Published private(set) var activeSource: PTTSource?
+
+    /// The codec the far end agreed to, as a name to display. `nil` until a
+    /// connection reports one.
+    @Published private(set) var negotiatedCodec: String?
+
+    /// DTMF digits sent and received on this connection, oldest first.
+    ///
+    /// Kept because commanding an AllStar node means sending a digit string and
+    /// watching for what comes back, and "did that go out?" is otherwise
+    /// unanswerable from the app. Trimmed to ``dtmfLogLimit``: this is a recent
+    /// history for the operator's eyes, not a record.
+    @Published private(set) var sentDTMF: String = ""
+    @Published private(set) var receivedDTMF: String = ""
 
     @Published private(set) var alert: OperatorAlert?
 
@@ -245,6 +276,9 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         safetyNotice = nil
         lastDisconnectReason = nil
         mediaWarning = nil
+        negotiatedCodec = nil
+        sentDTMF = ""
+        receivedDTMF = ""
 
         do {
             try audio.configureSession()
@@ -303,12 +337,23 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     // MARK: - PTT (PT-1)
 
-    /// Touch-down on the PTT button.
-    func beginTransmit() {
+    /// Touch-down on the PTT button, or a press edge from any other input.
+    ///
+    /// `source` is recorded so the UI can tell the operator whether letting go
+    /// will unkey (PT-4). It has a default because the on-screen button is the
+    /// caller that has no choice about it.
+    ///
+    /// A press with no connection is only worth an alert when the operator is
+    /// looking at the button they just pressed. A Bluetooth fob or a headset
+    /// button pressed in a pocket must not stack up modal alerts — it gets the
+    /// same refusal, silently.
+    func beginTransmit(from source: PTTSource = .onScreen) {
         guard connection.isConnected else {
-            present(
-                title: "Not connected",
-                message: "Connect to a node before transmitting.")
+            if source == .onScreen {
+                present(
+                    title: "Not connected",
+                    message: "Connect to a node before transmitting.")
+            }
             return
         }
         guard !transmitDesired else { return }
@@ -316,6 +361,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         safetyNotice = nil
         transmitDesired = true
         isKeyDown = true
+        activeSource = source
         scheduleTransmitWork()
     }
 
@@ -334,6 +380,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         }
         transmitDesired = false
         isKeyDown = false
+        activeSource = nil
         scheduleTransmitWork()
     }
 
@@ -464,6 +511,12 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
                 message:
                     "Transmission stopped: the audio route changed. Press and hold to transmit "
                     + "again.")
+        case .accessoryLinkLost:
+            safetyNotice = SafetyNotice(
+                kind: .accessoryLinkLost,
+                message:
+                    "Transmission stopped: the Bluetooth accessory disconnected, so its button "
+                    + "could no longer be trusted to release. Currawong will reconnect to it.")
         default:
             break
         }
@@ -483,12 +536,16 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     private func handle(_ event: RadioLinkEvent) {
         switch event {
-        case .connected:
+        case .connected(let codec):
             if connection == .connecting { connection = .connected }
             transmitState = link?.client.state ?? .receiving
+            if let codec { negotiatedCodec = codec }
 
         case .transmitting, .receiving:
             transmitState = link?.client.state ?? transmitState
+
+        case .dtmfReceived(let digit):
+            receivedDTMF = Self.appending(digit, to: receivedDTMF)
 
         case .transmitWatchdogExpired(let timeout):
             // SF-1. The client has already unkeyed itself; the app still has a
@@ -579,6 +636,49 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
     /// For the view's `TimelineView`, which has no opinion about the clock.
     var isReceivingAudioNow: Bool { isReceivingAudio(asOf: now()) }
 
+    // MARK: - DTMF (FR-1.5)
+
+    /// Sends one DTMF digit to the node.
+    ///
+    /// **Does not key the radio.** DTMF is signalling and travels as its own
+    /// reliable frame, so there is no transmission to start and — importantly —
+    /// pressing a keypad key cannot put the operator on air. It is refused when
+    /// there is no connection rather than queued.
+    ///
+    /// Lower-case `a`–`d` are upper-cased on the way through: the library is
+    /// deliberately strict about the RFC's alphabet and says the layer owning a
+    /// keypad should normalise, and this is that layer.
+    func sendDTMF(_ digit: Character) async {
+        guard let link, connection.isConnected else {
+            present(
+                title: "Not connected",
+                message: "Connect to a node before sending DTMF.")
+            return
+        }
+
+        // `Character(digit.uppercased())` would be the obvious spelling and it
+        // traps: upper-casing is not one-to-one — "ß" upper-cases to "SS" — and
+        // `Character.init` refuses a multi-character string. Unreachable from
+        // the keypad, which only offers `0`–`9`, `*` and `#`, but this method is
+        // callable with anything and a trap is not an acceptable answer.
+        let uppercased = digit.uppercased()
+        let normalised = uppercased.count == 1 ? Character(uppercased) : digit
+
+        do {
+            try await link.sendDTMF(normalised)
+            sentDTMF = Self.appending(normalised, to: sentDTMF)
+        } catch {
+            present(title: "Could not send \(normalised)", message: "\(error)")
+        }
+    }
+
+    /// Appends to a digit log, keeping the most recent ``dtmfLogLimit``.
+    private static func appending(_ digit: Character, to log: String) -> String {
+        let appended = log + String(digit)
+        guard appended.count > dtmfLogLimit else { return appended }
+        return String(appended.suffix(dtmfLogLimit))
+    }
+
     // MARK: - Alerts
 
     func dismissAlert() {
@@ -605,6 +705,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         isTransmitting = false
         isKeyDown = false
         transmitDesired = false
+        activeSource = nil
     }
 
     private static func describe(_ duration: Duration) -> String {
@@ -615,5 +716,63 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
             return minutes == 1 ? "1 minute" : "\(minutes) minutes"
         }
         return seconds == 1 ? "1 second" : "\(Int(seconds.rounded())) seconds"
+    }
+}
+
+// MARK: - PTTSink
+
+/// **The one consumer of every PTT input.**
+///
+/// The Bluetooth accessory (PT-2/PT-3) and the remote-command button (PT-4)
+/// reach the microphone through here and nowhere else, which is the whole point
+/// of ``PTTSink``: three inputs, one path to ``RadioSession/endTransmit(reason:)``,
+/// so a release path that works for the on-screen button works for all of them.
+///
+/// ## Releases are honoured unconditionally
+///
+/// None of these methods checks whether the input asking to stop is the input
+/// that started. That is deliberate, and it is the same reasoning
+/// ``RadioSession/applyTransmit()`` uses about calling `stopTransmit` twice: the
+/// cost of an unnecessary stop is nothing at all, and the cost of a swallowed
+/// one is an open microphone. An accessory release that arrives while the
+/// on-screen button holds the key stops transmission; the operator presses
+/// again. The reverse arrangement — matching source before releasing — would
+/// mean writing down the conditions under which the app ignores a release, and
+/// there are no such conditions worth having.
+extension RadioSession: PTTSink {
+
+    func pttPressed(from source: PTTSource) {
+        beginTransmit(from: source)
+    }
+
+    func pttReleased(from source: PTTSource, reason: TransmitStopReason) {
+        endTransmit(reason: reason)
+    }
+
+    /// **PT-4.** A remote command with no release edge: press to key, press
+    /// again to unkey.
+    ///
+    /// The "is it already keyed?" test is `transmitDesired || isTransmitting`,
+    /// not `isTransmitting` alone. They differ for as long as it takes the
+    /// client to answer a key-up, and a second toggle arriving inside that
+    /// window must unkey rather than be read as a fresh press — otherwise a
+    /// quick double-press latches instead of cancelling.
+    func pttToggled(from source: PTTSource) {
+        if transmitDesired || isTransmitting {
+            endTransmit(reason: .remoteCommandToggled)
+        } else {
+            beginTransmit(from: source)
+        }
+    }
+
+    /// **SF-2.** The Bluetooth accessory's link dropped.
+    ///
+    /// Called unconditionally by ``BLEPTTController`` on every disconnection,
+    /// whether or not the accessory was the thing holding the key, so this
+    /// method has to be safe when nothing is transmitting — which it is, because
+    /// `endTransmit` is. It records a reason and raises a notice only when it
+    /// actually stopped something.
+    func accessoryLinkLost() {
+        endTransmit(reason: .accessoryLinkLost)
     }
 }

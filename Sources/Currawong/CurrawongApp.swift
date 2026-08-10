@@ -22,7 +22,16 @@ struct CurrawongApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(session: root.session)
+            RootView(
+                session: root.session,
+                accessory: root.accessory,
+                remoteCommand: root.remoteCommand)
+                // The PTT input controllers, once, for the process. `RootView`
+                // starts the session's own SF-3 observation itself — that is the
+                // view's business and it should not depend on anybody
+                // remembering to call this — so `activate()` is idempotent and
+                // the two overlap harmlessly.
+                .task { root.activate() }
         }
         #if os(macOS)
         .defaultSize(width: 480, height: 760)

@@ -75,4 +75,74 @@ final class CompositionRootTests: XCTestCase {
 
         link.sendCapturedFrame(Array(repeating: 0, count: 160))
     }
+
+    /// DTMF on a client that was never connected must be refused rather than
+    /// trapping — the keypad is on screen before a connection exists, and a view
+    /// that can crash the app by being tapped early is not acceptable.
+    func testSendingDTMFToAnUnconnectedLinkThrowsRatherThanTrapping() async {
+        let link = CompositionRoot.makeIAX2Link(
+            settings: NodeSettings(host: "node.example.org", node: "55553", callsign: "VK1XYZ"),
+            secret: "")
+        defer { link.close() }
+
+        do {
+            try await link.sendDTMF("*")
+            XCTFail("expected an unconnected client to refuse a digit")
+        } catch {
+            // Which error is the library's business; that it is an error and not
+            // a crash is this test's.
+        }
+    }
+
+    // MARK: - The SF-2 wire
+
+    /// **The wiring test SF-2 depends on.** Both input controllers take a *weak*
+    /// sink, and before this was assembled `BLEPTTController` computed perfectly
+    /// correct press and release edges and delivered them to `nil`. A test that
+    /// only exercises the controller cannot catch that; this one can.
+    func testTheInputControllersAreWiredToTheSession() {
+        let root = makeRoot()
+
+        XCTAssertIdentical(root.accessory.sink, root.session)
+        XCTAssertIdentical(root.remoteCommand.sink, root.session)
+    }
+
+    /// Activation must not construct a `CBCentralManager` or take over the
+    /// system's media controls for an operator who has configured neither.
+    func testActivatingWithNothingConfiguredArmsNothing() {
+        let root = CompositionRoot(
+            audio: FakeAudioIO(),
+            settingsStore: InMemorySettingsStore(),
+            secretStore: InMemorySecretStore(),
+            accessory: BLEPTTController(
+                makeCentral: { XCTFail("a central was built"); return FakeBLECentral() },
+                store: InMemoryPTTSettingsStore(),
+                retryDelay: {}),
+            remoteCommand: RemoteCommandPTTController(
+                makeSource: {
+                    XCTFail("a remote command source was built")
+                    return FakeRemoteCommandSource()
+                },
+                store: InMemoryPTTSettingsStore()))
+
+        root.activate()
+
+        XCTAssertEqual(root.accessory.linkState, .noAccessory)
+        XCTAssertFalse(root.remoteCommand.isEnabled)
+    }
+
+    /// SF-1's number is the operator's, and it travels in `NodeSettings`. This is
+    /// the seam where it becomes the library's watchdog timeout — a mistake here
+    /// would be invisible until a transmission ran for three minutes when ten
+    /// seconds were asked for.
+    func testTheWatchdogTimeoutComesFromTheSettings() {
+        var settings = NodeSettings(
+            host: "node.example.org", node: "55553", callsign: "VK1XYZ")
+        settings.transmitTimeout = 12
+
+        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: settings), .seconds(12))
+        XCTAssertEqual(
+            CompositionRoot.watchdogTimeout(for: NodeSettings()),
+            .seconds(NodeSettings.defaultTransmitTimeout))
+    }
 }

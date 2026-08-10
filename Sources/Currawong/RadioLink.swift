@@ -13,14 +13,30 @@ import RadioCore
 /// maps a concrete client's events into; see ``RadioLink`` for the rest of the
 /// hole and the note in `CompositionRoot`.
 enum RadioLinkEvent: Sendable, Equatable {
-    /// The call is up and media may flow.
-    case connected
+    /// The call is up and media may flow. `codec` is the negotiated codec as a
+    /// human-readable name, already rendered by the composition root — the app
+    /// displays it and does not reason about it. It is `nil` when the far end
+    /// did not say.
+    ///
+    /// Worth surfacing rather than swallowing: "connected but negotiated
+    /// something we cannot decode" and "connected and silent" look identical
+    /// from the operator's chair, and the first is a configuration problem at
+    /// the node.
+    case connected(codec: String?)
 
     /// Transmission started.
     case transmitting
 
     /// Transmission stopped, for any reason.
     case receiving
+
+    /// A DTMF digit arrived from the far end (FR-1.5).
+    ///
+    /// Nodes echo digits back and announce their own, so this is how the
+    /// operator can tell "the node heard my command" from "the node ignored
+    /// it" — which, when commanding an AllStar node by DTMF, is the whole
+    /// question.
+    case dtmfReceived(Character)
 
     /// **SF-1.** The transmit watchdog reached its deadline and unkeyed on the
     /// operator's behalf. This must reach the operator's eyes: it means a PTT
@@ -52,6 +68,17 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// matters because the accessory is the one input whose release can also go
     /// missing — see ``accessoryLinkLost`` on `PTTSink`.
     case accessoryReleased
+
+    /// **SF-2.** The Bluetooth accessory's link went away while it was, or
+    /// might have been, holding the key.
+    ///
+    /// Distinct from ``accessoryReleased`` because nobody let go of anything.
+    /// An accessory that has dropped off the link cannot report a release, so
+    /// the app can no longer answer "is the button still held?" — and the only
+    /// safe answer to a question like that is to unkey. This is the case
+    /// SF-2 exists for: an accessory that goes out of range, runs out of
+    /// battery or falls off the desk mid-sentence.
+    case accessoryLinkLost
 
     /// **PT-4.** A latched remote-command transmission was unlatched — either
     /// by a second press, or by the operator switching the remote input off
@@ -99,7 +126,8 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
             .draggedOffButton, .disconnecting:
             return false
         case .gestureCancelled, .viewDisappeared, .appBackgrounded,
-            .audioInterrupted, .routeChanged, .watchdogExpired, .transmitFailed:
+            .audioInterrupted, .routeChanged, .watchdogExpired, .transmitFailed,
+            .accessoryLinkLost:
             return true
         }
     }
@@ -138,6 +166,15 @@ struct RadioLink<Client: NetworkClient> {
     /// allocate unboundedly, and must not `await`. The composition root
     /// satisfies that with ``CapturedFrameRelay``.
     let sendCapturedFrame: @Sendable ([Int16]) -> Void
+
+    /// Sends one DTMF digit (FR-1.5). Another hole in `NetworkClient` — the
+    /// concrete clients have it, the protocol does not — closed the same way as
+    /// the streams above.
+    ///
+    /// Signalling rather than audio: it does **not** require PTT, and the app
+    /// deliberately does not key the radio around it. Throws whatever the
+    /// client throws, including "not connected".
+    let sendDTMF: @Sendable (Character) async throws -> Void
 
     /// Releases the pumps this link owns. Idempotent; called on every
     /// teardown path, including a connect that failed.
