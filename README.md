@@ -46,7 +46,9 @@ momentary, and says so wherever it can key the radio.
 Not yet: the Live Activity (SF-4, APP-3) and multiple stored nodes (APP-4 —
 there is one node, with its watchdog timeout).
 
-Nothing here has been on the air.
+Nothing here has been on the air. Making that happen is its own effort, tracked
+in [`docs/BRINGUP.md`](docs/BRINGUP.md) — faults rather than features, landing
+straight on `main` until the app is confirmed keying a live node.
 
 ## Building and testing from the terminal
 
