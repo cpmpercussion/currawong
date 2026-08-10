@@ -46,9 +46,12 @@ momentary, and says so wherever it can key the radio.
 Not yet: the Live Activity (SF-4, APP-3) and multiple stored nodes (APP-4 —
 there is one node, with its watchdog timeout).
 
-Nothing here has been on the air. Making that happen is its own effort, tracked
-in [`docs/BRINGUP.md`](docs/BRINGUP.md) — faults rather than features, landing
-straight on `main` until the app is confirmed keying a live node.
+**On the air.** Currawong keyed a live AllStarLink node from an iPhone for the
+first time on 2026-08-11. What remains of the bring-up — audio quality judged
+from the other end, sustained receive, the watchdog and the interruption path,
+all exercised on a real node rather than in a test — is tracked in
+[`docs/BRINGUP.md`](docs/BRINGUP.md): faults rather than features, landing
+straight on `main` until that list is clear.
 
 ## Building and testing from the terminal
 

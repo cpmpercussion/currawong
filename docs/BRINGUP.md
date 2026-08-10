@@ -40,13 +40,16 @@ the live node:
 
 | ID | What | Status |
 |---|---|---|
-| BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | Fix landed, **unverified on air** |
-| BU-2 | The on-air session itself — the five checks above | Open |
+| BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
+| BU-2 | The on-air session itself — the five checks above | Open — check 2 (keying) confirmed |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
 
 ---
 
-### BU-1 — every PTT press fails with `converterUnavailable`
+### BU-1 — every PTT press fails with `converterUnavailable` ✅ FIXED
+
+**Confirmed on air on 2026-08-11**: Currawong keys the AllStarLink node from an
+iPhone. This was the app's first transmission.
 
 **Symptom.** Connecting to the node works. The first press of PTT, and every
 press after it for the life of the process, raises "Could not transmit — could
@@ -131,15 +134,26 @@ Read it as follows.
 * `inputAvailable=false` or `route=none` — no input hardware is routed at all,
   which is a route problem, not a format problem.
 
+**Which half of the fix did it is not known**, and deliberately not guessed at:
+if the engine is now always built after activation, the retry never runs, and a
+successful first press cannot distinguish the two. Both stay. The retry is not
+dead weight either way — the inactive-session case it also repairs is reachable
+from any interruption, which the ordering fix does nothing for.
+
 ### BU-2 — the on-air session
 
-Blocked on radio time, not on code. Run the five checks under **Definition of
-done**. `docs/` gets a session note when it happens; the README's "Nothing here
-has been on the air" line comes out at the same time.
+**Check 2 (PTT keys the node) is confirmed, 2026-08-11.** The rest of the five
+checks under **Definition of done** are unrun: audio quality as judged by a
+second receiver, receive for minutes rather than seconds, the watchdog unkeying
+a held button, and an incoming call dropping transmit with PTT still working
+afterwards.
 
 Bring the failure text, verbatim, of anything that goes wrong — the alerts are
 written to be readable off a phone screen precisely because that is the only
 instrumentation available in the field.
+
+Until this closes, changes still land straight on `main` (see **How this work
+lands**).
 
 ### BU-3 — the library should not require an engine to set the session category
 
