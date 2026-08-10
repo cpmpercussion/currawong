@@ -3,6 +3,10 @@
 import Foundation
 import RadioCore
 
+#if os(iOS)
+import AVFAudio
+#endif
+
 /// The app's view of the audio hardware.
 ///
 /// `RadioCore.AudioPipeline` is a concrete class that opens `AVAudioEngine` in
@@ -16,6 +20,29 @@ protocol AudioIO: AnyObject, Sendable {
     /// SF-3. Interruptions and route changes. The pipeline deliberately does
     /// not act on these itself; ``RadioSession`` must, and does.
     var signals: AsyncStream<AudioSessionSignal> { get }
+
+    /// Asks the operating system for microphone access, returning what it
+    /// decided. Must be called — and awaited — before ``configureSession()``.
+    ///
+    /// ### Why this cannot be left implicit
+    ///
+    /// iOS shows the microphone prompt when an app first *touches* the
+    /// microphone: installs a tap and starts the engine. Setting the session
+    /// category and activating it does not count, so `configureSession()` alone
+    /// never triggers it.
+    ///
+    /// That produced a deadlock. Until permission is granted, the input node
+    /// reports a sample rate of 0; `AudioPipeline.startCapture` builds its
+    /// converter from that rate and throws `converterUnavailable` *before*
+    /// reaching `installTap` — so the app never touched the microphone, so it
+    /// was never asked about, so the rate stayed 0. The app could not bootstrap
+    /// its own permission, PTT failed on the first press and every press after
+    /// it, and the app did not appear under Settings → Privacy → Microphone at
+    /// all. Asking explicitly is the only way out of the cycle.
+    ///
+    /// Returns `true` on macOS, which has no `AVAudioSession`: device selection
+    /// there belongs to the user, and TCC is attributed to the host process.
+    func requestRecordPermission() async -> Bool
 
     /// Prepares the audio session. Throws — an app that cannot configure its
     /// session cannot transmit, and pretending otherwise produces a PTT button
@@ -55,6 +82,28 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     }
 
     var signals: AsyncStream<AudioSessionSignal> { pipeline.signals }
+
+    func requestRecordPermission() async -> Bool {
+        #if os(iOS)
+        // Both spellings take a completion handler, and both answer instantly
+        // once the user has decided: a second call never re-prompts, and
+        // returns the standing answer. That is what makes it safe to gate every
+        // connect on this rather than only the first.
+        if #available(iOS 17.0, *) {
+            return await withCheckedContinuation { continuation in
+                AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
+            }
+        } else {
+            return await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission {
+                    continuation.resume(returning: $0)
+                }
+            }
+        }
+        #else
+        return true
+        #endif
+    }
 
     func configureSession() throws {
         #if os(iOS)
