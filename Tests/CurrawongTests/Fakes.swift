@@ -195,13 +195,27 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     private var storedOnFrame: (@Sendable ([Int16]) -> Void)?
     private var storedConfigureCount = 0
 
+    private var storedPermissionRequestCount = 0
+
     var configureSessionError: Error?
     var startCaptureError: Error?
+
+    /// What the operating system will "decide" about the microphone. Granted by
+    /// default so every test that does not care about permission is unaffected.
+    var recordPermissionGranted = true
 
     init() {
         var escaped: AsyncStream<AudioSessionSignal>.Continuation!
         self.signals = AsyncStream { escaped = $0 }
         self.signalContinuation = escaped
+    }
+
+    func requestRecordPermission() async -> Bool {
+        lock.lock()
+        storedPermissionRequestCount += 1
+        let granted = recordPermissionGranted
+        lock.unlock()
+        return granted
     }
 
     func configureSession() throws {
@@ -271,6 +285,12 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storedConfigureCount
+    }
+
+    var recordPermissionRequestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedPermissionRequestCount
     }
 
     var playedFrames: [[Int16]] {

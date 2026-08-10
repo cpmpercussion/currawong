@@ -280,6 +280,23 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         sentDTMF = ""
         receivedDTMF = ""
 
+        // Before the session, not after: this is the call that makes iOS show
+        // the microphone prompt, and nothing downstream can ask on its own —
+        // see `AudioIO.requestRecordPermission()` for why the capture path
+        // cannot bootstrap it. Refusing to connect without the microphone is
+        // deliberate. A connected node with a dead transmit path is the worst
+        // of both: it looks like a working QSO right up until the moment
+        // somebody needs to hear you.
+        guard await audio.requestRecordPermission() else {
+            connection = .disconnected
+            present(
+                title: "Microphone access is off",
+                message:
+                    "Currawong cannot transmit without the microphone. Turn it on in Settings → "
+                    + "Currawong → Microphone, then connect again.")
+            return
+        }
+
         do {
             try audio.configureSession()
         } catch {

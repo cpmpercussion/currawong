@@ -128,6 +128,36 @@ final class RadioSessionConnectionTests: XCTestCase {
         XCTAssertTrue(harness.client.calls.isEmpty, "nothing should have been dialled")
     }
 
+    /// The microphone is asked for before the session is configured, because
+    /// asking is the only thing that makes iOS show the prompt — and the
+    /// capture path cannot ask on its own. See
+    /// ``AudioIO/requestRecordPermission()`` for the deadlock this avoids.
+    func testTheMicrophoneIsRequestedBeforeTheSessionIsConfigured() async {
+        let harness = SessionHarness()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.audio.recordPermissionRequestCount, 1)
+        XCTAssertEqual(harness.audio.configureSessionCount, 1)
+    }
+
+    /// A connection whose microphone is denied is a PTT button that lights up
+    /// and sends silence — the same failure `testAudioSessionFailureAborts…`
+    /// guards, reached a different way.
+    func testADeniedMicrophoneAbortsTheConnection() async {
+        let harness = SessionHarness()
+        harness.audio.recordPermissionGranted = false
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.session.alert?.title, "Microphone access is off")
+        XCTAssertTrue(harness.client.calls.isEmpty, "nothing should have been dialled")
+        XCTAssertEqual(
+            harness.audio.configureSessionCount, 0,
+            "the session must not be configured once the microphone is refused")
+    }
+
     func testALinkFactoryFailureIsPresented() async {
         let harness = SessionHarness()
         harness.makeLinkError = SessionHarness.LinkFailed()
