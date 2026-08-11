@@ -9,9 +9,10 @@ import SwiftUI
 /// specific network lives in the composition root; everything that knows about
 /// the user lives below ``RootView``.
 ///
-/// Note that no type in this file is spelled out. `root.session` is a
-/// `RadioSession<IAX2Client>` and inference carries it into `RootView` without
-/// this file — or `RootView` — ever naming the client.
+/// Note that no type in this file is spelled out, and since `RadioSession`
+/// stopped being generic there is no longer a client type to name even by
+/// inference: the mode is chosen from the operator's settings at connect time,
+/// inside the composition root.
 @main
 struct CurrawongApp: App {
     /// `@State` rather than a plain `let`, because a `let` on an `App` is

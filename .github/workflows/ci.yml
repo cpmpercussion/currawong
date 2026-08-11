@@ -27,6 +27,27 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
+      # Codec2.xcframework is a build prerequisite — project.yml embeds it for
+      # M17 audio (FR-2.4) — and it is not in version control, so CI builds it
+      # like any other fresh clone. Roughly four minutes, hence the cache; see
+      # docs/CODEC2.md.
+      #
+      # The key covers the build script, which is also where the pinned codec2
+      # tag and commit live, so a change to either the recipe or the upstream
+      # it pins produces a new key.
+      - name: Cache Codec2.xcframework
+        id: codec2-cache
+        uses: actions/cache@v4
+        with:
+          path: Codec2.xcframework
+          key: codec2-${{ runner.os }}-${{ hashFiles('scripts/build-codec2-xcframework.sh') }}
+
+      - name: Build Codec2.xcframework
+        if: steps.codec2-cache.outputs.cache-hit != 'true'
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          scripts/build-codec2-xcframework.sh
+
       # Resolves swift-hamvoip from its tag over the network; no sibling
       # checkout is involved since the dependency became versioned.
       - name: Generate the project

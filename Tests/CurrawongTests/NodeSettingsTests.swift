@@ -83,7 +83,11 @@ final class NodeSettingsTests: XCTestCase {
         let keys = Set((json as? [String: Any])?.keys.map { $0 } ?? [])
 
         XCTAssertEqual(
-            keys, ["host", "port", "node", "username", "callsign", "transmitTimeout"])
+            keys,
+            [
+                "mode", "host", "port", "node", "module", "username", "callsign",
+                "transmitTimeout",
+            ])
     }
 
     func testRoundTripsThroughTheDefaultsStore() {
@@ -167,5 +171,99 @@ final class NodeSettingsTests: XCTestCase {
         var slower = good
         slower.transmitTimeout = 60
         XCTAssertEqual(good.secretAccount, slower.secretAccount)
+    }
+
+    // MARK: - Radio mode (M17)
+
+    private let m17 = NodeSettings(
+        mode: .m17, host: "ref.example.org", port: 17000, module: "A",
+        callsign: "VK1XYZ")
+
+    /// **The other migration test.** Settings written before this type had a
+    /// mode were written when AllStarLink was all the app could do, so they are
+    /// AllStarLink settings — not corrupt ones, and not a wiped node.
+    func testSettingsWrittenWithoutAModeDecodeAsAllStarLink() throws {
+        let json = """
+            {"host":"node.example.org","port":4569,"node":"55553",\
+            "username":"vk1xyz","callsign":"VK1XYZ","transmitTimeout":180}
+            """
+
+        let decoded = try JSONDecoder().decode(NodeSettings.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.mode, .allStarLink)
+        XCTAssertEqual(decoded.module, "")
+        XCTAssertEqual(decoded, good)
+    }
+
+    /// **Pinned deliberately.** Every secret an operator has already stored is
+    /// filed under this exact string; editing the format orphans all of them.
+    func testTheAllStarLinkKeychainAccountFormatIsFrozen() {
+        XCTAssertEqual(good.secretAccount, "vk1xyz@node.example.org:4569/55553")
+    }
+
+    /// An M17 link and an AllStarLink connection to one host are different
+    /// entries, and must not be able to name the same Keychain account.
+    func testTheKeychainAccountDiffersBetweenModes() {
+        var asM17 = good
+        asM17.mode = .m17
+        asM17.module = "A"
+
+        XCTAssertNotEqual(good.secretAccount, asM17.secretAccount)
+    }
+
+    func testTheNodeNumberIsRequiredOnlyInAllStarLinkMode() throws {
+        var noNode = good
+        noNode.node = ""
+        XCTAssertThrowsError(try noNode.validated()) {
+            XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingNode)
+        }
+
+        // M17 links a module instead; a node number would be a field the
+        // operator fills in for no effect on the wire.
+        XCTAssertEqual(try m17.validated().node, "")
+    }
+
+    func testTheModuleIsRequiredOnlyInM17Mode() throws {
+        var noModule = m17
+        noModule.module = "  "
+        XCTAssertThrowsError(try noModule.validated()) {
+            XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingModule)
+        }
+
+        XCTAssertEqual(try good.validated().module, "")
+    }
+
+    func testALowercaseModuleIsNormalisedToUppercase() throws {
+        var messy = m17
+        messy.module = " b\n"
+        XCTAssertEqual(try messy.validated().module, "B")
+    }
+
+    func testAModuleThatIsNotASingleLetterIsRejected() {
+        for bad in ["AB", "1", "-", "Alpha"] {
+            var settings = m17
+            settings.module = bad
+            XCTAssertThrowsError(try settings.validated(), bad) {
+                XCTAssertEqual($0 as? NodeSettings.ValidationError, .invalidModule, bad)
+            }
+        }
+    }
+
+    /// Neither mode gets to skip these: no host is nowhere to send to, and an
+    /// unidentified transmission is not legal on either network.
+    func testHostAndCallsignAreRequiredInBothModes() {
+        for settings in [good, m17] {
+            var noHost = settings
+            noHost.host = "   "
+            XCTAssertThrowsError(try noHost.validated()) {
+                XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingHost)
+            }
+
+            var noCallsign = settings
+            noCallsign.callsign = ""
+            XCTAssertThrowsError(try noCallsign.validated()) {
+                XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingCallsign)
+            }
+        }
     }
 }

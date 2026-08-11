@@ -61,9 +61,48 @@ struct ConnectFormView: View {
         }
     }
 
+    /// Which network to use.
+    ///
+    /// A segmented control rather than a menu: there are two, both are always
+    /// available, and an operator should be able to see which one they are on
+    /// without opening anything. Changing it moves the port to that mode's
+    /// default, but only when the port is still the *other* mode's default —
+    /// a port the operator typed themselves is theirs to keep.
+    private var modePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Mode", selection: $settings.mode) {
+                ForEach(RadioMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: settings.mode) { newMode in
+                for other in RadioMode.allCases where other != newMode {
+                    if settings.port == other.defaultPort {
+                        settings.port = newMode.defaultPort
+                        portText = String(newMode.defaultPort)
+                    }
+                }
+            }
+
+            // Not decoration. One of these two modes has carried a real
+            // conversation and the other has never been transmitted at all,
+            // and an operator choosing between them deserves to know which is
+            // which before they key up rather than after.
+            if let warning = settings.mode.unvalidatedWarning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private var fields: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Node")
+            modePicker
+
+            Text(settings.mode.usesModule ? "Reflector" : "Node")
                 .font(.headline)
 
             LabelledField(label: "Host", systemImage: "network") {
@@ -84,14 +123,32 @@ struct ConnectFormView: View {
                     #endif
             }
 
-            LabelledField(label: "Node number", systemImage: "antenna.radiowaves.left.and.right") {
-                TextField("55553", text: $settings.node)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .keyboardType(.numbersAndPunctuation)
-                        .textInputAutocapitalization(.never)
-                    #endif
-                    .autocorrectionDisabled()
+            // The two modes reach the far end differently: AllStarLink dials a
+            // node number, M17 links a module on a reflector. Showing both
+            // would mean a field that quietly does nothing.
+            if settings.mode.usesNodeNumber {
+                LabelledField(
+                    label: "Node number", systemImage: "antenna.radiowaves.left.and.right"
+                ) {
+                    TextField("55553", text: $settings.node)
+                        .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                            .keyboardType(.numbersAndPunctuation)
+                            .textInputAutocapitalization(.never)
+                        #endif
+                        .autocorrectionDisabled()
+                }
+            }
+
+            if settings.mode.usesModule {
+                LabelledField(label: "Module", systemImage: "square.grid.2x2") {
+                    TextField("C", text: $settings.module)
+                        .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                            .textInputAutocapitalization(.characters)
+                        #endif
+                        .autocorrectionDisabled()
+                }
             }
 
             Divider()
@@ -108,20 +165,33 @@ struct ConnectFormView: View {
                     .autocorrectionDisabled()
             }
 
-            LabelledField(label: "Username", systemImage: "person") {
-                TextField("optional", text: $settings.username)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                    #endif
-                    .autocorrectionDisabled()
-            }
+            // M17 reflectors do not authenticate — the callsign in every
+            // frame is the whole of the identity — so there is no account and
+            // nothing to put in the Keychain. Offering an empty secret field
+            // in that mode would imply a security property M17 does not have.
+            if settings.mode.usesNodeNumber {
+                LabelledField(label: "Username", systemImage: "person") {
+                    TextField("optional", text: $settings.username)
+                        .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                        #endif
+                        .autocorrectionDisabled()
+                }
 
-            LabelledField(label: "Secret", systemImage: "key") {
-                // SecureField, and the value is written to the Keychain on
-                // connect — never to UserDefaults, and never to a log.
-                SecureField("stored in the Keychain", text: $secret)
-                    .textFieldStyle(.roundedBorder)
+                LabelledField(label: "Secret", systemImage: "key") {
+                    // SecureField, and the value is written to the Keychain on
+                    // connect — never to UserDefaults, and never to a log.
+                    SecureField("stored in the Keychain", text: $secret)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } else {
+                Label(
+                    "M17 reflectors are unauthenticated. Your callsign identifies you.",
+                    systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Text("The secret is kept in the Keychain, not in the app's settings file.")

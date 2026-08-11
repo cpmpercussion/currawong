@@ -45,9 +45,10 @@ final class CompositionRootTests: XCTestCase {
             secret: "hunter2")
         defer { link.close() }
 
-        XCTAssertEqual(link.client.state, .idle)
-        let isConnected = await link.client.isConnected
-        XCTAssertFalse(isConnected)
+        // The link exposes operations, not the client, so what is
+        // observable here is that nothing has been keyed and nothing throws.
+        XCTAssertEqual(link.transmitState(), .idle)
+        XCTAssertEqual(link.mode, .allStarLink)
     }
 
     /// Stopping transmit is documented as safe on a client that was never
@@ -59,9 +60,9 @@ final class CompositionRootTests: XCTestCase {
             secret: "")
         defer { link.close() }
 
-        await link.client.stopTransmit()
+        await link.stopTransmit()
 
-        XCTAssertEqual(link.client.state, .idle)
+        XCTAssertEqual(link.transmitState(), .idle)
     }
 
     /// The captured-frame path must be safe to call when nothing is

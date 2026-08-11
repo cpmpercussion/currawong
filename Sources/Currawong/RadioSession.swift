@@ -6,12 +6,18 @@ import RadioCore
 
 /// Everything Currawong knows how to do, with no view attached.
 ///
-/// Generic over `Client: NetworkClient` for the reason `CompositionRoot`
-/// documents: `NetworkClient` has an `associatedtype Destination`, so there is
-/// no `any NetworkClient` to hold, and a concrete client here would drag
-/// `IAX2Kit` into the whole app. The generic parameter keeps the view model
-/// testable against a fake client that opens no socket, which is what the test
-/// suite does.
+/// Holds no client and names no protocol. It used to be generic over
+/// `Client: NetworkClient`, which was the only way to keep `IAX2Kit` out of
+/// the app while `NetworkClient` has an `associatedtype Destination` and
+/// therefore no existential form.
+///
+/// That parameter had to be *chosen* somewhere, and it was chosen in
+/// `CompositionRoot` — so the app could hold an AllStarLink session or an M17
+/// session, but never one of either. Supporting both meant removing it, and
+/// removing it cost nothing: this type only ever used five operations on the
+/// client, and ``RadioLink`` now carries those as closures. The view model is
+/// still testable against a fake that opens no socket; the fake supplies
+/// closures instead of conforming to `NetworkClient`.
 ///
 /// ## The rule this type exists to enforce
 ///
@@ -30,7 +36,7 @@ import RadioCore
 /// press-release cannot end with the stop landing before the start and leaving
 /// the client keyed. The chain is the reason ``settle()`` exists.
 @MainActor
-final class RadioSession<Client: NetworkClient>: ObservableObject {
+final class RadioSession: ObservableObject {
 
     // MARK: - Types
 
@@ -90,19 +96,16 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     /// How the composition root turns settings plus a secret into a link.
     /// Throws, because building a destination can reject what was typed.
-    typealias LinkFactory = @MainActor (NodeSettings, String) throws -> RadioLink<Client>
+    typealias LinkFactory = @MainActor (NodeSettings, String) throws -> RadioLink
 
     /// How long after the last inbound frame the receive indicator stays lit.
     /// Two and a half frames — long enough not to flicker on the 20 ms grid,
     /// short enough to go out promptly when the far end unkeys.
-    static var receiveActivityWindow: TimeInterval { 0.5 }
+    static let receiveActivityWindow: TimeInterval = 0.5
 
     /// How many DTMF digits of history to keep in each direction. Enough for a
     /// long node command and its reply, short enough to read at a glance.
-    /// A computed property rather than a `let`, because a generic type cannot
-    /// have static stored properties — the same reason
-    /// ``receiveActivityWindow`` is written this way.
-    static var dtmfLogLimit: Int { 24 }
+    static let dtmfLogLimit = 24
 
     // MARK: - Published state
 
@@ -167,6 +170,14 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
     /// Inbound media the client is discarding, if any.
     @Published private(set) var mediaWarning: String?
 
+    /// The station currently transmitting on a shared channel, when one is.
+    ///
+    /// **M17 only** — a reflector module is shared and an AllStarLink call is
+    /// not, so this stays `nil` for the whole of an AllStar connection. `nil`
+    /// while an M17 link is up means nobody is transmitting, which is the
+    /// ordinary quiet state of a module.
+    @Published private(set) var receivingFrom: String?
+
     // MARK: - Dependencies
 
     private let audio: AudioIO
@@ -177,7 +188,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     // MARK: - Private state
 
-    private var link: RadioLink<Client>?
+    private var link: RadioLink?
 
     /// The desired key state. `isTransmitting` is the applied one; these
     /// differ for as long as it takes the client to answer.
@@ -277,6 +288,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         lastDisconnectReason = nil
         mediaWarning = nil
         negotiatedCodec = nil
+        receivingFrom = nil
         sentDTMF = ""
         receivedDTMF = ""
 
@@ -309,7 +321,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
             return
         }
 
-        let newLink: RadioLink<Client>
+        let newLink: RadioLink
         do {
             newLink = try makeLink(validated, secret)
         } catch {
@@ -323,7 +335,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         startReceivePump(for: newLink)
 
         do {
-            try await newLink.client.connect(to: newLink.destination)
+            try await newLink.connect()
         } catch {
             tearDownLink()
             connection = .disconnected
@@ -332,7 +344,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         }
 
         connection = .connected
-        transmitState = newLink.client.state
+        transmitState = newLink.transmitState()
     }
 
     /// Hangs up. **Stops transmitting first**, and waits for that to land
@@ -345,7 +357,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         await endTransmitAndWait(reason: .disconnecting)
 
         if let link {
-            await link.client.disconnect()
+            await link.disconnect()
         }
         tearDownLink()
         connection = .disconnected
@@ -444,31 +456,31 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
             guard connection.isConnected, !isTransmitting else { return }
             do {
                 try audio.startCapture(onFrame: link.sendCapturedFrame)
-                try await link.client.startTransmit()
+                try await link.startTransmit()
             } catch {
                 // Fail closed: microphone shut, client unkeyed, button
                 // released. The operator must make a fresh, deliberate press.
                 audio.stopCapture()
-                await link.client.stopTransmit()
+                await link.stopTransmit()
                 transmitDesired = false
                 isKeyDown = false
                 isTransmitting = false
                 lastStopReason = .transmitFailed
-                transmitState = link.client.state
+                transmitState = link.transmitState()
                 present(title: "Could not transmit", message: "\(error)")
                 return
             }
             isTransmitting = true
-            transmitState = link.client.state
+            transmitState = link.transmitState()
         } else {
             // Unconditional rather than guarded by `isTransmitting`. Both
             // calls are documented as safe when nothing is running, and the
             // failure mode of a redundant stop is nothing at all, while the
             // failure mode of a missed one is an open microphone.
             audio.stopCapture()
-            await link.client.stopTransmit()
+            await link.stopTransmit()
             isTransmitting = false
-            transmitState = link.client.state
+            transmitState = link.transmitState()
         }
     }
 
@@ -541,7 +553,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     // MARK: - Link events
 
-    private func startEventPump(for link: RadioLink<Client>) {
+    private func startEventPump(for link: RadioLink) {
         let events = link.events
         eventTask = Task { @MainActor [weak self] in
             for await event in events {
@@ -555,11 +567,11 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
         switch event {
         case .connected(let codec):
             if connection == .connecting { connection = .connected }
-            transmitState = link?.client.state ?? .receiving
+            transmitState = link?.transmitState() ?? .receiving
             if let codec { negotiatedCodec = codec }
 
         case .transmitting, .receiving:
-            transmitState = link?.client.state ?? transmitState
+            transmitState = link?.transmitState() ?? transmitState
 
         case .dtmfReceived(let digit):
             receivedDTMF = Self.appending(digit, to: receivedDTMF)
@@ -576,6 +588,9 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
         case .mediaRejected(let description):
             mediaWarning = description
+
+        case .remoteStation(let callsign):
+            receivingFrom = callsign
 
         case .disconnected(let reason):
             lastDisconnectReason = reason
@@ -607,7 +622,7 @@ final class RadioSession<Client: NetworkClient>: ObservableObject {
 
     // MARK: - Received audio
 
-    private func startReceivePump(for link: RadioLink<Client>) {
+    private func startReceivePump(for link: RadioLink) {
         let stream = link.receivedAudio
         let audio = self.audio
         let window = Self.receiveActivityWindow

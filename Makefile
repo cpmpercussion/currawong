@@ -5,11 +5,18 @@
 # not in version control, so `generate` is the first step after a fresh clone.
 #
 #   make generate     regenerate Currawong.xcodeproj from project.yml
+#   make codec2       build Codec2.xcframework (needs cmake; ~4 min, once)
 #   make build        build for a generic iOS device
 #   make build-macos  build for macOS
 #   make test         run the unit tests on an iOS simulator
 #   make test-macos   run the unit tests on macOS
 #   make clean        remove generated project and build output
+#   make distclean    ...and the Codec2 framework and its build tree
+#
+# Codec2.xcframework is a build prerequisite: the app embeds it (LP-4, dynamic
+# only) and M17 audio does not exist without it. It is not in version control,
+# so the first build after a fresh clone builds it — needing `brew install
+# cmake` — and every build after that finds it already there. See docs/CODEC2.md.
 #
 # Overrides:
 #   make test SIMULATOR='iPhone 16'
@@ -33,14 +40,26 @@ SIGNING ?=
 
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED_DATA) $(SIGNING)
 
-.PHONY: all generate build build-macos test test-macos clean simulator
+CODEC2 := Codec2.xcframework
+
+.PHONY: all generate codec2 build build-macos test test-macos clean distclean simulator
 
 all: build test
 
-$(PROJECT): project.yml
+# The framework is a real file, so make rebuilds it only when it is missing.
+# Deleting it (or `make distclean`) is how you force a rebuild.
+$(CODEC2):
+	scripts/build-codec2-xcframework.sh
+
+codec2: $(CODEC2)
+
+# Generation depends on the framework because project.yml references it: an
+# xcodeproj generated against a missing framework builds, then fails at link
+# time with a message that does not mention codec2 at all.
+$(PROJECT): project.yml $(CODEC2)
 	xcodegen generate
 
-generate:
+generate: $(CODEC2)
 	xcodegen generate
 
 build: $(PROJECT)
@@ -63,3 +82,9 @@ simulator:
 
 clean:
 	rm -rf $(PROJECT) $(DERIVED_DATA) build
+
+# Separate from `clean` because rebuilding the framework costs about four
+# minutes and a codec2 checkout, and almost nothing you would run `clean` for
+# is fixed by discarding it.
+distclean: clean
+	rm -rf $(CODEC2) .build

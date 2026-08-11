@@ -55,20 +55,29 @@ straight on `main` until that list is clear.
 
 ## Building and testing from the terminal
 
-You need Xcode and [xcodegen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`). The library is resolved from its tag, so this
-repository is all you need to clone.
+You need Xcode, [xcodegen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`) and `cmake` (`brew install cmake`). The library is
+resolved from its tag, so this repository is all you need to clone.
+
+`cmake` is there for `Codec2.xcframework`, which the app embeds for M17 audio
+(FR-2.4) and which is not in version control — 7.6 MB of LGPL-2.1 binary. The
+`make` targets below build it automatically the first time, which takes about
+four minutes and then never again unless you run `make distclean`. Why the app
+builds its own rather than getting one from the library:
+[`docs/CODEC2.md`](docs/CODEC2.md).
 
 The `.xcodeproj` is generated from `project.yml` and is not in version control,
 so generate it first:
 
 ```sh
 make generate      # xcodegen generate
+make codec2        # build Codec2.xcframework (implied by the targets below)
 make build         # build for a generic iOS device
 make build-macos   # build for macOS
 make test          # run the unit tests on an iOS simulator
 make test-macos    # run the unit tests on macOS
 make clean         # remove the generated project and all build output
+make distclean     # ...and the Codec2 framework, forcing a four-minute rebuild
 ```
 
 `make test` picks an installed iPhone simulator for you

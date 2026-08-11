@@ -258,12 +258,17 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     private func activateSession() throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        // `.allowBluetoothHFP` is the current spelling of the library's
-        // `.allowBluetooth` — same option, same raw value, available since
-        // iOS 1.0, and not deprecated. Hands-free profile is the one that
-        // carries a microphone, which is the half that matters here.
+        // Hands-free profile is the one that carries a microphone, which is
+        // the half that matters here.
+        //
+        // Spelled `.allowBluetooth` rather than `.allowBluetoothHFP`: the two
+        // are the same option with the same raw value, but the newer name does
+        // not exist in the iOS 18 SDK — and CI builds against it, which is why
+        // `main` has been red since BU-1 landed. The old spelling exists in
+        // both SDKs. Worth revisiting when CI's Xcode is new enough that the
+        // deprecation warning is the bigger nuisance.
         try session.setCategory(
-            .playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .defaultToSpeaker])
+            .playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
         try session.setActive(true)
         #endif
         // macOS has no AVAudioSession. Device selection there is the user's,
