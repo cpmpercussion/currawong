@@ -10,6 +10,11 @@ Sources/Currawong/Info.plist
 DerivedData/
 build/
 
+# Codec2.xcframework is built by scripts/build-codec2-xcframework.sh and never
+# committed: 7.6 MB of LGPL-2.1 binary, and redistributing a third-party binary
+# from this repository is a decision nobody has taken. See docs/CODEC2.md.
+*.xcframework
+
 # Per-user Xcode state
 xcuserdata/
 *.xcuserstate

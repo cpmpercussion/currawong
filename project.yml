@@ -15,11 +15,12 @@ options:
   xcodeVersion: "16.0"
 
 packages:
-  # Versioned git dependency as of swift-hamvoip v0.1.0. `from:` accepts any
-  # 0.1.x — the library is 0.x, so its own changelog warns the API may change
-  # in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
-  # pins the build, and it is generated, so a fresh `make generate` resolves
-  # forward. Pin exactly here if that ever bites.
+  # Versioned git dependency as of swift-hamvoip v0.2.0, which added M17 stream
+  # mode. `from:` accepts any 0.2.x — the library is 0.x, so its own changelog
+  # warns the API may change in any release;
+  # `Currawong.xcodeproj/…/Package.resolved` is what actually pins the build,
+  # and it is generated, so a fresh `make generate` resolves forward. Pin
+  # exactly here if that ever bites.
   #
   # To work on the app and the library together, swap this for the path
   # dependency below and regenerate. Do not commit the swap.
@@ -28,7 +29,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.1.0
+    from: 0.2.0
 
 settings:
   base:
@@ -54,13 +55,35 @@ targets:
         excludes:
           - Info.plist
     dependencies:
-      # The app depends on the library products only. It talks to IAX2Kit
-      # through RadioCore's `NetworkClient`; the concrete `IAX2Client` is named
-      # in exactly one file, CompositionRoot.swift.
+      # The app depends on the library products only. It talks to IAX2Kit and
+      # M17Kit through RadioCore's `NetworkClient`; the concrete `IAX2Client`
+      # and `M17Client` are named in exactly one file, CompositionRoot.swift.
       - package: HamVoIP
         products:
           - RadioCore
           - IAX2Kit
+          - M17Kit
+
+      # Codec2 3200 (FR-2.4), the voice codec M17 stream mode carries.
+      #
+      # **Embed & Sign, never statically linked** — LP-4. Codec2 is LGPL-2.1
+      # and we ship it only as a dynamic framework carrying its own COPYING.
+      # Do not add `-force_load`/`-all_load` for it, and do not switch this to
+      # a static link: that would pull LGPL objects into the app binary.
+      #
+      # Why the app carries its own copy at all, when the library also knows
+      # how to build one: the library's `Codec2VoiceCodec` is compiled out for
+      # anyone consuming it over SPM. The XCFramework is 7.6 MB of LGPL binary
+      # and is not committed to either repository, so a resolved SPM checkout
+      # never contains it — and nothing can run a build script inside that
+      # checkout. Hence `Sources/Currawong/Codec2Codec.swift`, the app's own
+      # conformance, injected into `M17Client`. See docs/CODEC2.md.
+      #
+      # Built by `scripts/build-codec2-xcframework.sh`; `make` builds it
+      # automatically when it is missing. Not in version control (.gitignore).
+      - framework: Codec2.xcframework
+        embed: true
+        codeSign: true
     info:
       path: Sources/Currawong/Info.plist
       properties:
