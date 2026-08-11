@@ -43,6 +43,68 @@ the live node:
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | Open — check 2 (keying) confirmed |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | Open — nothing confirmed |
+
+---
+
+### BU-4 — the M17 session
+
+M17 became selectable on 2026-08-11 (app `4bc870c`, library v0.2.0). **Nothing
+about its audio path has ever been exercised against real equipment**, by this
+app or by the library's CLI. The one M17 thing that *is* confirmed on air is
+receive-only and had no codec in it: the OQ-7 run that established the stream
+frame is 54 bytes.
+
+So this is not "check M17 still works". Nobody knows whether it works at all,
+and the plausible failure modes are wide open — the reflector may reject our
+`CONN`, accept it and ignore our stream, relay a stream nobody can decode, or
+relay one that decodes into noise. Any of those is new information worth
+writing down.
+
+Easiest first, because it takes the app out of the picture. From the library
+repo, which has the same client underneath:
+
+```sh
+cd ../swift-hamvoip
+scripts/build-codec2-xcframework.sh          # once; needs brew install cmake
+swift package reset && swift build           # SwiftPM caches the manifest
+swift run hamvoip-cli m17 --host <reflector> --module C --callsign <yours>
+```
+
+**Receive first, transmitting nothing.** Link the module, wait for somebody
+else to talk, and find out whether their audio is intelligible. That alone
+settles the decode path and the jitter buffer, and it puts nothing on air.
+
+Only then transmit, and only with a second receiver — another client on the
+same module, or somebody who can say what they heard. A reflector module is a
+shared channel: everything transmitted is heard by everyone linked to it, so a
+first attempt with an unproven encoder is worth arranging deliberately rather
+than doing at random.
+
+Then the same again through the app, with M17 chosen in the picker.
+
+Checks, in the order they can be answered:
+
+1. The link comes up and stays up — the reflector's `PING` keepalives hold it.
+2. Another station's audio is heard, and is intelligible.
+3. The station currently transmitting is displayed.
+4. Our transmission is heard by a second receiver, and is intelligible.
+5. Releasing PTT ends the over cleanly — the receiver sees the stream end,
+   rather than the audio simply stopping.
+6. The watchdog (SF-1) unkeys a held button, as it does on AllStarLink.
+
+Worth capturing while doing it, since a capture is the only thing that can
+settle a disagreement afterwards:
+
+```sh
+sudo tcpdump -i any -w ../experiment-data/m17-session.pcap 'udp port 17000'
+sudo chown "$(id -un):staff" ../experiment-data/*.pcap
+```
+
+If a reflector turns out to disagree with what the library implements — a
+different frame length, say — that is new information rather than a bug to fix
+on sight, and `hamvoip-cli oq7` is the tool that measures it. The OQ-7 row of
+the development plan explains why.
 
 ---
 
