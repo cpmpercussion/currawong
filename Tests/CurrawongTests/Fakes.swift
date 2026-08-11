@@ -380,7 +380,7 @@ final class SessionHarness {
     let settingsStore: InMemorySettingsStore
     let secretStore: InMemorySecretStore
 
-    private(set) var session: RadioSession<FakeNetworkClient>!
+    private(set) var session: RadioSession!
 
     /// Yields ``RadioLinkEvent``s at the session, as the composition root's
     /// translated event pump would.
@@ -458,15 +458,28 @@ final class SessionHarness {
                 self.audioContinuation = audioEscape
 
                 let client = self.client
+                // `RadioLink` stopped being generic when a second mode
+                // arrived, so the fake supplies the five client operations as
+                // closures over `FakeNetworkClient` rather than handing the
+                // client over. The fake still conforms to `NetworkClient` —
+                // it is what the closures call, and the recording it does is
+                // what the assertions read.
+                let destination = FakeNetworkClient.Destination(
+                    host: settings.host,
+                    port: settings.port,
+                    node: settings.node,
+                    username: settings.username,
+                    callsign: settings.callsign,
+                    secret: secret)
                 return RadioLink(
-                    client: client,
-                    destination: FakeNetworkClient.Destination(
-                        host: settings.host,
-                        port: settings.port,
-                        node: settings.node,
-                        username: settings.username,
-                        callsign: settings.callsign,
-                        secret: secret),
+                    // Reflects what was asked for, so a test can assert the
+                    // mode reached the factory at all.
+                    mode: settings.mode,
+                    connect: { try await client.connect(to: destination) },
+                    disconnect: { await client.disconnect() },
+                    startTransmit: { try await client.startTransmit() },
+                    stopTransmit: { await client.stopTransmit() },
+                    transmitState: { client.state },
                     events: events,
                     receivedAudio: received,
                     sendCapturedFrame: { client.send(pcm: $0) },

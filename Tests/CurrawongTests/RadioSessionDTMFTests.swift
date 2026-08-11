@@ -105,7 +105,7 @@ final class RadioSessionDTMFTests: XCTestCase {
     /// unbounded one would grow for the length of a net.
     func testTheLogsAreTrimmedToTheirLimit() async {
         let harness = await connectedHarness()
-        let limit = RadioSession<FakeNetworkClient>.dtmfLogLimit
+        let limit = RadioSession.dtmfLogLimit
 
         for _ in 0..<(limit + 5) {
             await harness.session.sendDTMF("1")
@@ -118,7 +118,7 @@ final class RadioSessionDTMFTests: XCTestCase {
     /// oldest.
     func testTrimmingKeepsTheMostRecentDigits() async {
         let harness = await connectedHarness()
-        let limit = RadioSession<FakeNetworkClient>.dtmfLogLimit
+        let limit = RadioSession.dtmfLogLimit
 
         for _ in 0..<limit { await harness.session.sendDTMF("0") }
         await harness.session.sendDTMF("9")

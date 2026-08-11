@@ -48,6 +48,18 @@ enum RadioLinkEvent: Sendable, Equatable {
     /// link is broken", and the operator cannot tell those apart by ear.
     case mediaRejected(String)
 
+    /// Who is transmitting on a shared channel, or `nil` when they stopped.
+    ///
+    /// **M17 only.** A reflector module is a shared channel — everyone linked
+    /// to it hears everyone else — so the identity of the station currently
+    /// transmitting is both available and worth showing. An AllStarLink call
+    /// is point-to-point and produces this never.
+    ///
+    /// A `nil` callsign means a station whose base-40 address did not decode
+    /// to text, which is legal and happens for the reserved and extended
+    /// address ranges.
+    case remoteStation(callsign: String?)
+
     /// The call ended, with the reason if there was one.
     case disconnected(reason: String?)
 }
@@ -135,23 +147,53 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
 
 /// One connection's worth of plumbing, assembled by the composition root.
 ///
-/// Generic over `Client: NetworkClient` rather than holding `any
-/// NetworkClient`, because the protocol has an `associatedtype Destination`
-/// and so has no existential form. The destination travels *with* the client
-/// for the same reason: the view model cannot construct a `Client.Destination`
-/// from `NodeSettings` without knowing what one is, so whoever knew how to
-/// build the client builds it too.
+/// **Not generic, and deliberately no longer holding a client.** It used to be
+/// `RadioLink<Client: NetworkClient>`, which worked while there was one mode
+/// and stopped working the moment there were two: `NetworkClient` has an
+/// `associatedtype Destination`, so `any NetworkClient` does not exist, and a
+/// generic parameter has to be *chosen* somewhere. It was chosen in
+/// `CompositionRoot`, which meant the app could hold an AllStarLink session or
+/// an M17 session, but never one of either.
 ///
-/// A link is single-use. `IAX2Client.disconnect()` shuts its client down for
-/// good — the streams finish and a second `connect(to:)` throws — so
-/// reconnecting means a new link, not a reset of this one. ``RadioSession``
-/// asks for a fresh one on every connect.
-struct RadioLink<Client: NetworkClient> {
-    /// The client, spoken to only through `NetworkClient`.
-    let client: Client
+/// The way out is that ``RadioSession`` never needed the client — only five
+/// operations on it. Each is a closure here, captured over whichever concrete
+/// client and destination the composition root built. The generic parameter
+/// disappears, both modes produce the same type, and the seam is otherwise
+/// unchanged: this is still the only place the app's vocabulary meets the
+/// library's.
+///
+/// A link is single-use. Both clients shut down for good on `disconnect()` —
+/// the streams finish and a second connect throws — so reconnecting means a
+/// new link, not a reset of this one. ``RadioSession`` asks the factory for a
+/// fresh one on every connect.
+struct RadioLink {
+    /// Which network this link speaks. For display, and for the few decisions
+    /// the app is allowed to make about modes; it names no library type.
+    let mode: RadioMode
 
-    /// Where this link connects to.
-    let destination: Client.Destination
+    /// Connects to the destination this link was built for.
+    ///
+    /// The destination is captured rather than exposed, because it is a
+    /// protocol-specific type — an `IAX2Destination` or an `M17Destination` —
+    /// and letting one out would put library vocabulary back into the app.
+    let connect: @Sendable () async throws -> Void
+
+    /// Drops the connection and shuts the client down.
+    let disconnect: @Sendable () async -> Void
+
+    /// Keys up. Throws if the client is not connected.
+    let startTransmit: @Sendable () async throws -> Void
+
+    /// Unkeys. Idempotent, and safe when not connected — the SF-2 and SF-3
+    /// paths call it without being able to know the current state.
+    let stopTransmit: @Sendable () async -> Void
+
+    /// The client's transmit state, read live.
+    ///
+    /// A closure rather than a stored value because it has to be *current*:
+    /// the watchdog (SF-1) can unkey between two reads, and a snapshot taken
+    /// when the link was built would be a lie for the rest of the session.
+    let transmitState: @Sendable () -> TransmitState
 
     /// Lifecycle, watchdog and media events, already translated out of
     /// whatever protocol-specific enum they arrived in.

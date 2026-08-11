@@ -2,6 +2,7 @@
 
 import Foundation
 import IAX2Kit
+import M17Kit
 import RadioCore
 
 /// The one object in Currawong allowed to name a concrete network.
@@ -11,8 +12,16 @@ import RadioCore
 /// `stopTransmit()`, `disconnect()` and `state`, and know nothing about RFC
 /// 5456. Somebody, though, has to decide *which* client is on the other side of
 /// that protocol and build it — and this is that somebody. It is the single
-/// documented exception to the rule, and it is why `import IAX2Kit` appears in
-/// this file and nowhere else.
+/// documented exception to the rule, and it is why `import IAX2Kit` and
+/// `import M17Kit` appear in this file and nowhere else.
+///
+/// ## Two modes
+///
+/// `settings.mode` chooses between an `IAX2Client` and an `M17Client`, and
+/// ``makeLink(settings:secret:)`` is the switch. Nothing above this file knows
+/// there is more than one library: both factories return the same
+/// non-generic ``RadioLink``, which is exactly why that type stopped being
+/// generic — see its doc comment.
 ///
 /// ## What this file has to do that `NetworkClient` should arguably do for it
 ///
@@ -55,11 +64,16 @@ import RadioCore
 /// this type hands ``RadioSession`` a *factory* rather than a client.
 @MainActor
 final class CompositionRoot {
-    /// The view model everything else in the app is built on. Generic over the
-    /// client for the reason above: `NetworkClient` has an `associatedtype
-    /// Destination`, so there is no existential to hold, and this is the only
-    /// place allowed to spell the concrete parameter.
-    let session: RadioSession<IAX2Client>
+    /// The view model everything else in the app is built on.
+    ///
+    /// No longer generic over the client. `NetworkClient` still has an
+    /// `associatedtype Destination` and still has no existential form — but
+    /// the parameter had to be *chosen* here, which meant the app could hold
+    /// an AllStarLink session or an M17 session and never one of either.
+    /// ``RadioLink`` carries closures now instead of a client, so both modes
+    /// produce the same type and the choice moves to where it belongs: the
+    /// operator's, at connect time.
+    let session: RadioSession
 
     /// **PT-2, PT-3.** The Bluetooth accessory. Owned here for the process
     /// lifetime and pointed at ``session``; it constructs no `CBCentralManager`
@@ -99,8 +113,15 @@ final class CompositionRoot {
             settingsStore: settingsStore,
             secretStore: secretStore,
             makeLink: { settings, secret in
-                CompositionRoot.makeIAX2Link(
-                    settings: settings, secret: secret, configuration: configuration)
+                // Dispatches on the mode in the settings; see `makeLink`.
+                // `configuration` is the IAX2 one, so it only applies there.
+                switch settings.mode {
+                case .allStarLink:
+                    return CompositionRoot.makeIAX2Link(
+                        settings: settings, secret: secret, configuration: configuration)
+                case .m17:
+                    return try CompositionRoot.makeM17Link(settings: settings)
+                }
             })
         let accessory = accessory ?? BLEPTTController()
         let remoteCommand = remoteCommand ?? RemoteCommandPTTController()
@@ -157,7 +178,7 @@ final class CompositionRoot {
         settings: NodeSettings,
         secret: String,
         configuration: IAX2Client.Configuration = IAX2Client.Configuration()
-    ) -> RadioLink<IAX2Client> {
+    ) -> RadioLink {
         var configuration = configuration
         configuration.transmitTimeout = watchdogTimeout(for: settings)
 
@@ -197,8 +218,12 @@ final class CompositionRoot {
         }
 
         return RadioLink(
-            client: client,
-            destination: destination,
+            mode: .allStarLink,
+            connect: { try await client.connect(to: destination) },
+            disconnect: { await client.disconnect() },
+            startTransmit: { try await client.startTransmit() },
+            stopTransmit: { await client.stopTransmit() },
+            transmitState: { client.state },
             events: events,
             receivedAudio: client.receivedAudio,
             sendCapturedFrame: { relay.submit($0) },
@@ -209,6 +234,175 @@ final class CompositionRoot {
                 eventPump.cancel()
                 eventContinuation.finish()
             })
+    }
+
+    /// Builds one M17 connection's worth of plumbing.
+    ///
+    /// The mirror of ``makeIAX2Link(settings:secret:configuration:)``, and the
+    /// differences are the protocol's rather than ours:
+    ///
+    /// - **No secret.** M17 reflectors do not authenticate; the callsign in
+    ///   every frame's SRC field is the whole of the identity. There is no
+    ///   Keychain round trip on this path and nothing to leak.
+    /// - **A module, not a node number.** `settings.module` is the reflector
+    ///   module to link.
+    /// - **No DTMF.** M17 has no in-band signalling equivalent, so `sendDTMF`
+    ///   throws rather than pretending. The connect form hides the keypad in
+    ///   this mode, so an operator should never reach it.
+    /// - **A codec has to be supplied.** `M17Client` takes an injected
+    ///   `VoiceCodec`, because the library's own Codec2 conformance is
+    ///   compiled out for SPM consumers. ``Codec2Codec`` is the app's, and
+    ///   this is its injection point. See docs/CODEC2.md.
+    ///
+    /// **Not validated on air.** No M17 transmission has ever reached a real
+    /// reflector, so this path is believed correct rather than known to be.
+    static func makeM17Link(
+        settings: NodeSettings,
+        configuration: M17Client.Configuration = M17Client.Configuration()
+    ) throws -> RadioLink {
+        var configuration = configuration
+        configuration.transmitTimeout = watchdogTimeout(for: settings)
+
+        guard settings.module.count == 1, let module = settings.module.first else {
+            throw M17LinkError.invalidModule(settings.module)
+        }
+
+        let client = M17Client(
+            codec: try makeVoiceCodec(),
+            configuration: configuration,
+            clock: ContinuousClock())
+        let destination = M17Destination(
+            host: settings.host,
+            port: settings.port,
+            module: module,
+            callsign: settings.callsign)
+
+        var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
+        let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
+        let eventContinuation = eventEscape!
+
+        let clientEvents = client.events
+        let eventPump = Task.detached {
+            for await event in clientEvents {
+                if let translated = RadioLinkEvent(event) {
+                    eventContinuation.yield(translated)
+                }
+            }
+            eventContinuation.finish()
+        }
+
+        let relay = CapturedFrameRelay()
+        let frames = relay.frames
+        let sendPump = Task.detached {
+            for await frame in frames {
+                _ = try? await client.send(pcm: frame)
+            }
+        }
+
+        return RadioLink(
+            mode: .m17,
+            connect: { try await client.connect(to: destination) },
+            disconnect: { await client.disconnect() },
+            startTransmit: { try await client.startTransmit() },
+            stopTransmit: { await client.stopTransmit() },
+            transmitState: { client.state },
+            events: events,
+            receivedAudio: client.receivedAudio,
+            sendCapturedFrame: { relay.submit($0) },
+            sendDTMF: { _ in throw M17LinkError.dtmfUnsupported },
+            close: {
+                relay.finish()
+                sendPump.cancel()
+                eventPump.cancel()
+                eventContinuation.finish()
+            })
+    }
+
+    /// The Codec2 conformance, or an error the operator can act on.
+    ///
+    /// Separate so the failure has somewhere to be explained: ``Codec2Codec``
+    /// only exists when `Codec2.xcframework` was linked, and a build without
+    /// it should say so plainly rather than fail to find a symbol.
+    private static func makeVoiceCodec() throws -> any VoiceCodec {
+        #if canImport(Codec2)
+        return try Codec2Codec()
+        #else
+        throw M17LinkError.codecUnavailable
+        #endif
+    }
+
+    /// Builds a link for whichever mode the settings name.
+    ///
+    /// The one place the app turns a mode into a concrete client, and the
+    /// reason ``RadioLink`` stopped being generic — see its doc comment.
+    static func makeLink(settings: NodeSettings, secret: String) throws -> RadioLink {
+        switch settings.mode {
+        case .allStarLink:
+            return makeIAX2Link(settings: settings, secret: secret)
+        case .m17:
+            return try makeM17Link(settings: settings)
+        }
+    }
+}
+
+/// What can go wrong building an M17 link, in the app's own vocabulary.
+enum M17LinkError: Error, Equatable, CustomStringConvertible {
+    /// The module is not a single letter. `NodeSettings.validated()` should
+    /// have caught this; this is the backstop.
+    case invalidModule(String)
+
+    /// This build has no Codec2, so M17 audio cannot work.
+    case codecUnavailable
+
+    /// DTMF was attempted on a mode that has no such thing.
+    case dtmfUnsupported
+
+    var description: String {
+        switch self {
+        case .invalidModule(let module):
+            return "'\(module)' is not a reflector module. Use a single letter, A to Z."
+        case .codecUnavailable:
+            return """
+                This build has no Codec2, so M17 audio is unavailable. Build \
+                Codec2.xcframework and rebuild the app — see docs/CODEC2.md.
+                """
+        case .dtmfUnsupported:
+            return "M17 has no DTMF signalling. Connect to an AllStarLink node to send digits."
+        }
+    }
+}
+
+/// The `M17ClientEvent` → ``RadioLinkEvent`` translation, alongside the IAX2
+/// one below and for the same reason.
+///
+/// M17 says things IAX2 has no word for. A reflector module is a shared
+/// channel, so the app is told *who* is transmitting and when they stop —
+/// which the app renders into the vocabulary it already has rather than
+/// growing cases only one mode can ever produce.
+extension RadioLinkEvent {
+    fileprivate init?(_ event: M17ClientEvent) {
+        switch event {
+        case .linked:
+            // The codec is not negotiated in M17 — a stream frame carries
+            // Codec2 3200 by definition — so it is named rather than reported.
+            self = .connected(codec: "Codec2 3200")
+        case .transmitting:
+            self = .transmitting
+        case .receiving:
+            self = .receiving
+        case .transmitWatchdogExpired(let timeout):
+            self = .transmitWatchdogExpired(timeout)
+        case .streamStarted(let source, _):
+            self = .remoteStation(callsign: source.callsign)
+        case .streamEnded:
+            self = .remoteStation(callsign: nil)
+        case .streamRejected(let rejection):
+            self = .mediaRejected("Incoming audio is being dropped: \(rejection).")
+        case .disconnected(let reason):
+            self = .disconnected(reason: reason.map { "The link dropped: \($0)." })
+        case .connecting:
+            return nil
+        }
     }
 }
 

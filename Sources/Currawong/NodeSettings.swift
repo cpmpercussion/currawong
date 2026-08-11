@@ -9,11 +9,25 @@ import Foundation
 /// way to accidentally persist a password by persisting the settings. The
 /// secret lives in the Keychain and is keyed by ``secretAccount``.
 ///
-/// Protocol-agnostic on purpose. Nothing here mentions IAX2 — the composition
-/// root turns one of these plus a secret into a concrete destination. Full
-/// settings CRUD (multiple stored nodes, editing, deleting) is APP-4; this is
-/// the single node a first connection needs.
+/// Names no library type. It carries a ``RadioMode`` and the *union* of both
+/// modes' fields, and the composition root turns one of these plus a secret
+/// into a concrete destination — the mode is the app's own vocabulary, not
+/// `IAX2Client` or `M17ReflectorClient` leaking upwards.
+///
+/// The union is a deliberate trade-off rather than an accident of growth. Two
+/// settings types would each be honest about their own fields, but would double
+/// the store, the form and the validation for the sake of one field that
+/// differs (``node`` versus ``module``). One type plus a mode keeps that cost
+/// at a single `if` in ``validated()`` and a single form; the price is that a
+/// value always has one field that means nothing, and only the mode says which.
+///
+/// Full settings CRUD (multiple stored nodes, editing, deleting) is APP-4; this
+/// is the single node a first connection needs.
 struct NodeSettings: Equatable, Codable, Sendable {
+    /// Which network this node is reached over, and therefore which of the
+    /// fields below are live.
+    var mode: RadioMode
+
     /// Hostname or literal address of the node.
     var host: String
 
@@ -21,7 +35,12 @@ struct NodeSettings: Equatable, Codable, Sendable {
     var port: UInt16
 
     /// The number being called — an AllStar node number such as `"55553"`.
+    /// Empty and unused in M17, which links a ``module`` instead.
     var node: String
+
+    /// The M17 reflector module to link: a single letter A–Z. Empty and unused
+    /// in AllStarLink.
+    var module: String
 
     /// The account the node authenticates us as. May be empty.
     var username: String
@@ -61,34 +80,45 @@ struct NodeSettings: Equatable, Codable, Sendable {
     static let transmitTimeoutRange: ClosedRange<TimeInterval> = 5...600
 
     init(
+        mode: RadioMode = .allStarLink,
         host: String = "",
         port: UInt16 = NodeSettings.defaultPort,
         node: String = "",
+        module: String = "",
         username: String = "",
         callsign: String = "",
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
+        self.mode = mode
         self.host = host
         self.port = port
         self.node = node
+        self.module = module
         self.username = username
         self.callsign = callsign
         self.transmitTimeout = transmitTimeout
     }
 
     /// Decodes settings, **including settings written before this type had a
-    /// watchdog timeout.**
+    /// watchdog timeout, a mode, or a module.**
     ///
     /// Hand-written for exactly one reason: the synthesised initialiser treats
     /// a missing key as a failure, so adding a non-optional field would make
     /// every stored settings blob undecodable, `SettingsStore.load()` would
     /// return `nil`, and the operator would find their node details wiped by an
     /// app update. A missing timeout is not corruption, it is an older file.
+    ///
+    /// The same holds for the mode: a blob written before modes existed was
+    /// written when AllStarLink was the only thing this app could do, so it *is*
+    /// an AllStarLink node rather than a corrupt one, and a missing module is
+    /// simply a field that mode never asks for.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decodeIfPresent(RadioMode.self, forKey: .mode) ?? .allStarLink
         self.host = try container.decode(String.self, forKey: .host)
         self.port = try container.decode(UInt16.self, forKey: .port)
         self.node = try container.decode(String.self, forKey: .node)
+        self.module = try container.decodeIfPresent(String.self, forKey: .module) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
         self.callsign = try container.decode(String.self, forKey: .callsign)
         self.transmitTimeout =
@@ -101,8 +131,23 @@ struct NodeSettings: Equatable, Codable, Sendable {
     /// Derived rather than stored so it cannot drift out of step with the
     /// settings, and deliberately contains no secret material — it is an
     /// identifier, and it ends up in a Keychain attribute where it is visible.
+    ///
+    /// **The AllStarLink form is frozen.** Every secret an operator has already
+    /// stored is filed under `username@host:port/node`; changing that string by
+    /// so much as a separator orphans all of them, and the operator would be
+    /// asked for a password they thought they had saved. M17 needs its own form
+    /// anyway — it is unauthenticated, so it has no secret to file, but the
+    /// account still has to identify the entry uniquely, and an M17 link to a
+    /// host must not be mistaken for an authenticated AllStarLink connection to
+    /// the same host. Its dialled target is a module letter rather than a node
+    /// number, and the prefix makes the two unmistakable.
     var secretAccount: String {
-        "\(username)@\(host):\(port)/\(node)"
+        switch mode {
+        case .allStarLink:
+            return "\(username)@\(host):\(port)/\(node)"
+        case .m17:
+            return "m17:\(callsign)@\(host):\(port)/\(module)"
+        }
     }
 
     /// What is wrong with a set of settings the operator has typed.
@@ -110,6 +155,8 @@ struct NodeSettings: Equatable, Codable, Sendable {
         case missingHost
         case missingNode
         case missingCallsign
+        case missingModule
+        case invalidModule
 
         var description: String {
             switch self {
@@ -119,6 +166,10 @@ struct NodeSettings: Equatable, Codable, Sendable {
                 return "Enter the node number to call."
             case .missingCallsign:
                 return "Enter your callsign. Transmitting without identifying is not legal anywhere."
+            case .missingModule:
+                return "Enter the reflector module to link, a single letter A-Z."
+            case .invalidModule:
+                return "A reflector module is one letter, A-Z — not a word or a number."
             }
         }
     }
@@ -127,20 +178,38 @@ struct NodeSettings: Equatable, Codable, Sendable {
     ///
     /// `username` and the secret are *not* required: a node with no account
     /// configured expects neither, and the library omits empty fields rather
-    /// than sending blank ones. `callsign` is required, because unidentified
-    /// transmission is not a thing this app is going to make easy.
+    /// than sending blank ones. `callsign` is required in both modes, because
+    /// unidentified transmission is not a thing this app is going to make easy.
+    ///
+    /// Which of ``node`` and ``module`` is insisted on is the mode's business,
+    /// per `RadioMode.usesNodeNumber` and `RadioMode.usesModule` — demanding
+    /// both would make one of them a field the operator has to fill in for no
+    /// effect on the wire.
     func validated() throws -> NodeSettings {
         var trimmed = NodeSettings(
+            mode: mode,
             host: host.trimmed,
             port: port,
             node: node.trimmed,
+            module: module.trimmed.uppercased(),
             username: username.trimmed,
             callsign: callsign.trimmed.uppercased(),
             transmitTimeout: transmitTimeout)
 
         guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
-        guard !trimmed.node.isEmpty else { throw ValidationError.missingNode }
         guard !trimmed.callsign.isEmpty else { throw ValidationError.missingCallsign }
+
+        if mode.usesNodeNumber {
+            guard !trimmed.node.isEmpty else { throw ValidationError.missingNode }
+        }
+
+        if mode.usesModule {
+            guard !trimmed.module.isEmpty else { throw ValidationError.missingModule }
+            // Already uppercased above, so ASCII plus letter is exactly A–Z.
+            guard trimmed.module.count == 1, let letter = trimmed.module.first,
+                letter.isASCII, letter.isLetter
+            else { throw ValidationError.invalidModule }
+        }
 
         if trimmed.port == 0 { trimmed.port = NodeSettings.defaultPort }
 

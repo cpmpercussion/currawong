@@ -22,8 +22,8 @@ import SwiftUI
 /// The other two — audio interruption/route change and the SF-1 watchdog —
 /// live in the view model, because they arrive from streams rather than from
 /// SwiftUI.
-struct RootView<Client: NetworkClient>: View {
-    @ObservedObject var session: RadioSession<Client>
+struct RootView: View {
+    @ObservedObject var session: RadioSession
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
 
@@ -231,7 +231,7 @@ struct RootView<Client: NetworkClient>: View {
         }
     }
 
-    private func safetyBanner(_ notice: RadioSession<Client>.SafetyNotice) -> some View {
+    private func safetyBanner(_ notice: RadioSession.SafetyNotice) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -261,7 +261,7 @@ struct RootView<Client: NetworkClient>: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func noticeTitle(_ kind: RadioSession<Client>.SafetyNotice.Kind) -> String {
+    private func noticeTitle(_ kind: RadioSession.SafetyNotice.Kind) -> String {
         switch kind {
         case .transmitWatchdog: return "Transmit watchdog stopped you"
         case .audioInterruption: return "Audio interrupted"
