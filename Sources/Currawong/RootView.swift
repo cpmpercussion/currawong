@@ -54,6 +54,7 @@ struct RootView: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var browser: StationBrowser
+    @ObservedObject var proxyPicker: ProxyPicker
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -329,7 +330,8 @@ struct RootView: View {
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,
             isBusy: session.connection.isBusy,
-            connectAction: { Task { await session.toggleConnection() } })
+            connectAction: { Task { await session.toggleConnection() } },
+            proxyPicker: proxyPicker)
     }
 
     private var keypadPane: some View {
@@ -372,5 +374,6 @@ private extension View {
         session: root.session,
         accessory: root.accessory,
         remoteCommand: root.remoteCommand,
-        browser: root.stationBrowser)
+        browser: root.stationBrowser,
+        proxyPicker: root.proxyPicker)
 }

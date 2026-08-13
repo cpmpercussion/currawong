@@ -15,10 +15,11 @@ options:
   xcodeVersion: "16.0"
 
 packages:
-  # Versioned git dependency as of swift-hamvoip v0.3.0, which added EchoLink
-  # (`EchoLinkKit`) and made `NetworkClient` a seam an app can be written
-  # against (RC-10). `from:` accepts any 0.3.x — the library is 0.x, so its own
-  # changelog warns the API may change in any release;
+  # Versioned git dependency. v0.3.0 added EchoLink (`EchoLinkKit`) and made
+  # `NetworkClient` a seam an app can be written against (RC-10); v0.4.0 added
+  # public proxy discovery (`EchoLinkProxySelector`, EL-12), which is what
+  # ``EchoLinkProxyFinder`` is built on. `from:` accepts any 0.4.x — the library
+  # is 0.x, so its own changelog warns the API may change in any release;
   # `Currawong.xcodeproj/…/Package.resolved` is what actually pins the build,
   # and it is generated, so a fresh `make generate` resolves forward. Pin
   # exactly here if that ever bites.
@@ -30,7 +31,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.3.0
+    from: 0.4.0
 
 settings:
   base:

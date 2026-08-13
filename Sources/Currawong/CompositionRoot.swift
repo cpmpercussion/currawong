@@ -103,6 +103,14 @@ final class CompositionRoot {
     /// only this file may name.
     let stationBrowser: StationBrowser
 
+    /// **EchoLink.** The "find me a public proxy" state, over the real
+    /// echolink.org list and a real probe (EL-12).
+    ///
+    /// Owned here for the same two reasons as ``stationBrowser``: it is a
+    /// network job measured in seconds, and `EchoLinkProxySelector` is a
+    /// library type only this file may name.
+    let proxyPicker: ProxyPicker
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
@@ -122,7 +130,8 @@ final class CompositionRoot {
         // which is isolated.
         accessory: BLEPTTController? = nil,
         remoteCommand: RemoteCommandPTTController? = nil,
-        stationDirectory: any StationDirectory = EchoLinkStationDirectory()
+        stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
+        proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder()
     ) {
         let session = RadioSession(
             audio: audio,
@@ -151,6 +160,7 @@ final class CompositionRoot {
         self.accessory = accessory
         self.remoteCommand = remoteCommand
         self.stationBrowser = StationBrowser(directory: stationDirectory)
+        self.proxyPicker = ProxyPicker(finder: proxyFinder)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.
@@ -751,6 +761,100 @@ struct EchoLinkStationDirectory: StationDirectory {
             await client.disconnect()
             throw error
         }
+    }
+}
+
+/// The real public proxy finder (EL-12).
+///
+/// Wraps `EchoLinkProxySelector`, which fetches echolink.org's list, keeps the
+/// entries advertised as public and ready, sorts them by distance and probes
+/// them in batches until one answers.
+///
+/// **Why this is a `CompositionRoot` type and not a `NetworkClient` capability.**
+/// Proxy selection produces a host and a port for an `EchoLinkDestination`; it
+/// is meaningless for IAX2 and M17, so the library deliberately left it below
+/// the seam. That puts it here, which is the rule working rather than the rule
+/// being bent: the root picks the proxy, fills in the field, and the view never
+/// meets an `EchoLinkPublicProxy`.
+struct EchoLinkPublicProxyFinder: ProxyFinder {
+    /// Injectable so a test can drive the translation without a network. The
+    /// default is the library's real endpoint and a `Network.framework` probe.
+    private let selector: EchoLinkProxySelector
+
+    init(selector: EchoLinkProxySelector = EchoLinkProxySelector()) {
+        self.selector = selector
+    }
+
+    func fastestProxy(onProgress: @escaping @Sendable (Int) -> Void) async throws -> ProxyCandidate
+    {
+        // The library reports each batch it is about to probe; the app counts.
+        // A running total is what the operator can read at a glance, and it
+        // keeps `EchoLinkPublicProxy` from travelling up to the view.
+        let probed = ProbeTally()
+
+        do {
+            let result = try await selector.selectFastest { batch in
+                onProgress(probed.add(batch.count))
+            }
+            return ProxyCandidate(
+                name: result.proxy.name,
+                host: result.proxy.address,
+                port: result.proxy.port,
+                distanceKilometres: result.proxy.distanceKilometres,
+                latencyMilliseconds: result.latency.milliseconds)
+        } catch let error as EchoLinkProxyDirectoryError {
+            throw ProxyFinderError(error, probed: probed.value)
+        }
+    }
+}
+
+/// A counter the library's progress callback can reach from any task.
+///
+/// `selectFastest(onProgress:)` documents that it calls back "on an arbitrary
+/// task", so the tally it feeds has to be safe to touch from one.
+private final class ProbeTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func add(_ increment: Int) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += increment
+        return count
+    }
+}
+
+extension ProxyFinderError {
+    /// Translates the library's outcome into the app's.
+    ///
+    /// `probed` is carried from the app's own tally rather than read off the
+    /// error, so the two cases agree about the number the operator is shown.
+    fileprivate init(_ error: EchoLinkProxyDirectoryError, probed: Int) {
+        switch error {
+        case .noProxyAvailable:
+            self = .noneAvailable
+        case .noProxyAnswered(let libraryProbed):
+            self = .noneAnswered(probed: max(libraryProbed, probed))
+        default:
+            // Everything else is the list itself failing — a fetch that did not
+            // arrive, or XML that did not parse. The library's own wording is
+            // better than anything this layer could invent about it.
+            self = .listUnavailable(detail: "\(error)")
+        }
+    }
+}
+
+extension Duration {
+    /// Whole milliseconds, for display.
+    fileprivate var milliseconds: Int {
+        let (seconds, attoseconds) = components
+        return Int(seconds * 1000 + attoseconds / 1_000_000_000_000_000)
     }
 }
 

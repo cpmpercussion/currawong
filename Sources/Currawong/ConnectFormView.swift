@@ -37,6 +37,10 @@ struct ConnectFormView: View {
     let isBusy: Bool
     let connectAction: () -> Void
 
+    /// The public-proxy finder's state. Only read when the mode uses a proxy,
+    /// which is EchoLink alone.
+    @ObservedObject var proxyPicker: ProxyPicker
+
     @State private var portText = ""
     @State private var timeoutText = ""
 
@@ -160,6 +164,10 @@ struct ConnectFormView: View {
                 .autocorrectionDisabled()
             }
 
+            if settings.mode.usesProxy {
+                proxyFinderRow
+            }
+
             LabelledField(
                 label: settings.mode.usesProxy ? "Proxy port" : "Port", systemImage: "number"
             ) {
@@ -274,6 +282,74 @@ struct ConnectFormView: View {
         case .allStarLink: return "Node"
         case .m17: return "Reflector"
         case .echoLink: return "Proxy"
+        }
+    }
+
+    /// **EchoLink.** Fill in the proxy host and port by measurement rather than
+    /// by typing (EL-12).
+    ///
+    /// A phone cannot reach an EchoLink node directly, so a proxy is mandatory,
+    /// and the public ones are a list of strangers' machines that each carry one
+    /// user at a time. Choosing well means knowing which are near and which are
+    /// free right now — neither of which an operator can tell by looking at a
+    /// list, and both of which a probe answers in a second or two.
+    ///
+    /// **Finding nothing is an ordinary outcome, not an error.** Every public
+    /// proxy being taken is a normal state of the world, so the failure is
+    /// phrased as contention and the button stays right there to be pressed
+    /// again, rather than raising an alert that has to be dismissed first.
+    @ViewBuilder
+    private var proxyFinderRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    proxyPicker.find { candidate in
+                        settings.host = candidate.host
+                        // Through `portText`, not `settings.port`: the port
+                        // field is bound to the text and its `onChange` is what
+                        // writes the number back. Setting the number directly
+                        // would be overwritten by the stale text.
+                        portText = String(candidate.port)
+                    }
+                } label: {
+                    Label(
+                        proxyPicker.isSearching ? "Finding a proxy…" : "Find a public proxy",
+                        systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!isEditable || proxyPicker.isSearching)
+
+                if proxyPicker.isSearching {
+                    ProgressView().controlSize(.small)
+                    Button("Stop") { proxyPicker.cancel() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if proxyPicker.isSearching && proxyPicker.probedCount > 0 {
+                // The count moving is what distinguishes "working" from "hung"
+                // during the second or two of probing.
+                Text("Probed \(proxyPicker.probedCount)…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let chosen = proxyPicker.chosen, !proxyPicker.isSearching {
+                Label(chosen.summary, systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let failure = proxyPicker.failure {
+                Text(failure)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
