@@ -15,9 +15,10 @@ options:
   xcodeVersion: "16.0"
 
 packages:
-  # Versioned git dependency as of swift-hamvoip v0.2.0, which added M17 stream
-  # mode. `from:` accepts any 0.2.x — the library is 0.x, so its own changelog
-  # warns the API may change in any release;
+  # Versioned git dependency as of swift-hamvoip v0.3.0, which added EchoLink
+  # (`EchoLinkKit`) and made `NetworkClient` a seam an app can be written
+  # against (RC-10). `from:` accepts any 0.3.x — the library is 0.x, so its own
+  # changelog warns the API may change in any release;
   # `Currawong.xcodeproj/…/Package.resolved` is what actually pins the build,
   # and it is generated, so a fresh `make generate` resolves forward. Pin
   # exactly here if that ever bites.
@@ -29,7 +30,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.2.0
+    from: 0.3.0
 
 settings:
   base:
@@ -63,6 +64,7 @@ targets:
           - RadioCore
           - IAX2Kit
           - M17Kit
+          - EchoLinkKit
 
       # Codec2 3200 (FR-2.4), the voice codec M17 stream mode carries.
       #

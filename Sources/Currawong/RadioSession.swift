@@ -109,8 +109,21 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Published state
 
-    /// The node being connected to. Bound directly by the connect form.
+    /// The node being connected to, and the form's working copy of it.
+    ///
+    /// **This is a draft, not the stored channel.** The connect form binds
+    /// straight to it, so it holds half-typed hostnames and an unvalidated port
+    /// for as long as the operator is editing. It is written back into
+    /// ``channels`` — validated — by ``connect()`` and by ``saveDraft()``, and
+    /// replaced wholesale when the operator selects a different channel.
     @Published var settings: NodeSettings
+
+    /// Every saved channel and which one is selected (APP-4).
+    ///
+    /// Selecting one loads it into ``settings`` and fetches its secret; see
+    /// ``select(_:)``. The list is persisted on every change rather than at
+    /// quit, because there is no reliable "at quit" on iOS.
+    @Published private(set) var channels: ChannelSet
 
     /// The secret, in memory only. It reaches the Keychain in ``connect()``
     /// and `UserDefaults` never.
@@ -217,9 +230,100 @@ final class RadioSession: ObservableObject {
         self.makeLink = makeLink
         self.now = now
 
-        let loaded = settingsStore.load() ?? NodeSettings()
-        self.settings = loaded
-        self.secret = (try? secretStore.secret(for: loaded.secretAccount)) ?? ""
+        let loaded = ChannelSet.loaded(from: settingsStore)
+        self.channels = loaded
+
+        // An operator with no channels at all gets an empty draft to fill in,
+        // which is the same thing the app did before it had a channel list.
+        let current = loaded.selected ?? NodeSettings()
+        self.settings = current
+        self.secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+    }
+
+    // MARK: - Channels (APP-4)
+
+    /// Switches to a saved channel, loading its details and its secret.
+    ///
+    /// **Refused while a link is up.** Changing the destination under a live
+    /// connection would leave the form describing one node and the audio coming
+    /// from another, and the operator's next glance at the screen would be
+    /// wrong. Disconnect first; the UI disables the list rather than relying on
+    /// this, and this is the backstop.
+    func select(_ id: UUID) {
+        guard connection == .disconnected else { return }
+        guard id != channels.selectedID else { return }
+        guard channels.channels.contains(where: { $0.id == id }) else { return }
+
+        saveDraft()
+        channels.select(id)
+        loadSelectedIntoDraft()
+        persistChannels()
+    }
+
+    /// Saves the draft over the channel it came from, if it is still in the
+    /// list. Silently does nothing for a draft whose channel was deleted.
+    ///
+    /// Unvalidated on purpose: this is called as the operator moves around the
+    /// app, and refusing to remember a half-typed host would lose their typing
+    /// every time they looked at another pane. ``connect()`` is where the
+    /// validation gate is.
+    func saveDraft() {
+        channels.update(settings)
+        persistChannels()
+    }
+
+    /// Adds a channel, selects it, and points the draft at it.
+    ///
+    /// Also refused while connected, for the reason ``select(_:)`` is: adding
+    /// selects, and selecting mid-call is what must not happen.
+    @discardableResult
+    func addChannel(_ channel: NodeSettings = NodeSettings()) -> UUID? {
+        guard connection == .disconnected else { return nil }
+
+        saveDraft()
+        channels.add(channel)
+        loadSelectedIntoDraft()
+        persistChannels()
+        return channel.id
+    }
+
+    /// Deletes a channel.
+    ///
+    /// **The Keychain secret is left alone.** A deleted channel's secret is
+    /// keyed by `secretAccount`, which other channels may share — every
+    /// EchoLink channel for one callsign does, by construction — so deleting
+    /// the item here would log the operator out of channels they did not touch.
+    /// An orphaned Keychain item is invisible and harmless; a lost password is
+    /// neither.
+    func deleteChannel(_ id: UUID) {
+        guard connection == .disconnected else { return }
+
+        let wasSelected = channels.selectedID == id
+        channels.remove(id)
+        if wasSelected { loadSelectedIntoDraft() }
+        persistChannels()
+    }
+
+    /// Reorders the channel list.
+    ///
+    /// The one channel operation with no "only while disconnected" guard, and
+    /// deliberately: reordering changes nothing about which channel is selected
+    /// or what it points at, so there is nothing here for a live connection to
+    /// be inconsistent with.
+    func moveChannels(fromOffsets source: IndexSet, toOffset destination: Int) {
+        channels.move(fromOffsets: source, toOffset: destination)
+        persistChannels()
+    }
+
+    /// Replaces the draft and the in-memory secret from the selected channel.
+    private func loadSelectedIntoDraft() {
+        let current = channels.selected ?? NodeSettings()
+        settings = current
+        secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+    }
+
+    private func persistChannels() {
+        channels.save(to: settingsStore)
     }
 
     // MARK: - Lifecycle
@@ -271,6 +375,20 @@ final class RadioSession: ObservableObject {
             return
         }
         settings = validated
+
+        // Connecting is what turns a draft into a saved channel. An operator who
+        // typed a node into an empty app and pressed Connect has plainly said
+        // "this is a place I go", so the first connection is where it joins the
+        // list rather than needing a separate Save.
+        if channels.channels.contains(where: { $0.id == validated.id }) {
+            channels.update(validated)
+        } else {
+            channels.add(validated)
+        }
+        persistChannels()
+
+        // The single-node key too, so a downgrade — or a build of the app from
+        // before APP-4 — still finds the node that was last connected to.
         settingsStore.save(validated)
 
         do {

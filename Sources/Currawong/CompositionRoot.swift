@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import EchoLinkKit
 import Foundation
 import IAX2Kit
 import M17Kit
@@ -12,16 +13,22 @@ import RadioCore
 /// `stopTransmit()`, `disconnect()` and `state`, and know nothing about RFC
 /// 5456. Somebody, though, has to decide *which* client is on the other side of
 /// that protocol and build it — and this is that somebody. It is the single
-/// documented exception to the rule, and it is why `import IAX2Kit` and
-/// `import M17Kit` appear in this file and nowhere else.
+/// documented exception to the rule, and it is why `import IAX2Kit`,
+/// `import M17Kit` and `import EchoLinkKit` appear in this file and nowhere
+/// else.
 ///
-/// ## Two modes
+/// ## Three modes
 ///
-/// `settings.mode` chooses between an `IAX2Client` and an `M17Client`, and
-/// ``makeLink(settings:secret:)`` is the switch. Nothing above this file knows
-/// there is more than one library: both factories return the same
-/// non-generic ``RadioLink``, which is exactly why that type stopped being
-/// generic — see its doc comment.
+/// `settings.mode` chooses between an `IAX2Client`, an `M17Client` and an
+/// `EchoLinkClient`, and ``makeLink(settings:secret:)`` is the switch. Nothing
+/// above this file knows there is more than one library: all three factories
+/// return the same non-generic ``RadioLink``, which is exactly why that type
+/// stopped being generic — see its doc comment.
+///
+/// The third one arriving without any change to ``RadioLink`` or
+/// ``RadioLinkEvent`` is the evidence that the seam is in the right place. What
+/// it did cost is below: two settings fields that only EchoLink reads, and one
+/// pairing rule the library enforces by throwing.
 ///
 /// ## What this file has to do that `NetworkClient` should arguably do for it
 ///
@@ -88,6 +95,14 @@ final class CompositionRoot {
     /// Transmit state, for anything that only needs to display it.
     var transmitState: TransmitState { session.transmitState }
 
+    /// **EchoLink.** The station browser's state, over the real directory.
+    ///
+    /// Owned here rather than by the view because a fetch is a network session
+    /// that takes seconds and should survive a pane being scrolled away from,
+    /// and because the concrete `EchoLinkStationDirectory` is another thing
+    /// only this file may name.
+    let stationBrowser: StationBrowser
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
@@ -106,7 +121,8 @@ final class CompositionRoot {
         // types are `@MainActor`. Built below instead, inside this initialiser,
         // which is isolated.
         accessory: BLEPTTController? = nil,
-        remoteCommand: RemoteCommandPTTController? = nil
+        remoteCommand: RemoteCommandPTTController? = nil,
+        stationDirectory: any StationDirectory = EchoLinkStationDirectory()
     ) {
         let session = RadioSession(
             audio: audio,
@@ -121,6 +137,11 @@ final class CompositionRoot {
                         settings: settings, secret: secret, configuration: configuration)
                 case .m17:
                     return try CompositionRoot.makeM17Link(settings: settings)
+                case .echoLink:
+                    // The secret is the operator's EchoLink *account* password
+                    // here, not a node password — see `makeEchoLinkLink`.
+                    return try CompositionRoot.makeEchoLinkLink(
+                        settings: settings, secret: secret)
                 }
             })
         let accessory = accessory ?? BLEPTTController()
@@ -129,6 +150,7 @@ final class CompositionRoot {
         self.session = session
         self.accessory = accessory
         self.remoteCommand = remoteCommand
+        self.stationBrowser = StationBrowser(directory: stationDirectory)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.
@@ -318,6 +340,136 @@ final class CompositionRoot {
             })
     }
 
+    /// Builds one EchoLink connection's worth of plumbing.
+    ///
+    /// The same shape as the two above, and again the differences are the
+    /// protocol's rather than ours:
+    ///
+    /// - **`host` and `port` are the proxy's**, not the far node's. EchoLink
+    ///   audio is UDP 5198/5199 inbound, which carrier-grade NAT eats, so
+    ///   FR-3.3 makes a TCP proxy on 8100 the normal path and the library only
+    ///   implements that one. `settings.peer` is the node's own address, and it
+    ///   travels inside the proxy's `OPEN` frame rather than being dialled.
+    /// - **Two addresses, and one of them must be a dotted quad.** Nothing in
+    ///   the proxy protocol resolves DNS: the peer field is four raw octets. So
+    ///   `settings.peer` is parsed here and a name that never parsed becomes an
+    ///   error the operator can read, not a force-unwrap.
+    /// - **The secret is the operator's account password**, and it is optional.
+    ///   It authenticates us to the *directory server*, not to the node, and
+    ///   skipping it only costs the directory login (FR-3.4). Contrast IAX2,
+    ///   where the secret is what the node checks.
+    /// - **The account password and the directory server are all or nothing.**
+    ///   `connect(to:)` throws `.directoryLoginIncomplete` when exactly one is
+    ///   present, on the grounds that half a configuration is a mistake rather
+    ///   than an intention. That is a reasonable library position and a hostile
+    ///   app one — an operator who typed a password and left the server field
+    ///   alone would get a failed connect instead of a working unauthenticated
+    ///   session. So the pairing is resolved here: unless both survive parsing,
+    ///   both go in as `nil` and the session proceeds without the login.
+    /// - **No DTMF.** Same as M17: `EchoLinkClient` has no digit path, so
+    ///   `sendDTMF` throws rather than pretending.
+    /// - **A codec has to be supplied**, as with M17 — but unlike Codec2 this
+    ///   one always exists. `GSMVoiceCodec` ships inside EchoLinkKit on the
+    ///   vendored `CGSM` target, so there is no XCFramework to build and no
+    ///   `#if` guarding this call; it throws only if the encoder or decoder
+    ///   fails to allocate.
+    ///
+    /// - Parameters:
+    ///   - secret: the operator's EchoLink account password. Empty means "no
+    ///     directory login", which is a supported way to run.
+    ///   - configuration: injectable for tests. The fields that belong to the
+    ///     operator — callsign, name, location, watchdog, and the directory
+    ///     pair — are overwritten from `settings` regardless, so what a caller
+    ///     can usefully supply here is the rest: the jitter buffer, the
+    ///     leveller, the tool string, the node-answer timings.
+    static func makeEchoLinkLink(
+        settings: NodeSettings,
+        secret: String,
+        configuration: EchoLinkClient.Configuration? = nil
+    ) throws -> RadioLink {
+        guard let peer = EchoLinkPeerAddress(settings.peer) else {
+            throw EchoLinkLinkError.invalidPeerAddress(settings.peer)
+        }
+        guard !settings.host.isEmpty else {
+            throw EchoLinkLinkError.missingProxyHost
+        }
+
+        // The all-or-nothing pairing, resolved before it can reach the library.
+        // `EchoLinkPeerAddress(_:)` is failable, so a half-typed server address
+        // lands in the same bucket as an absent one: no login, rather than a
+        // connect that throws.
+        var accountPassword: EchoLinkAccountPassword? =
+            secret.isEmpty ? nil : EchoLinkAccountPassword(secret)
+        var directoryServer: EchoLinkPeerAddress? =
+            settings.directoryServer.isEmpty
+            ? nil : EchoLinkPeerAddress(settings.directoryServer)
+        if accountPassword == nil || directoryServer == nil {
+            accountPassword = nil
+            directoryServer = nil
+        }
+
+        var configuration = configuration ?? EchoLinkClient.Configuration(
+            callsign: settings.callsign)
+        configuration.callsign = settings.callsign
+        configuration.operatorName = settings.operatorName
+        configuration.location = settings.location
+        configuration.transmitTimeout = watchdogTimeout(for: settings)
+        configuration.accountPassword = accountPassword
+        configuration.directoryServer = directoryServer
+
+        let client = EchoLinkClient(
+            codec: try makeGSMVoiceCodec(),
+            configuration: configuration,
+            clock: ContinuousClock())
+        let destination = EchoLinkDestination(
+            peer: peer,
+            node: settings.node,
+            route: .proxy(
+                host: settings.host,
+                port: settings.port,
+                password: EchoLinkProxyPassword(settings.proxyPassword)))
+
+        var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
+        let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
+        let eventContinuation = eventEscape!
+
+        let clientEvents = client.events
+        let eventPump = Task.detached {
+            for await event in clientEvents {
+                if let translated = RadioLinkEvent(event) {
+                    eventContinuation.yield(translated)
+                }
+            }
+            eventContinuation.finish()
+        }
+
+        let relay = CapturedFrameRelay()
+        let frames = relay.frames
+        let sendPump = Task.detached {
+            for await frame in frames {
+                _ = try? await client.send(pcm: frame)
+            }
+        }
+
+        return RadioLink(
+            mode: .echoLink,
+            connect: { try await client.connect(to: destination) },
+            disconnect: { await client.disconnect() },
+            startTransmit: { try await client.startTransmit() },
+            stopTransmit: { await client.stopTransmit() },
+            transmitState: { client.state },
+            events: events,
+            receivedAudio: client.receivedAudio,
+            sendCapturedFrame: { relay.submit($0) },
+            sendDTMF: { _ in throw EchoLinkLinkError.dtmfUnsupported },
+            close: {
+                relay.finish()
+                sendPump.cancel()
+                eventPump.cancel()
+                eventContinuation.finish()
+            })
+    }
+
     /// The Codec2 conformance, or an error the operator can act on.
     ///
     /// Separate so the failure has somewhere to be explained: ``Codec2Codec``
@@ -331,6 +483,18 @@ final class CompositionRoot {
         #endif
     }
 
+    /// The GSM 06.10 conformance EchoLink audio needs.
+    ///
+    /// The counterpart of ``makeVoiceCodec()``, and deliberately much duller:
+    /// GSM is vendored *inside* EchoLinkKit rather than linked from an
+    /// XCFramework, so there is no build configuration in which the type is
+    /// missing and nothing here to `#if` on. It stays a separate function only
+    /// so the two codec decisions read alike, and because `GSMVoiceCodec.init`
+    /// can still fail — the C encoder and decoder are heap-allocated.
+    private static func makeGSMVoiceCodec() throws -> any VoiceCodec {
+        try GSMVoiceCodec()
+    }
+
     /// Builds a link for whichever mode the settings name.
     ///
     /// The one place the app turns a mode into a concrete client, and the
@@ -341,6 +505,50 @@ final class CompositionRoot {
             return makeIAX2Link(settings: settings, secret: secret)
         case .m17:
             return try makeM17Link(settings: settings)
+        case .echoLink:
+            return try makeEchoLinkLink(settings: settings, secret: secret)
+        }
+    }
+}
+
+/// What can go wrong building an EchoLink link, in the app's own vocabulary.
+///
+/// Separate from ``M17LinkError`` rather than folded into it: these are three
+/// different mistakes an operator can make on a form, and merging the enums
+/// would put "build Codec2.xcframework" in the same type as "check the proxy
+/// address", which is how error text starts drifting away from the mode it
+/// belongs to.
+enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
+    /// `settings.peer` is not four decimal octets. The EchoLink proxy carries
+    /// the peer as raw address bytes and nothing in the path resolves DNS, so
+    /// a hostname cannot be made to work here by trying harder.
+    case invalidPeerAddress(String)
+
+    /// No proxy host. `NodeSettings.validated()` should have caught an empty
+    /// host; this is the backstop, and it is worth having because the failure
+    /// without it happens inside the transport, where the message is about a
+    /// socket rather than about a settings field.
+    case missingProxyHost
+
+    /// DTMF was attempted on a mode that has no such thing.
+    case dtmfUnsupported
+
+    var description: String {
+        switch self {
+        case .invalidPeerAddress(let peer):
+            let quoted = peer.isEmpty ? "The node address is empty" : "'\(peer)' is not an address"
+            return """
+                \(quoted). EchoLink needs the node's IP address as four numbers, \
+                like 192.0.2.10 — a hostname will not work. Look the node up in \
+                the EchoLink directory to find it.
+                """
+        case .missingProxyHost:
+            return """
+                No EchoLink proxy is set. Enter the address of a proxy in \
+                Settings — EchoLink needs one to reach a node from a phone.
+                """
+        case .dtmfUnsupported:
+            return "EchoLink has no DTMF signalling. Connect to an AllStarLink node to send digits."
         }
     }
 }
@@ -432,5 +640,134 @@ extension RadioLinkEvent {
         case .dtmf(let digit):
             self = .dtmfReceived(digit.character)
         }
+    }
+}
+
+/// The `EchoLinkClientEvent` → ``RadioLinkEvent`` translation, the third of
+/// three and for the same reason as the other two.
+///
+/// EchoLink is point-to-point like IAX2, but it narrates its connect sequence
+/// the way M17 does, so the interesting decisions here are about what *not* to
+/// forward. Three cases collapse or vanish:
+///
+/// - **`connecting` and `directoryLoggedIn` are `nil`.** Both happen inside
+///   `connect(to:)`, which has not returned yet, so the session is already
+///   showing "Connecting" and has nothing to do with either. The library takes
+///   the same view in its own `RadioEvent` translation.
+/// - **`stationInfo` is `nil`, which loses something.** It is the `oNDATA`
+///   text the far node sends on the audio channel — a free-text description,
+///   often several lines — and the only case the app could put it in is
+///   ``RadioLinkEvent/remoteStation(callsign:)``, which feeds the "receiving
+///   from" display. Writing a paragraph into a field that shows a callsign
+///   would make the identity from ``nodeAnswered`` worse, not better, so it is
+///   dropped until ``RadioLinkEvent`` grows somewhere honest to put it.
+/// - **`talkspurtStarted` becomes `receiving`, not a station change.** EchoLink
+///   identifies the *session*, not each over: there is no per-talkspurt station
+///   identity on the audio channel, so there is no callsign to report. The
+///   station shown for the whole session is the one from ``nodeAnswered``.
+extension RadioLinkEvent {
+    fileprivate init?(_ event: EchoLinkClientEvent) {
+        switch event {
+        case .connected:
+            // Named rather than reported, as in M17: EchoLink negotiates no
+            // codec — GSM 06.10 at 8 kHz is what an audio packet contains by
+            // definition. The node name the event carries is dropped, because
+            // the operator chose the destination and already knows it.
+            self = .connected(codec: "GSM 06.10")
+        case .transmitting:
+            self = .transmitting
+        case .receiving, .talkspurtStarted:
+            self = .receiving
+        case .transmitTimedOut(let timeout):
+            self = .transmitWatchdogExpired(timeout)
+        case .nodeAnswered(let name):
+            // The far end identifying itself in its SDES, which is as close to
+            // "who am I talking to" as this protocol gets.
+            self = .remoteStation(callsign: name)
+        case .disconnected(let reason):
+            // `EchoLinkDisconnectReason` is already prose the library wrote for
+            // an operator to read — "the node said goodbye" — so it is passed
+            // through rather than re-worded here.
+            self = .disconnected(reason: reason.description)
+        case .connecting, .directoryLoggedIn, .stationInfo:
+            return nil
+        }
+    }
+}
+
+/// The real EchoLink station directory (EL-11).
+///
+/// The listing does not arrive over anything as convenient as HTTP: it comes
+/// down a directory-server session, tunnelled inside the same proxy connection
+/// a QSO would use. `EchoLinkClient` knows how to open one *without* contacting
+/// a node — `SessionMode.directoryOnly` — which is what makes this safe to run
+/// from a browser screen. Nothing is transmitted and no node is disturbed.
+///
+/// A client is single-session, so this builds one per fetch and disposes of it,
+/// including when the fetch throws. Leaving a proxy session open would be worse
+/// than untidy: public proxies are single-user, so one abandoned is one nobody
+/// else can use.
+struct EchoLinkStationDirectory: StationDirectory {
+    func stations(for settings: NodeSettings, accountPassword: String) async throws
+        -> [DirectoryStation]
+    {
+        if let missing = StationBrowser.whatIsMissing(
+            in: settings, accountPassword: accountPassword)
+        {
+            throw missing
+        }
+        guard let directoryServer = EchoLinkPeerAddress(settings.directoryServer) else {
+            throw StationDirectoryError.missingDirectoryServer
+        }
+
+        var configuration = EchoLinkClient.Configuration(callsign: settings.callsign)
+        configuration.operatorName = settings.operatorName
+        configuration.location = settings.location
+        configuration.accountPassword = EchoLinkAccountPassword(accountPassword)
+        configuration.directoryServer = directoryServer
+
+        let client = EchoLinkClient(
+            codec: try GSMVoiceCodec(),
+            configuration: configuration,
+            clock: ContinuousClock())
+
+        // The peer goes unused in a directory-only session — no node is
+        // contacted — but a destination has to name one, and `unspecified` says
+        // "none" rather than picking an address nobody meant.
+        let destination = EchoLinkDestination(
+            peer: .unspecified,
+            node: settings.node,
+            route: .proxy(
+                host: settings.host,
+                port: settings.port,
+                password: EchoLinkProxyPassword(settings.proxyPassword)))
+
+        try await client.connect(to: destination, mode: .directoryOnly)
+        do {
+            let list = try await client.fetchStationList()
+            await client.disconnect()
+            return list.stations.map(DirectoryStation.init)
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+    }
+}
+
+extension DirectoryStation {
+    /// Translates a library station into the app's own.
+    ///
+    /// `status` is carried as the server's own word rather than parsed into a
+    /// pair of booleans, because the listing has more states than the two
+    /// anybody remembers, and inventing an enum here would be guessing at a
+    /// vocabulary the app does not own.
+    fileprivate init(_ station: EchoLinkStation) {
+        self.init(
+            callsign: station.callsign,
+            location: station.location,
+            nodeNumber: station.nodeNumber,
+            address: station.address,
+            isConnectable: station.isConnectable,
+            status: station.status)
     }
 }

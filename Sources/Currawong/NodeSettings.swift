@@ -21,9 +21,27 @@ import Foundation
 /// at a single `if` in ``validated()`` and a single form; the price is that a
 /// value always has one field that means nothing, and only the mode says which.
 ///
-/// Full settings CRUD (multiple stored nodes, editing, deleting) is APP-4; this
-/// is the single node a first connection needs.
-struct NodeSettings: Equatable, Codable, Sendable {
+/// **This is a channel** (APP-4). One of these is one saved place the operator
+/// can go back to, held in a list by ``ChannelSet``, named by ``name`` and
+/// identified by ``id``. It was a single node before APP-4, which is why the
+/// type is still called `NodeSettings` and why ``init(from:)`` has to cope with
+/// a blob that has neither of those two fields.
+struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
+    /// Stable identity, so a channel survives being renamed or re-pointed.
+    ///
+    /// Generated when a channel is created and never derived from its contents.
+    /// A blob written before channels existed has no id and is given a fresh one
+    /// at decode — it is one channel either way, and which UUID it gets does not
+    /// matter as long as it keeps it afterwards.
+    ///
+    /// Note that this is deliberately **not** what the Keychain secret is filed
+    /// under; see ``secretAccount``.
+    var id: UUID
+
+    /// What the operator calls this channel. May be empty, in which case the UI
+    /// falls back to ``displayName``.
+    var name: String
+
     /// Which network this node is reached over, and therefore which of the
     /// fields below are live.
     var mode: RadioMode
@@ -41,6 +59,45 @@ struct NodeSettings: Equatable, Codable, Sendable {
     /// The M17 reflector module to link: a single letter A–Z. Empty and unused
     /// in AllStarLink.
     var module: String
+
+    /// **EchoLink.** The far node's IPv4 address, as a dotted quad.
+    ///
+    /// Separate from ``host`` because in EchoLink those are two different
+    /// machines: `host` is the proxy the session is tunnelled through, and this
+    /// is the node at the far end of the tunnel. The library takes it as four
+    /// literal octets and resolves nothing, so a name will not do — the station
+    /// browser exists to fill this in from the directory listing.
+    var peer: String
+
+    /// **EchoLink.** The proxy's password. `PUBLIC` on a public proxy, which is
+    /// the only value ever observed on the wire and is not a secret.
+    ///
+    /// It lives here, in `UserDefaults`, rather than in the Keychain, and that
+    /// is a judgement about `PUBLIC` rather than about passwords: the account
+    /// password — the one that is genuinely secret — is in the Keychain, keyed
+    /// by ``secretAccount``, and never in this type. An operator running a
+    /// *private* proxy would be storing its password less carefully than their
+    /// account password, which is worth knowing before doing it.
+    var proxyPassword: String
+
+    /// **EchoLink.** The directory server's IPv4 address, dotted quad.
+    ///
+    /// No default, matching the library: the proxy tunnels a raw address, so
+    /// there is nothing to resolve, and baking one operator's choice of a third
+    /// party's server into the app would be a guess about infrastructure.
+    ///
+    /// The directory login is what *registers* the station as available. Skip it
+    /// and every step still reports success while no node ever answers, so this
+    /// being empty is a much bigger deal than an empty optional usually is.
+    var directoryServer: String
+
+    /// **EchoLink.** The operator's name, shown to the far end beside the
+    /// callsign. May be empty.
+    var operatorName: String
+
+    /// **EchoLink.** A short location string for the directory listing — a town
+    /// or a three-letter airport code. May be empty.
+    var location: String
 
     /// The account the node authenticates us as. May be empty.
     var username: String
@@ -79,24 +136,58 @@ struct NodeSettings: Equatable, Codable, Sendable {
     /// timer will tolerate.
     static let transmitTimeoutRange: ClosedRange<TimeInterval> = 5...600
 
+    /// The literal string a public EchoLink proxy expects, and the only proxy
+    /// password ever seen on the wire. Not a secret; see ``proxyPassword``.
+    static let defaultProxyPassword = "PUBLIC"
+
     init(
+        id: UUID = UUID(),
+        name: String = "",
         mode: RadioMode = .allStarLink,
         host: String = "",
         port: UInt16 = NodeSettings.defaultPort,
         node: String = "",
         module: String = "",
+        peer: String = "",
+        proxyPassword: String = NodeSettings.defaultProxyPassword,
+        directoryServer: String = "",
+        operatorName: String = "",
+        location: String = "",
         username: String = "",
         callsign: String = "",
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
+        self.id = id
+        self.name = name
         self.mode = mode
         self.host = host
         self.port = port
         self.node = node
         self.module = module
+        self.peer = peer
+        self.proxyPassword = proxyPassword
+        self.directoryServer = directoryServer
+        self.operatorName = operatorName
+        self.location = location
         self.username = username
         self.callsign = callsign
         self.transmitTimeout = transmitTimeout
+    }
+
+    /// What the operator sees in the channel list: their own name for the
+    /// channel, or the best description of it the fields allow.
+    var displayName: String {
+        let trimmedName = name.trimmed
+        if !trimmedName.isEmpty { return trimmedName }
+
+        switch mode {
+        case .allStarLink:
+            return node.isEmpty ? host : "\(node) at \(host)"
+        case .m17:
+            return module.isEmpty ? host : "\(host) module \(module)"
+        case .echoLink:
+            return node.isEmpty ? peer : node
+        }
     }
 
     /// Decodes settings, **including settings written before this type had a
@@ -114,11 +205,21 @@ struct NodeSettings: Equatable, Codable, Sendable {
     /// simply a field that mode never asks for.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
         self.mode = try container.decodeIfPresent(RadioMode.self, forKey: .mode) ?? .allStarLink
         self.host = try container.decode(String.self, forKey: .host)
         self.port = try container.decode(UInt16.self, forKey: .port)
         self.node = try container.decode(String.self, forKey: .node)
         self.module = try container.decodeIfPresent(String.self, forKey: .module) ?? ""
+        self.peer = try container.decodeIfPresent(String.self, forKey: .peer) ?? ""
+        self.proxyPassword =
+            try container.decodeIfPresent(String.self, forKey: .proxyPassword)
+            ?? Self.defaultProxyPassword
+        self.directoryServer =
+            try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
+        self.operatorName = try container.decodeIfPresent(String.self, forKey: .operatorName) ?? ""
+        self.location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
         self.callsign = try container.decode(String.self, forKey: .callsign)
         self.transmitTimeout =
@@ -147,6 +248,8 @@ struct NodeSettings: Equatable, Codable, Sendable {
             return "\(username)@\(host):\(port)/\(node)"
         case .m17:
             return "m17:\(callsign)@\(host):\(port)/\(module)"
+        case .echoLink:
+            return "echolink:\(callsign)"
         }
     }
 
@@ -157,9 +260,24 @@ struct NodeSettings: Equatable, Codable, Sendable {
         case missingCallsign
         case missingModule
         case invalidModule
+        case missingPeerAddress
+        case invalidPeerAddress
+        case invalidDirectoryServer
 
         var description: String {
             switch self {
+            case .missingPeerAddress:
+                return """
+                    Enter the node's IP address. Find it with the station browser \
+                    rather than typing it — EchoLink node addresses change.
+                    """
+            case .invalidPeerAddress:
+                return "A node address is four numbers separated by dots, such as 13.57.14.183."
+            case .invalidDirectoryServer:
+                return """
+                    The directory server must be an IP address, four numbers separated by \
+                    dots. A host name will not work: nothing here resolves one.
+                    """
             case .missingHost:
                 return "Enter the node's host name or address."
             case .missingNode:
@@ -187,11 +305,19 @@ struct NodeSettings: Equatable, Codable, Sendable {
     /// effect on the wire.
     func validated() throws -> NodeSettings {
         var trimmed = NodeSettings(
+            id: id,
+            name: name.trimmed,
             mode: mode,
             host: host.trimmed,
             port: port,
             node: node.trimmed,
             module: module.trimmed.uppercased(),
+            peer: peer.trimmed,
+            proxyPassword: proxyPassword.trimmed.isEmpty
+                ? Self.defaultProxyPassword : proxyPassword.trimmed,
+            directoryServer: directoryServer.trimmed,
+            operatorName: operatorName.trimmed,
+            location: location.trimmed,
             username: username.trimmed,
             callsign: callsign.trimmed.uppercased(),
             transmitTimeout: transmitTimeout)
@@ -211,7 +337,25 @@ struct NodeSettings: Equatable, Codable, Sendable {
             else { throw ValidationError.invalidModule }
         }
 
-        if trimmed.port == 0 { trimmed.port = NodeSettings.defaultPort }
+        if mode.usesProxy {
+            guard !trimmed.peer.isEmpty else { throw ValidationError.missingPeerAddress }
+            guard Self.isDottedQuad(trimmed.peer) else {
+                throw ValidationError.invalidPeerAddress
+            }
+            // Empty is allowed and means "do not log in to the directory", which
+            // the form warns about rather than refuses: it is a legitimate
+            // experiment, and the library treats an absent directory server and
+            // an absent account password as the pair they are. Nonsense in the
+            // field is a different thing, and is refused here — the library
+            // resolves no names, so a host name would fail far from the typo.
+            if !trimmed.directoryServer.isEmpty {
+                guard Self.isDottedQuad(trimmed.directoryServer) else {
+                    throw ValidationError.invalidDirectoryServer
+                }
+            }
+        }
+
+        if trimmed.port == 0 { trimmed.port = mode.defaultPort }
 
         // Clamped rather than rejected. An out-of-range timeout is not a typo
         // the operator needs to be stopped over — and refusing to connect over
@@ -228,11 +372,31 @@ struct NodeSettings: Equatable, Codable, Sendable {
         return trimmed
     }
 
+    /// Whether a string is four decimal octets separated by dots.
+    ///
+    /// The same shape `EchoLinkPeerAddress(_ dottedQuad:)` accepts, checked here
+    /// so the operator hears about a typo while they are still looking at the
+    /// field rather than as a failed connection later. Duplicating the rule is
+    /// the price of this layer not importing the library; the rule itself is
+    /// four small numbers and is not going to drift.
+    static func isDottedQuad(_ text: String) -> Bool {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.allSatisfy(\.isNumber) && UInt8(part) != nil
+        }
+    }
+
     /// Parses a port the operator typed. Empty means "the default", not zero —
-    /// a cleared field should connect to 4569, not fail.
-    static func parsePort(_ text: String) -> UInt16? {
+    /// a cleared field should connect to the mode's own port, not fail.
+    ///
+    /// **The mode has to be passed in**, because "the default" is 4569, 17000 or
+    /// 8100 depending on it. An earlier version took no mode and returned 4569
+    /// for every one of them, so clearing the port field in EchoLink mode
+    /// silently pointed the proxy connection at the IAX2 port.
+    static func parsePort(_ text: String, for mode: RadioMode) -> UInt16? {
         let trimmed = text.trimmed
-        if trimmed.isEmpty { return defaultPort }
+        if trimmed.isEmpty { return mode.defaultPort }
         guard let value = UInt16(trimmed), value > 0 else { return nil }
         return value
     }

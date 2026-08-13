@@ -3,33 +3,69 @@
 import RadioCore
 import SwiftUI
 
-/// The whole app, for now: connection state, the connect form, and the
-/// on-screen momentary PTT (PT-1).
+/// The app's one root: the transmit banner, the pane container, and the four
+/// session-lifetime handlers that must exist exactly once.
 ///
-/// Generic over the client for the same reason ``RadioSession`` is — the view
-/// model's type parameter has to go somewhere, and it is not going to be
-/// `IAX2Client` anywhere outside the composition root.
+/// ## What this view is for now
 ///
-/// This view owns three of the release paths (SF-3 and PT-1's "must not get
-/// stuck"), and they are all here rather than scattered:
+/// It used to *be* the app — one scrolling column with everything in it. It is
+/// now a shell around panes (``SessionPane``, ``ChannelListView``,
+/// ``ConnectFormView``, ``DTMFKeypadView``, ``StationBrowserView``,
+/// ``AccessoryPane``), and what is left here is the part that cannot be moved
+/// into any one of them:
 ///
-/// * **`scenePhase` leaving `.active`** — backgrounded, or merely covered by
-///   the control centre. Both unkey.
-/// * **`onDisappear`** — this view leaving the hierarchy.
-/// * **the PTT button's own gesture** — touch-up, drag-off and cancellation,
-///   handled in ``PushToTalkButton``.
+/// * **``TransmitBanner``, outside the pane container.** SF-4. It is a sibling
+///   of the `TabView`/`NavigationSplitView`, not a child, so that no tab, no
+///   column and no scroll offset can hide it. This is the single most important
+///   structural fact about this file.
+/// * **The release paths this view owns.** `scenePhase` leaving `.active`
+///   (backgrounded, or merely covered by the control centre — both unkey) and
+///   `onDisappear` (the view leaving the hierarchy). The PTT button's own
+///   gesture handles touch-up, drag-off and cancellation; audio interruption
+///   and the SF-1 watchdog live in the view model, because they arrive from
+///   streams rather than from SwiftUI.
+/// * **The alert.** One presenter, because two views bound to the same
+///   `session.alert` would race to present and one of them would lose the
+///   message.
 ///
-/// The other two — audio interruption/route change and the SF-1 watchdog —
-/// live in the view model, because they arrive from streams rather than from
-/// SwiftUI.
+/// **`onDisappear` must not be duplicated into a pane.** It means "the operator
+/// has left"; a pane that carried it would fire it on every tab switch, and the
+/// session cannot tell the two apart.
+///
+/// ## Compact and regular
+///
+/// Two layouts, one set of panes. macOS always takes the split layout —
+/// `horizontalSizeClass` is answerable there but a Mac window is never the
+/// phone case, and `#if os(macOS)` says so honestly rather than relying on what
+/// AppKit reports.
+///
+/// ### The tab layout releases the key when you leave the Session tab
+///
+/// ``PushToTalkButton`` carries `onDisappear { onRelease(.viewDisappeared) }`,
+/// because its gesture is torn down with it and `@GestureState` would never
+/// reset. In a `TabView` that means: **switch tabs while keyed and you unkey.**
+/// That is deliberate, and it is the safe direction — a transmitter keyed by a
+/// button the operator can no longer see is the SF-3 failure this app is built
+/// to avoid. The split layout does not have the question, because the PTT
+/// button is in the detail column's fixed header and is never navigated away
+/// from.
 struct RootView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
+    @ObservedObject var browser: StationBrowser
 
     @Environment(\.scenePhase) private var scenePhase
 
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
     @State private var isShowingAccessorySheet = false
+
+    /// Which of the detail column's secondary panes is showing. Split layout
+    /// only; the tab layout uses tabs for the same choice.
+    @State private var detailPane: DetailPane = .connect
 
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
@@ -37,50 +73,12 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // SF-4: above the pane container, never inside it.
             if status.isTransmitting {
-                transmitBanner
+                TransmitBanner(source: session.activeSource)
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    if let notice = session.safetyNotice {
-                        safetyBanner(notice)
-                    }
-                    if let warning = session.mediaWarning {
-                        warningLine(warning)
-                    }
-                    statusPanel
-
-                    PushToTalkButton(
-                        isEnabled: session.connection.isConnected,
-                        isTransmitting: session.isTransmitting,
-                        isKeyDown: session.isKeyDown,
-                        onPress: { session.beginTransmit() },
-                        onRelease: { session.endTransmit(reason: $0) })
-
-                    accessoryRow
-
-                    DTMFKeypadView(
-                        isEnabled: session.connection.isConnected,
-                        sent: session.sentDTMF,
-                        received: session.receivedDTMF,
-                        send: { digit in Task { await session.sendDTMF(digit) } })
-
-                    Divider()
-
-                    ConnectFormView(
-                        settings: $session.settings,
-                        secret: $session.secret,
-                        isEditable: session.connection == .disconnected,
-                        connectTitle: connectTitle,
-                        isBusy: session.connection.isBusy,
-                        connectAction: { Task { await session.toggleConnection() } })
-                }
-                .padding(20)
-                .frame(maxWidth: 520)
-                .frame(maxWidth: .infinity)
-            }
+            panes
         }
         .task { session.start() }
         .onChange(of: scenePhase) { phase in
@@ -88,11 +86,6 @@ struct RootView: View {
         }
         .onDisappear { session.viewDisappeared() }
         .sheet(isPresented: $isShowingAccessorySheet) {
-            // `isTransmitting` is passed in because the sheet covers the banner
-            // at the top of this view, and "on air" must not be something the
-            // operator loses sight of by opening a settings screen — least of
-            // all this settings screen, where the whole activity is pressing a
-            // button that keys the radio.
             AccessoryView(
                 accessory: accessory,
                 remoteCommand: remoteCommand,
@@ -111,7 +104,241 @@ struct RootView: View {
         }
     }
 
-    // MARK: - Pieces
+    @ViewBuilder
+    private var panes: some View {
+        #if os(macOS)
+        splitLayout
+        #else
+        if horizontalSizeClass == .compact {
+            tabLayout
+        } else {
+            splitLayout
+        }
+        #endif
+    }
+
+    // MARK: - Compact: tabs
+
+    /// iPhone. Five tabs, two of which are mode-dependent.
+    ///
+    /// No `selection` binding on purpose: the Keypad and Stations tabs come and
+    /// go with the mode, and a stored selection pointing at a tab that no longer
+    /// exists is a blank screen. Letting SwiftUI own the selection means the
+    /// worst case of changing mode is landing back on the first tab.
+    private var tabLayout: some View {
+        TabView {
+            channelsPane
+                .tabItem { Label("Channels", systemImage: "list.bullet") }
+
+            // Leaving this tab while keyed releases the key — see the note on
+            // the type. Documented rather than worked around.
+            ScrollView {
+                sessionPane(showsHeader: true)
+                    .padding(20)
+                    .paneColumn()
+            }
+            .tabItem { Label("Session", systemImage: "dot.radiowaves.left.and.right") }
+
+            if session.settings.mode.sendsDTMF {
+                ScrollView {
+                    keypadPane
+                        .padding(20)
+                        .paneColumn()
+                }
+                .tabItem { Label("Keypad", systemImage: "square.grid.3x3") }
+            }
+
+            if session.settings.mode == .echoLink {
+                StationBrowserView(session: session, browser: browser)
+                    .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+            }
+
+            AccessoryPane(
+                accessory: accessory,
+                remoteCommand: remoteCommand,
+                isTransmitting: false)
+                .tabItem { Label("Setup", systemImage: "gearshape") }
+        }
+    }
+
+    /// The channel list with the connect form for whatever it has selected.
+    ///
+    /// The list takes the space and the form takes what it needs, because the
+    /// list is what the operator is reading and the form is the handful of
+    /// fields underneath it. The form gets its own `ScrollView` so that a
+    /// keyboard covering half the screen cannot make the Connect button
+    /// unreachable.
+    private var channelsPane: some View {
+        VStack(spacing: 0) {
+            ChannelListView(session: session)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                // The list takes what it needs up to a third of the screen and
+                // no more. Beyond that it scrolls internally, so a long channel
+                // list never pushes the form — and the Connect button at the
+                // bottom of it — off the bottom of the tab.
+                .frame(maxHeight: 320, alignment: .top)
+
+            Divider()
+
+            // Not capped. An earlier `maxHeight` here left slack in the stack,
+            // which a `VStack` centres, and the pane opened with a band of empty
+            // space above the channel list. The form takes the remainder.
+            ScrollView {
+                connectForm
+                    .padding(20)
+                    .paneColumn()
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Regular: split view
+
+    /// Mac and iPad. Channels on the left, the radio on the right.
+    ///
+    /// The detail column is not a scroll view. Its top half — status, safety
+    /// notices, PTT — is fixed, and only the pane below the picker scrolls, so
+    /// the button that stops a transmission cannot be scrolled off the screen
+    /// while a transmission is running.
+    private var splitLayout: some View {
+        NavigationSplitView {
+            ChannelListView(session: session)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
+        } detail: {
+            detailColumn
+        }
+    }
+
+    private var detailColumn: some View {
+        VStack(spacing: 0) {
+            sessionPane(showsHeader: false)
+                .padding(20)
+                .paneColumn()
+
+            Divider()
+
+            // Bound to the *resolved* selection, so that a mode change which
+            // takes the selected pane away moves the picker and the content
+            // below it together rather than leaving the picker showing nothing.
+            Picker(
+                "Pane",
+                selection: Binding(
+                    get: { effectiveDetailPane },
+                    set: { detailPane = $0 })
+            ) {
+                ForEach(visibleDetailPanes) { pane in
+                    Text(pane.title).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .paneColumn()
+
+            Divider()
+
+            detailContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch effectiveDetailPane {
+        case .connect:
+            ScrollView {
+                connectForm
+                    .padding(20)
+                    .paneColumn()
+            }
+        case .keypad:
+            ScrollView {
+                keypadPane
+                    .padding(20)
+                    .paneColumn()
+            }
+        case .stations:
+            StationBrowserView(session: session, browser: browser)
+        case .setup:
+            AccessoryPane(
+                accessory: accessory,
+                remoteCommand: remoteCommand,
+                isTransmitting: false)
+        }
+    }
+
+    /// The detail column's secondary panes.
+    private enum DetailPane: String, CaseIterable, Identifiable, Hashable {
+        case connect
+        case keypad
+        case stations
+        case setup
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .connect: return "Connect"
+            case .keypad: return "Keypad"
+            case .stations: return "Stations"
+            case .setup: return "Setup"
+            }
+        }
+    }
+
+    /// Which panes the current mode has. Same two conditions as the tabs: no
+    /// keypad without a DTMF path (``RadioMode/sendsDTMF``), and no station
+    /// browser outside EchoLink, which is the only mode with a directory.
+    private var visibleDetailPanes: [DetailPane] {
+        DetailPane.allCases.filter { pane in
+            switch pane {
+            case .keypad: return session.settings.mode.sendsDTMF
+            case .stations: return session.settings.mode == .echoLink
+            case .connect, .setup: return true
+            }
+        }
+    }
+
+    /// The selection, resolved against what the current mode actually offers.
+    ///
+    /// Changing mode can take the selected pane away — the selection is state
+    /// and the mode is not — so it is corrected on read rather than mutated
+    /// from an `onChange`. `.connect` is the fallback because it is the pane
+    /// that can put the operator back on a working link.
+    private var effectiveDetailPane: DetailPane {
+        visibleDetailPanes.contains(detailPane) ? detailPane : .connect
+    }
+
+    // MARK: - Shared pieces
+
+    private func sessionPane(showsHeader: Bool) -> some View {
+        SessionPane(
+            session: session,
+            accessory: accessory,
+            remoteCommand: remoteCommand,
+            showsHeader: showsHeader,
+            openAccessories: { isShowingAccessorySheet = true })
+    }
+
+    private var connectForm: some View {
+        ConnectFormView(
+            settings: $session.settings,
+            secret: $session.secret,
+            isEditable: session.connection == .disconnected,
+            connectTitle: connectTitle,
+            isBusy: session.connection.isBusy,
+            connectAction: { Task { await session.toggleConnection() } })
+    }
+
+    private var keypadPane: some View {
+        DTMFKeypadView(
+            isEnabled: session.connection.isConnected,
+            sent: session.sentDTMF,
+            received: session.receivedDTMF,
+            send: { digit in Task { await session.sendDTMF(digit) } })
+    }
 
     private var connectTitle: String {
         switch session.connection {
@@ -121,228 +348,21 @@ struct RootView: View {
         case .disconnecting: return "Disconnecting…"
         }
     }
+}
 
-    /// SF-4's near relative: the operator must not be able to miss this. Full
-    /// bleed, red, at the top of the window, above everything that scrolls.
-    /// (The lock-screen half of SF-4 is APP-3's Live Activity.)
-    ///
-    /// The second line is PT-4's requirement: it names the input that keyed the
-    /// radio and says whether letting go will stop it. A latched transmission
-    /// that the operator believes is momentary is the way this app would leave a
-    /// microphone open, so the answer is on screen rather than in the manual.
-    private var transmitBanner: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 10) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                Text("TRANSMITTING")
-                    .font(.headline.weight(.black))
-                    .monospaced()
-                Spacer()
-                Text("ON AIR")
-                    .font(.headline.weight(.black))
-            }
-            if let source = session.activeSource {
-                Text(source.holdDescription)
-                    .font(.caption.weight(.medium))
-            }
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            session.activeSource.map { "Transmitting. On air. \($0.holdDescription)" }
-                ?? "Transmitting. On air.")
-    }
-
-    /// The way in to the accessory screen, with the accessory's link state on
-    /// it. BLE-3's "UI indicator for accessory link state" — visible from the
-    /// screen the operator is actually looking at, not only from the screen that
-    /// configures it.
-    private var accessoryRow: some View {
-        Button {
-            isShowingAccessorySheet = true
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: accessoryIcon)
-                    .foregroundStyle(accessoryColour)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("PTT accessories")
-                        .font(.subheadline.weight(.medium))
-                    Text(accessorySummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var accessoryIcon: String {
-        if accessory.isAccessoryKeyed { return "dot.radiowaves.left.and.right" }
-        switch accessory.linkState {
-        case .connected: return "dot.circle"
-        case .noAccessory: return remoteCommand.isEnabled ? "headphones" : "dot.circle"
-        case .scanning, .connecting, .reconnecting: return "antenna.radiowaves.left.and.right"
-        case .unavailable, .failed: return "exclamationmark.triangle"
-        }
-    }
-
-    private var accessoryColour: Color {
-        switch accessory.linkState {
-        case .connected: return .green
-        case .reconnecting, .scanning, .connecting: return .orange
-        case .failed, .unavailable: return .orange
-        case .noAccessory: return remoteCommand.isEnabled ? .green : .secondary
-        }
-    }
-
-    /// One line covering both inputs, because "no accessory" and "no accessory
-    /// but the headset button is armed" are different situations and the
-    /// difference is whether a button in the operator's pocket can key a
-    /// transmitter.
-    private var accessorySummary: String {
-        switch (accessory.linkState, remoteCommand.isEnabled) {
-        case (.noAccessory, false):
-            return "None set up"
-        case (.noAccessory, true):
-            return PTTSource.remoteCommand.label
-        case (let state, false):
-            return state.label
-        case (let state, true):
-            return "\(state.label) · \(PTTSource.remoteCommand.label)"
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Currawong")
-                .font(.largeTitle.weight(.semibold))
-            Text("AllStarLink and M17 for Apple platforms")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func safetyBanner(_ notice: RadioSession.SafetyNotice) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(noticeTitle(notice.kind))
-                    .font(.subheadline.weight(.bold))
-                Text(notice.message)
-                    .font(.footnote)
-            }
-            Spacer(minLength: 0)
-            Button {
-                session.dismissSafetyNotice()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss")
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.15)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.orange, lineWidth: 1.5))
-        .accessibilityElement(children: .combine)
-    }
-
-    private func noticeTitle(_ kind: RadioSession.SafetyNotice.Kind) -> String {
-        switch kind {
-        case .transmitWatchdog: return "Transmit watchdog stopped you"
-        case .audioInterruption: return "Audio interrupted"
-        case .routeChange: return "Audio route changed"
-        case .accessoryLinkLost: return "Accessory disconnected"
-        }
-    }
-
-    private func warningLine(_ text: String) -> some View {
-        Label(text, systemImage: "waveform.badge.exclamationmark")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-    }
-
-    private var statusPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(connectionColour)
-                    .frame(width: 10, height: 10)
-                Text(session.connection.label)
-                    .font(.headline)
-                Spacer()
-                receiveIndicator
-            }
-
-            Text(status.detail)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            // Diagnostics for a first contact with a node: what codec it agreed
-            // to, and how long the watchdog will let a transmission run. Both
-            // are things that are obvious in a packet capture and invisible
-            // from the app otherwise.
-            if let codec = session.negotiatedCodec {
-                Text("Codec: \(codec)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Transmit watchdog: \(Int(session.settings.transmitTimeout)) s")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if let reason = session.lastStopReason, reason.isUnexpected, session.safetyNotice == nil {
-                Text("Last transmission ended: \(reason.rawValue).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.secondary.opacity(0.12)))
-    }
-
-    /// Received-audio activity. Driven by a `TimelineView` rather than a timer
-    /// so the view model stays free of clocks: it answers "is audio arriving
-    /// as of *this* instant", and the timeline supplies instants.
-    private var receiveIndicator: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            let active = session.isReceivingAudio(asOf: context.date)
-            HStack(spacing: 6) {
-                Image(systemName: active ? "waveform" : "waveform.slash")
-                    .foregroundStyle(active ? Color.green : Color.secondary)
-                Text(active ? "Audio in" : "Quiet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(active ? "Receiving audio" : "No audio arriving")
-        }
-    }
-
-    private var connectionColour: Color {
-        switch session.connection {
-        case .disconnected: return .secondary
-        case .connecting, .disconnecting: return .orange
-        case .connected: return .green
-        }
+/// One reading measure, centred, in every pane that is a column of text and
+/// controls. Was two `frame` calls repeated at each site before the split;
+/// naming it keeps the panes the same width as each other, which is what makes
+/// switching between them look like one app.
+///
+/// Deliberately `private` — file scope, not the app's vocabulary. A shared
+/// helper on `View` is the kind of thing two files independently invent under
+/// the same name.
+private extension View {
+    func paneColumn() -> some View {
+        self
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
     }
 }
 
@@ -351,5 +371,6 @@ struct RootView: View {
     return RootView(
         session: root.session,
         accessory: root.accessory,
-        remoteCommand: root.remoteCommand)
+        remoteCommand: root.remoteCommand,
+        browser: root.stationBrowser)
 }

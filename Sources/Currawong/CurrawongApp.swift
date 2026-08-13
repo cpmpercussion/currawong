@@ -23,19 +23,43 @@ struct CurrawongApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(
-                session: root.session,
-                accessory: root.accessory,
-                remoteCommand: root.remoteCommand)
-                // The PTT input controllers, once, for the process. `RootView`
-                // starts the session's own SF-3 observation itself — that is the
-                // view's business and it should not depend on anybody
-                // remembering to call this — so `activate()` is idempotent and
-                // the two overlap harmlessly.
-                .task { root.activate() }
+            content
         }
         #if os(macOS)
-        .defaultSize(width: 480, height: 760)
+        // Two columns' worth. The old 480×760 was one scrolling column, and a
+        // window that shape shows a sidebar and nothing beside it.
+        .defaultSize(width: 1000, height: 700)
+        #endif
+    }
+
+    /// The root view, plus the one platform difference worth having.
+    ///
+    /// Written as a property with the `#if` around whole expressions rather than
+    /// around a modifier in the middle of a chain, because the latter is a newer
+    /// piece of syntax than this app's floor of iOS 16 and macOS 13 implies and
+    /// there is nothing to be gained by finding out where the line is.
+    @ViewBuilder
+    private var content: some View {
+        let view = RootView(
+            session: root.session,
+            accessory: root.accessory,
+            remoteCommand: root.remoteCommand,
+            browser: root.stationBrowser)
+            // The PTT input controllers, once, for the process. `RootView`
+            // starts the session's own SF-3 observation itself — that is the
+            // view's business and it should not depend on anybody
+            // remembering to call this — so `activate()` is idempotent and
+            // the two overlap harmlessly.
+            .task { root.activate() }
+
+        #if os(macOS)
+        // A floor rather than a preference: below this the split view's detail
+        // column can no longer hold the status box and the PTT button at once,
+        // and a PTT button that has to be scrolled to is the thing the fixed
+        // detail column exists to prevent.
+        view.frame(minWidth: 760, minHeight: 620)
+        #else
+        view
         #endif
     }
 }

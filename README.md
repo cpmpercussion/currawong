@@ -13,11 +13,35 @@ RFC 5456. The one place a concrete client is named is
 
 ## Status
 
-**Connect screen and on-screen PTT (APP-2).** There is a form for one node —
-host, port, node number, callsign, username, secret and the transmit watchdog
-timeout — a connect/disconnect control, and a press-and-hold PTT button (PT-1).
-Audio is wired both ways: the microphone into the client while transmitting,
-received audio into playback. The secret is stored in the Keychain.
+**Three modes.** AllStarLink over IAX2, M17 over a reflector, and EchoLink
+through a proxy, all against `swift-hamvoip` 0.3.0 and all reached through one
+`RadioCore.NetworkClient`. `CompositionRoot.swift` is still the only file that
+names a concrete client. What each mode asks the operator for differs enough
+that the connect form changes shape with the mode — a node number and a secret,
+a reflector module, or a proxy plus a node address and an account password —
+and `RadioMode` is where that fans out.
+
+**Saved channels (APP-4).** A channel is one place worth going back to: a name,
+a mode, and the fields that mode needs. They are listed, reorderable and
+deletable, the selected one is remembered between launches, and connecting is
+what saves a channel the operator has just typed. An operator upgrading from the
+single-node build finds that node as their first channel — the old key is read
+once and migrated, never written again.
+
+**Panes rather than one long screen.** A sidebar of channels beside the live
+session on macOS and iPad, tabs on iPhone, with the transmit banner outside the
+container so it is visible from every pane (SF-4's stand-in until the Live
+Activity lands).
+
+**Station browser (EchoLink).** Nothing in the library resolves a callsign to an
+address, so the directory listing is how a node is found: browse, search, and
+save a station as a channel ready to connect. It opens a directory-only session
+that contacts no node and transmits nothing.
+
+**Connect screen and on-screen PTT (APP-2).** A connect/disconnect control and a
+press-and-hold PTT button (PT-1). Audio is wired both ways: the microphone into
+the client while transmitting, received audio into playback. Node secrets and
+EchoLink account passwords are stored in the Keychain.
 
 **DTMF (FR-1.5).** A keypad, and a log of digits sent and digits heard back.
 Sending a digit deliberately does **not** key the transmitter — DTMF travels as
@@ -43,13 +67,20 @@ momentary, and says so wherever it can key the radio.
 | **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. |
 | **SF-4** | transmit state visible without unlocking | **Not met** — the Live Activity is APP-3. There is a full-bleed banner while the app is on screen, and it names the input that keyed and whether letting go will unkey. |
 
-Not yet: the Live Activity (SF-4, APP-3) and multiple stored nodes (APP-4 —
-there is one node, with its watchdog timeout).
+Not yet: the Live Activity (SF-4, APP-3).
 
 **On the air.** Currawong keyed a live AllStarLink node from an iPhone for the
-first time on 2026-08-11. What remains of the bring-up — audio quality judged
-from the other end, sustained receive, the watchdog and the interruption path,
-all exercised on a real node rather than in a test — is tracked in
+first time on 2026-08-11. **The other two modes have not been used from the app
+at all**, and they are not equally unproven: EchoLink's whole path — proxy
+login, directory login, a node answering, audio both ways — has run from the
+library's command-line harness, most recently on 2026-08-13, whereas M17 has
+only ever got a link up. Nobody has heard M17 audio through this stack in either
+direction. The app says so where an operator chooses a mode, rather than
+offering three that look alike.
+
+What remains of the bring-up — audio quality judged from the other end,
+sustained receive, the watchdog and the interruption path, all exercised on real
+equipment rather than in a test — is tracked in
 [`docs/BRINGUP.md`](docs/BRINGUP.md): faults rather than features, landing
 straight on `main` until that list is clear.
 

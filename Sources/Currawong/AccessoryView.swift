@@ -19,6 +19,16 @@ import SwiftUI
 /// and the operator has to know which line is theirs. That is the deliberate
 /// trade: a whitelist would be tidier and would stop working the moment somebody
 /// bought a fob nobody had heard of.
+///
+/// ## Sheet and pane
+///
+/// This type is the *sheet*: a `NavigationStack`, a title and a `Done` button,
+/// which is how it is reached on iPhone. The screen's actual content is
+/// ``AccessoryPane``, which the split layout puts in a column where a sheet
+/// would be absurd and a `Done` button would have nothing to dismiss. Splitting
+/// them keeps one copy of the content — the alternative, a second rendering of
+/// learn mode for the pane, is two screens that would drift apart in exactly
+/// the fiddly state machine where they must not.
 struct AccessoryView: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
@@ -32,27 +42,54 @@ struct AccessoryView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    if isTransmitting { transmittingBanner }
-                    bluetoothSection
-                    Divider()
-                    remoteCommandSection
+            AccessoryPane(
+                accessory: accessory,
+                remoteCommand: remoteCommand,
+                isTransmitting: isTransmitting)
+                .navigationTitle("PTT accessories")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
-                .padding(20)
-                .frame(maxWidth: 520)
-                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// The accessory screen's content, with no navigation chrome of its own.
+///
+/// Embedded directly as a pane in the split layout, and wrapped in a
+/// `NavigationStack` by ``AccessoryView`` when it is presented as a sheet.
+struct AccessoryPane: View {
+    @ObservedObject var accessory: BLEPTTController
+    @ObservedObject var remoteCommand: RemoteCommandPTTController
+
+    /// Whether to draw the local "on air" strip.
+    ///
+    /// True from the sheet, which covers ``TransmitBanner`` — and "on air" must
+    /// not be something the operator loses sight of by opening a settings
+    /// screen, least of all this settings screen, where the whole activity is
+    /// pressing a button that keys the radio. **False when embedded as a pane**,
+    /// where the root's banner is above this view and still on screen; a second
+    /// copy there would just be two banners saying the same thing.
+    let isTransmitting: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                if isTransmitting { transmittingBanner }
+                bluetoothSection
+                Divider()
+                remoteCommandSection
             }
-            .navigationTitle("PTT accessories")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            .padding(20)
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
         }
         // Scanning holds the radio awake and is foreground-only by design, so it
-        // stops when this screen goes away — including when it is dismissed
-        // mid-scan, which is the common case.
+        // stops when this screen goes away — whether that is the sheet being
+        // dismissed mid-scan, or the pane being switched away from, which are
+        // the same thing as far as the scan is concerned.
         .onDisappear { accessory.stopScanning() }
     }
 

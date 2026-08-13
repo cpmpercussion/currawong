@@ -10,11 +10,16 @@ import XCTest
 
 /// A `NetworkClient` that opens nothing.
 ///
-/// This is the whole reason ``RadioSession`` is generic: the view model can be
-/// driven through every connection and PTT path against this, on a machine
-/// with no network, no node and no radio licence. It records the calls it
-/// received *in order*, which is how the "stops transmitting before it hangs
-/// up" test is written.
+/// The view model can be driven through every connection and PTT path against
+/// this, on a machine with no network, no node and no radio licence. It records
+/// the calls it received *in order*, which is how the "stops transmitting
+/// before it hangs up" test is written.
+///
+/// **Conforming to the whole protocol is the point.** `NetworkClient` grew
+/// ``radioEvents``, ``receivedAudio`` and ``send(pcm:)`` in library v0.3.0
+/// (RC-10) precisely so an app could be written against the seam rather than
+/// against a concrete client. If this fake stops conforming, the app has lost
+/// the only compile-time proof that the seam is wide enough.
 final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
     struct Destination: Equatable, Sendable {
         var host: String
@@ -45,6 +50,26 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
 
     // MARK: NetworkClient
 
+    /// The protocol's two client → app streams. Both are live and drivable —
+    /// ``emit(_:)`` and ``deliver(pcm:)`` are what a test pushes through them —
+    /// rather than empty stubs, so the conformance is honest about being a
+    /// working client rather than a compile-time shim.
+    let radioEvents: AsyncStream<RadioEvent>
+    let receivedAudio: AsyncStream<[Int16]>
+
+    private let radioEventContinuation: AsyncStream<RadioEvent>.Continuation
+    private let receivedAudioContinuation: AsyncStream<[Int16]>.Continuation
+
+    init() {
+        var eventEscape: AsyncStream<RadioEvent>.Continuation!
+        self.radioEvents = AsyncStream { eventEscape = $0 }
+        self.radioEventContinuation = eventEscape
+
+        var audioEscape: AsyncStream<[Int16]>.Continuation!
+        self.receivedAudio = AsyncStream { audioEscape = $0 }
+        self.receivedAudioContinuation = audioEscape
+    }
+
     var state: TransmitState {
         lock.lock()
         defer { lock.unlock() }
@@ -64,11 +89,17 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Terminal and idempotent, and it finishes both streams — that is part of
+    /// the protocol's lifecycle contract, not an implementation detail, and a
+    /// fake that skipped it would let a `for await` loop survive a disconnect
+    /// here in a way it never could against a real client.
     func disconnect() async {
         lock.lock()
         storedCalls.append(.disconnect)
         storedState = .idle
         lock.unlock()
+        radioEventContinuation.finish()
+        receivedAudioContinuation.finish()
     }
 
     func startTransmit() async throws {
@@ -91,18 +122,42 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// The protocol's transmit-audio seam. Records the frame and returns; a
+    /// real client discards audio offered while unkeyed and calls that success,
+    /// so there is nothing here to refuse either.
+    func send(pcm: [Int16]) async throws {
+        record(pcm: pcm)
+    }
+
     // MARK: Test surface
 
-    /// Stands in for `IAX2Client.send(pcm:)`, which `NetworkClient` does not
-    /// have — see the note in `CompositionRoot`.
-    func send(pcm: [Int16]) {
+    /// The synchronous spelling, for the composition root's
+    /// `sendCapturedFrame` — which is called from the audio thread and must not
+    /// `await`. Named after the concrete clients' own frame-returning
+    /// `transmit(pcm:)` so it cannot be confused with the protocol's
+    /// `send(pcm:)` above.
+    func transmit(pcm: [Int16]) {
+        record(pcm: pcm)
+    }
+
+    private func record(pcm: [Int16]) {
         lock.lock()
         storedSentFrames.append(pcm)
         storedCalls.append(.send(frameCount: pcm.count))
         lock.unlock()
     }
 
-    /// Stands in for `IAX2Client.send(dtmf:)`, likewise absent from the
+    /// Pushes a ``RadioEvent`` at whoever is iterating ``radioEvents``.
+    func emit(_ event: RadioEvent) {
+        radioEventContinuation.yield(event)
+    }
+
+    /// Pushes a frame of decoded PCM at whoever is iterating ``receivedAudio``.
+    func deliver(pcm: [Int16]) {
+        receivedAudioContinuation.yield(pcm)
+    }
+
+    /// Stands in for `IAX2Client.send(dtmf:)`, which is absent from the
     /// protocol. Throws `dtmfError` when a test has set one.
     func send(dtmf digit: Character) throws {
         lock.lock()
@@ -302,13 +357,32 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
 
 // MARK: - Stores
 
+/// A ``SettingsStore`` that keeps a real list and a real selection.
+///
+/// Deliberately not a stub returning constants: the migration in ``ChannelSet``
+/// turns on the difference between a channel list that has never been written
+/// (`nil`) and one the operator emptied (`[]`), so a fake that could not tell
+/// those apart could not test the thing most worth testing.
+///
+/// `initial:` seeds the **legacy single-node key**, which is what a pre-APP-4
+/// install looks like on disk: one node, no channel list. Seeding channels
+/// instead is what `channels:` is for.
 final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: NodeSettings?
+    private var storedChannels: [NodeSettings]?
+    private var storedSelectedID: UUID?
     private var storedSaveCount = 0
+    private var storedChannelSaveCount = 0
 
-    init(initial: NodeSettings? = nil) {
+    init(
+        initial: NodeSettings? = nil,
+        channels: [NodeSettings]? = nil,
+        selectedID: UUID? = nil
+    ) {
         self.stored = initial
+        self.storedChannels = channels
+        self.storedSelectedID = selectedID
     }
 
     func load() -> NodeSettings? {
@@ -324,12 +398,47 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.unlock()
     }
 
+    func loadChannels() -> [NodeSettings]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedChannels
+    }
+
+    func saveChannels(_ channels: [NodeSettings]) {
+        lock.lock()
+        storedChannels = channels
+        storedChannelSaveCount += 1
+        lock.unlock()
+    }
+
+    func loadSelectedChannelID() -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedSelectedID
+    }
+
+    func saveSelectedChannelID(_ id: UUID?) {
+        lock.lock()
+        storedSelectedID = id
+        lock.unlock()
+    }
+
     var saved: NodeSettings? { load() }
+
+    var savedChannels: [NodeSettings]? { loadChannels() }
+
+    var savedSelectedID: UUID? { loadSelectedChannelID() }
 
     var saveCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return storedSaveCount
+    }
+
+    var channelSaveCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedChannelSaveCount
     }
 }
 
@@ -426,6 +535,11 @@ final class SessionHarness {
 
     /// Settings that pass validation, so a test that is not about validation
     /// does not have to care.
+    ///
+    /// A `static let` rather than a factory, so its ``NodeSettings/id`` is
+    /// stable across the whole run: a channel is identified by that id, and a
+    /// fresh one per access would make every "is this the same channel?"
+    /// assertion meaningless.
     static let goodSettings = NodeSettings(
         host: "node.example.org",
         port: 4569,
@@ -433,11 +547,38 @@ final class SessionHarness {
         username: "vk1xyz",
         callsign: "VK1XYZ")
 
+    /// A second channel that also validates, for the tests about switching
+    /// between them.
+    static let otherSettings = NodeSettings(
+        name: "Repeater",
+        host: "other.example.org",
+        port: 4569,
+        node: "12345",
+        username: "vk1abc",
+        callsign: "VK1ABC")
+
+    /// An EchoLink channel that validates, for the tests about a mode whose
+    /// secret account is shared between channels.
+    static let echoLinkSettings = NodeSettings(
+        name: "Echo test",
+        mode: .echoLink,
+        host: "proxy.example.org",
+        port: 8100,
+        node: "*ECHOTEST*",
+        peer: "13.57.14.183",
+        directoryServer: "192.0.2.1",
+        operatorName: "Charles",
+        location: "Canberra",
+        callsign: "VK1XYZ")
+
     init(
         settings: NodeSettings? = SessionHarness.goodSettings,
+        channels: [NodeSettings]? = nil,
+        selectedID: UUID? = nil,
         secrets: [String: String] = [:]
     ) {
-        self.settingsStore = InMemorySettingsStore(initial: settings)
+        self.settingsStore = InMemorySettingsStore(
+            initial: settings, channels: channels, selectedID: selectedID)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks
@@ -482,7 +623,7 @@ final class SessionHarness {
                     transmitState: { client.state },
                     events: events,
                     receivedAudio: received,
-                    sendCapturedFrame: { client.send(pcm: $0) },
+                    sendCapturedFrame: { client.transmit(pcm: $0) },
                     sendDTMF: { try client.send(dtmf: $0) },
                     close: { closedLinks.bump() })
             })

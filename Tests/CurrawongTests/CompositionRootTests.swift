@@ -95,6 +95,130 @@ final class CompositionRootTests: XCTestCase {
         }
     }
 
+    // MARK: - EchoLink
+
+    private func echoLinkSettings() -> NodeSettings {
+        NodeSettings(
+            mode: .echoLink,
+            host: "proxy.example.org",
+            port: 8100,
+            node: "*ECHOTEST*",
+            peer: "13.57.14.183",
+            directoryServer: "192.0.2.1",
+            operatorName: "Charles",
+            location: "Canberra",
+            callsign: "VK1XYZ")
+    }
+
+    /// The third mode builds the same ``RadioLink`` as the other two, and
+    /// building it opens nothing — `EchoLinkClient`, like the others, makes its
+    /// transport inside `connect(to:)`.
+    func testTheEchoLinkFactoryBuildsALinkWithoutConnectingIt() throws {
+        let link = try CompositionRoot.makeEchoLinkLink(
+            settings: echoLinkSettings(), secret: "account-password")
+        defer { link.close() }
+
+        XCTAssertEqual(link.mode, .echoLink)
+        XCTAssertEqual(link.transmitState(), .idle, "building a link must not key anything")
+    }
+
+    /// **A hostname cannot be made to work here by trying harder.** The proxy
+    /// carries the peer as four raw address bytes and nothing in the path
+    /// resolves DNS, so this is a refusal with an explanation rather than a
+    /// force-unwrap that traps or a connect that fails inside the transport.
+    func testANodeAddressThatIsNotADottedQuadIsRefused() {
+        for bad in ["node.example.org", "13.57.14", "", "13.57.14.999"] {
+            var settings = echoLinkSettings()
+            settings.peer = bad
+
+            XCTAssertThrowsError(
+                try CompositionRoot.makeEchoLinkLink(settings: settings, secret: ""), bad
+            ) { error in
+                XCTAssertEqual(error as? EchoLinkLinkError, .invalidPeerAddress(bad), bad)
+            }
+        }
+    }
+
+    /// `NodeSettings.validated()` should have caught an empty host already.
+    /// This is the backstop, and it earns its keep: without it the failure
+    /// happens inside the transport, where the message is about a socket rather
+    /// than about a settings field.
+    func testAnEmptyProxyHostIsRefused() {
+        var settings = echoLinkSettings()
+        settings.host = ""
+
+        XCTAssertThrowsError(
+            try CompositionRoot.makeEchoLinkLink(settings: settings, secret: "")
+        ) { error in
+            XCTAssertEqual(error as? EchoLinkLinkError, .missingProxyHost)
+        }
+    }
+
+    /// EchoLink has no digit path at all, so the link says so rather than
+    /// silently doing nothing. The connect form hides the keypad in this mode —
+    /// `RadioMode.sendsDTMF` — so this is the backstop rather than the first
+    /// line of defence.
+    func testEchoLinkRefusesDTMFRatherThanSwallowingIt() async throws {
+        let link = try CompositionRoot.makeEchoLinkLink(
+            settings: echoLinkSettings(), secret: "")
+        defer { link.close() }
+
+        do {
+            try await link.sendDTMF("1")
+            XCTFail("expected EchoLink to refuse DTMF")
+        } catch {
+            XCTAssertEqual(error as? EchoLinkLinkError, .dtmfUnsupported)
+        }
+    }
+
+    /// The browser is owned by the root rather than by the view, because a
+    /// fetch is a network session that takes seconds and has to survive the
+    /// pane being scrolled away from. This is the wiring test for that: the
+    /// injected directory is the one it actually asks.
+    func testTheStationBrowserIsBuiltOverTheInjectedDirectory() async {
+        let directory = FakeStationDirectory(stations: [.fake(callsign: "*ECHOTEST*")])
+        let root = CompositionRoot(
+            audio: FakeAudioIO(),
+            settingsStore: InMemorySettingsStore(),
+            secretStore: InMemorySecretStore(),
+            stationDirectory: directory)
+
+        root.stationBrowser.load(for: echoLinkSettings(), accountPassword: "pw")
+        await waitUntil("the injected directory answers") {
+            !root.stationBrowser.stations.isEmpty
+        }
+
+        XCTAssertEqual(directory.fetches.count, 1)
+        XCTAssertEqual(root.stationBrowser.stations.map(\.callsign), ["*ECHOTEST*"])
+    }
+
+    /// Every EchoLink complaint has to read as advice, because each one is
+    /// something the operator can act on in the form in front of them.
+    func testTheEchoLinkErrorsHaveWordsForTheOperator() {
+        for error in [
+            EchoLinkLinkError.invalidPeerAddress("node.example.org"),
+            .invalidPeerAddress(""),
+            .missingProxyHost,
+            .dtmfUnsupported,
+        ] {
+            XCTAssertFalse(error.description.isEmpty)
+        }
+    }
+
+    /// Stopping transmit is safe on a client that was never connected here too
+    /// — SF-2 and SF-3 call it from paths that cannot know the current state,
+    /// and they do not know which mode is up either.
+    func testStopTransmitOnAnUnconnectedEchoLinkClientIsHarmless() async throws {
+        let link = try CompositionRoot.makeEchoLinkLink(
+            settings: echoLinkSettings(), secret: "")
+        defer { link.close() }
+
+        await link.stopTransmit()
+        link.sendCapturedFrame(Array(repeating: 0, count: 160))
+
+        XCTAssertEqual(link.transmitState(), .idle)
+    }
+
     // MARK: - The SF-2 wire
 
     /// **The wiring test SF-2 depends on.** Both input controllers take a *weak*

@@ -5,7 +5,7 @@ import XCTest
 
 @testable import Currawong
 
-/// Choosing between AllStarLink and M17.
+/// Choosing between AllStarLink, M17 and EchoLink.
 ///
 /// The interesting part is not the enum, it is that `CompositionRoot` builds a
 /// *different client* for each and that everything above it stays the same
@@ -15,8 +15,10 @@ final class RadioModeTests: XCTestCase {
 
     // MARK: - The mode itself
 
-    func testBothModesAreOfferedAndAllStarLinkIsTheDefault() {
-        XCTAssertEqual(RadioMode.allCases, [.allStarLink, .m17])
+    func testAllThreeModesAreOfferedAndAllStarLinkIsTheDefault() {
+        // Order matters: this is the order the picker shows, and the validated
+        // mode leads it.
+        XCTAssertEqual(RadioMode.allCases, [.allStarLink, .m17, .echoLink])
         // The default matters: it is what an operator with no stored settings
         // gets, and it should be the mode that is known to work.
         XCTAssertEqual(NodeSettings().mode, .allStarLink)
@@ -25,13 +27,16 @@ final class RadioModeTests: XCTestCase {
     func testEachModeKnowsItsOwnPort() {
         XCTAssertEqual(RadioMode.allStarLink.defaultPort, 4569)
         XCTAssertEqual(RadioMode.m17.defaultPort, 17000)
+        // 8100 is the *proxy's* TCP port, not the node's — EchoLink's own
+        // 5198/5199 never appear in this app at all.
+        XCTAssertEqual(RadioMode.echoLink.defaultPort, 8100)
     }
 
-    /// **This is a safety property, not a cosmetic one.** One of these two
-    /// modes has carried a real conversation and the other has never been
+    /// **This is a safety property, not a cosmetic one.** Two of these three
+    /// modes have carried a real conversation and the third has never been
     /// transmitted at all. If M17 ever quietly starts claiming to be
     /// validated, an operator loses the only warning they get.
-    func testOnlyAllStarLinkClaimsToBeValidatedOnAir() {
+    func testOnlyM17IsUnvalidatedOnAir() {
         XCTAssertTrue(RadioMode.allStarLink.isValidatedOnAir)
         XCTAssertNil(RadioMode.allStarLink.unvalidatedWarning)
 
@@ -39,14 +44,60 @@ final class RadioModeTests: XCTestCase {
         XCTAssertNotNil(
             RadioMode.m17.unvalidatedWarning,
             "M17 must carry a warning until somebody has actually used it on air")
+
+        // EchoLink carried a live QSO through the library's CLI harness (M3,
+        // 2026-08-13), so it is validated — but not yet *from this app*, which
+        // is a different caveat and gets its own sentence rather than being
+        // flattened into M17's.
+        XCTAssertTrue(RadioMode.echoLink.isValidatedOnAir)
+        XCTAssertNotNil(RadioMode.echoLink.unvalidatedWarning)
+    }
+
+    /// The two warnings say different things on purpose. Telling an operator
+    /// "unproven" about a mode that carried a QSO would train them to ignore
+    /// the warning that matters.
+    func testTheTwoCaveatsAreNotTheSameSentence() {
+        XCTAssertNotEqual(
+            RadioMode.m17.unvalidatedWarning, RadioMode.echoLink.unvalidatedWarning)
     }
 
     func testTheModesAskForDifferentThings() {
         XCTAssertTrue(RadioMode.allStarLink.usesNodeNumber)
         XCTAssertFalse(RadioMode.allStarLink.usesModule)
+        XCTAssertFalse(RadioMode.allStarLink.usesProxy)
 
         XCTAssertTrue(RadioMode.m17.usesModule)
         XCTAssertFalse(RadioMode.m17.usesNodeNumber)
+        XCTAssertFalse(RadioMode.m17.usesProxy)
+
+        // EchoLink dials nothing and links nothing: it tunnels to a literal
+        // address through a proxy, which is its own third set of fields.
+        XCTAssertTrue(RadioMode.echoLink.usesProxy)
+        XCTAssertFalse(RadioMode.echoLink.usesNodeNumber)
+        XCTAssertFalse(RadioMode.echoLink.usesModule)
+    }
+
+    /// **The keypad is hidden, not shown-and-broken.** Only `IAX2Client` has a
+    /// digit path; the other two clients have no `send(dtmf:)` at all, so a
+    /// keypad in those modes would be a control that can only fail.
+    func testOnlyAllStarLinkSendsDTMF() {
+        XCTAssertTrue(RadioMode.allStarLink.sendsDTMF)
+        XCTAssertFalse(RadioMode.m17.sendsDTMF)
+        XCTAssertFalse(RadioMode.echoLink.sendsDTMF)
+    }
+
+    func testEveryModeHasADisplayNameAndAStableRawValue() {
+        // The raw value is what `Codable` writes into `UserDefaults`, so it is
+        // as frozen as the Keychain account format is: renaming a case would
+        // make every stored channel of that mode undecodable.
+        XCTAssertEqual(RadioMode.allStarLink.rawValue, "allStarLink")
+        XCTAssertEqual(RadioMode.m17.rawValue, "m17")
+        XCTAssertEqual(RadioMode.echoLink.rawValue, "echoLink")
+
+        for mode in RadioMode.allCases {
+            XCTAssertFalse(mode.displayName.isEmpty, "\(mode) needs a name for the picker")
+            XCTAssertEqual(mode.id, mode.rawValue)
+        }
     }
 
     // MARK: - The composition root builds the right client
@@ -65,6 +116,17 @@ final class RadioModeTests: XCTestCase {
         return settings
     }
 
+    private func echoLinkSettings() -> NodeSettings {
+        NodeSettings(
+            mode: .echoLink,
+            host: "proxy.example.org",
+            port: 8100,
+            node: "*ECHOTEST*",
+            peer: "13.57.14.183",
+            directoryServer: "192.0.2.1",
+            callsign: "VK1XYZ")
+    }
+
     @MainActor
     func testTheFactoryDispatchesOnTheModeInTheSettings() throws {
         let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2")
@@ -74,19 +136,27 @@ final class RadioModeTests: XCTestCase {
         let m17 = try CompositionRoot.makeLink(settings: m17Settings(), secret: "")
         defer { m17.close() }
         XCTAssertEqual(m17.mode, .m17)
+
+        let echoLink = try CompositionRoot.makeLink(
+            settings: echoLinkSettings(), secret: "account-password")
+        defer { echoLink.close() }
+        XCTAssertEqual(echoLink.mode, .echoLink)
     }
 
-    /// Both modes produce the same type — the whole point of the refactor.
-    /// If this stops compiling, the app is back to one mode at a time.
+    /// All three modes produce the same type — the whole point of the refactor,
+    /// and the evidence that the seam is in the right place: a third protocol
+    /// arrived without `RadioLink` or `RadioLinkEvent` changing at all. If this
+    /// stops compiling, the app is back to one mode at a time.
     @MainActor
-    func testBothModesProduceTheSameKindOfLink() throws {
+    func testAllThreeModesProduceTheSameKindOfLink() throws {
         let links: [RadioLink] = [
             try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2"),
             try CompositionRoot.makeLink(settings: m17Settings(), secret: ""),
+            try CompositionRoot.makeLink(settings: echoLinkSettings(), secret: ""),
         ]
         defer { links.forEach { $0.close() } }
 
-        XCTAssertEqual(links.map(\.mode), [.allStarLink, .m17])
+        XCTAssertEqual(links.map(\.mode), [.allStarLink, .m17, .echoLink])
         for link in links {
             XCTAssertEqual(link.transmitState(), .idle, "building a link must not key anything")
         }
@@ -139,7 +209,7 @@ final class RadioModeTests: XCTestCase {
     /// until a transmission ran for three minutes when ten seconds was asked
     /// for, which is precisely the failure the watchdog exists to prevent.
     @MainActor
-    func testTheWatchdogTimeoutIsTakenFromTheOperatorsSettingsInBothModes() {
+    func testTheWatchdogTimeoutIsTakenFromTheOperatorsSettingsInEveryMode() {
         var settings = m17Settings()
         settings.transmitTimeout = 10
         XCTAssertEqual(CompositionRoot.watchdogTimeout(for: settings), .seconds(10))
@@ -147,5 +217,9 @@ final class RadioModeTests: XCTestCase {
         var allStar = allStarSettings()
         allStar.transmitTimeout = 42
         XCTAssertEqual(CompositionRoot.watchdogTimeout(for: allStar), .seconds(42))
+
+        var echoLink = echoLinkSettings()
+        echoLink.transmitTimeout = 15
+        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: echoLink), .seconds(15))
     }
 }

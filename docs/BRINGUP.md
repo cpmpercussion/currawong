@@ -43,7 +43,42 @@ the live node:
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | Open — check 2 (keying) confirmed |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
-| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | Open — nothing confirmed |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | Open — the link comes up, and nothing beyond that is confirmed |
+| BU-5 | EchoLink has never been connected from the app, only from the CLI | Open — the whole path works from the CLI, as of 2026-08-13 |
+
+---
+
+### BU-5 — the EchoLink session from the app
+
+EchoLink became selectable in the app on 2026-08-13, against library v0.3.0.
+The protocol side is in better shape than M17's was at the same point: the
+library's CLI completed a live QSO through `*ECHOTEST*` on 2026-08-13
+(Milestone M3), and the same path was re-run from this machine while the app
+support was being written — proxy login, directory login, node answered, and
+receive audio flowing. So the failure modes left are the app's own: the fields
+the operator types, the codec being constructed inside the app rather than the
+CLI, and the audio devices.
+
+Two things about EchoLink that the other two modes do not have, and that a
+first session will trip over if they are wrong:
+
+- **The proxy is chosen, and public proxies are single-user.** A proxy that was
+  free an hour ago is often taken, and a taken one accepts the TCP connection
+  and then hangs up before sending its nonce. That surfaces as "the proxy
+  stream closed" and is not a fault in the app. Try another.
+- **The directory login is what registers you as available.** Leave the
+  directory server empty and every step still reports success while no node
+  ever answers. The connect form warns about this; believe the warning.
+
+Checks, in the order they can be answered:
+
+1. The station browser lists stations — that alone proves proxy and directory
+   login from inside the app.
+2. Saving `*ECHOTEST*` from the browser produces a channel that connects.
+3. `*ECHOTEST*`'s greeting is heard, and is intelligible.
+4. PTT is echoed back, and our own audio is intelligible — one operator alone
+   can settle the whole round trip on this node, which is what it is for.
+5. Releasing PTT ends the over, and the watchdog (SF-1) unkeys a held button.
 
 ---
 
@@ -54,6 +89,17 @@ about its audio path has ever been exercised against real equipment**, by this
 app or by the library's CLI. The one M17 thing that *is* confirmed on air is
 receive-only and had no codec in it: the OQ-7 run that established the stream
 frame is 54 bytes.
+
+**2026-08-13, one step further and only one.** `hamvoip-cli m17` linked a live
+reflector module and held it for five minutes: `CONN` accepted, `ACK` back,
+keepalives holding, teardown clean. Nobody transmitted on the module during
+that time, so **zero inbound streams were heard** and check 2 below is exactly
+as open as it was. What this settles is that the link layer works against a
+reflector that is running today; what it does not touch is the codec, the
+jitter buffer, or anything audible. Note also that a reflector will `NACK` a
+module it does not offer — two modules on one host were refused before a third
+elsewhere was accepted — so a refused link is worth re-trying elsewhere before
+being read as a fault.
 
 So this is not "check M17 still works". Nobody knows whether it works at all,
 and the plausible failure modes are wide open — the reflector may reject our
