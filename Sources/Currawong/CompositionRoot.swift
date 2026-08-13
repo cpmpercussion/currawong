@@ -718,6 +718,14 @@ extension RadioLinkEvent {
 /// than untidy: public proxies are single-user, so one abandoned is one nobody
 /// else can use.
 struct EchoLinkStationDirectory: StationDirectory {
+    /// Turns the directory server's host name into the address the library
+    /// takes. Injectable so a test never asks DNS anything.
+    private let resolver: any HostResolver
+
+    init(resolver: any HostResolver = SystemHostResolver()) {
+        self.resolver = resolver
+    }
+
     func stations(for settings: NodeSettings, accountPassword: String) async throws
         -> [DirectoryStation]
     {
@@ -726,7 +734,12 @@ struct EchoLinkStationDirectory: StationDirectory {
         {
             throw missing
         }
-        guard let directoryServer = EchoLinkPeerAddress(settings.directoryServer) else {
+
+        // The operator may have typed a name. The library takes four octets and
+        // resolves nothing, so this is where a name becomes an address — the
+        // same step `RadioSession.connect()` does for the QSO path.
+        let address = try await resolver.ipv4Address(for: settings.directoryServer)
+        guard let directoryServer = EchoLinkPeerAddress(address) else {
             throw StationDirectoryError.missingDirectoryServer
         }
 

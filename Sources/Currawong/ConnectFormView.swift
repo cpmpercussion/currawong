@@ -108,6 +108,16 @@ struct ConnectFormView: View {
                         portText = String(newMode.defaultPort)
                     }
                 }
+
+                // Only when the field is empty, so switching modes never
+                // overwrites a server the operator chose. Filled in rather than
+                // left blank because blank is a *legitimate* setting meaning
+                // "no directory login" — an operator who has not decided is not
+                // asking for that, and a station that skips the directory login
+                // is unreachable while every step still reports success.
+                if newMode.usesProxy && settings.directoryServer.isEmpty {
+                    settings.directoryServer = NodeSettings.defaultDirectoryServer
+                }
             }
 
             // Not decoration. Two of these modes have carried a real
@@ -405,14 +415,23 @@ struct ConnectFormView: View {
             .foregroundStyle(.secondary)
 
         LabelledField(label: "Directory server", systemImage: "list.bullet.rectangle") {
-            TextField("dotted quad", text: $settings.directoryServer)
+            TextField(NodeSettings.defaultDirectoryServer, text: $settings.directoryServer)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
-                    .keyboardType(.numbersAndPunctuation)
+                    .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
         }
+
+        // The node address above says "a host name will not work here", which
+        // is true of *that* field and would otherwise read as true of this one.
+        Text(
+            "A host name or an address. \(NodeSettings.defaultDirectoryServer) answers with the "
+            + "whole pool and is the one to use unless you have a reason not to.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
         // Worth its own sentence: skipping the directory login is the failure
         // where every step reports success and no call ever arrives, because

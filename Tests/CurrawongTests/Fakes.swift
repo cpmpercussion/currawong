@@ -501,6 +501,11 @@ final class SessionHarness {
 
     private(set) var linksMade = 0
 
+    /// The settings each link was built from, so a test can assert what the
+    /// factory was handed — the directory server having been resolved from a
+    /// name to an address on the way, for one.
+    private(set) var settingsSeen: [NodeSettings] = []
+
     /// Bumped by the link's `close` callback, which is `@Sendable` and may run
     /// off the main actor, so it counts through a lock rather than a property.
     let closedLinks = Counter()
@@ -575,7 +580,8 @@ final class SessionHarness {
         settings: NodeSettings? = SessionHarness.goodSettings,
         channels: [NodeSettings]? = nil,
         selectedID: UUID? = nil,
-        secrets: [String: String] = [:]
+        secrets: [String: String] = [:],
+        resolver: any HostResolver = FakeHostResolver()
     ) {
         self.settingsStore = InMemorySettingsStore(
             initial: settings, channels: channels, selectedID: selectedID)
@@ -589,6 +595,7 @@ final class SessionHarness {
             makeLink: { [unowned self] settings, secret in
                 if let error = self.makeLinkError { throw error }
                 self.linksMade += 1
+                self.settingsSeen.append(settings)
 
                 var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
                 let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -626,7 +633,8 @@ final class SessionHarness {
                     sendCapturedFrame: { client.transmit(pcm: $0) },
                     sendDTMF: { try client.send(dtmf: $0) },
                     close: { closedLinks.bump() })
-            })
+            },
+            resolver: resolver)
     }
 
     /// Connects with settings that validate, so PTT tests can start from a
