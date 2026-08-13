@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8c00"/>
+      <stop offset="1" stop-color="#c05200"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.84" cy="0.39" r="0.55">
+      <stop offset="0" stop-color="#e0b81f" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#e0b81f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <!-- currawong bust: head, heavy hooked bill, chest bleeding off the bottom -->
+  <path fill="#1f1509" d="
+    M 300 1024
+    C 294 840, 310 656, 360 528
+    C 372 348, 462 250, 578 250
+    C 670 250, 734 308, 754 384
+    C 812 390, 862 406, 894 428
+    Q 912 440, 906 458
+    Q 900 472, 882 466
+    L 864 460
+    C 824 460, 780 466, 738 474
+    C 712 526, 700 590, 696 664
+    C 692 800, 700 920, 706 1024
+    Z"/>
+
+  <!-- the yellow eye -->
+  <circle cx="612" cy="386" r="56" fill="#e0b81f"/>
+  <circle cx="621" cy="392" r="27" fill="#1f1509"/>
+  <circle cx="607" cy="377" r="9" fill="#f5dc7a"/>
+
+  <!-- the call: three arcs radiating from the bill -->
+  <g fill="none" stroke="#e0b81f" stroke-linecap="round">
+    <path stroke-width="30" opacity="1.0"
+          d="M 894.4 339.8 A 105 105 0 0 1 936.0 495.2"/>
+    <path stroke-width="24" opacity="0.72"
+          d="M 917.6 290.0 A 160 160 0 0 1 981.1 526.8"/>
+    <path stroke-width="18" opacity="0.48"
+          d="M 938.7 244.7 A 210 210 0 0 1 1022.0 555.5"/>
+  </g>
+</svg>
