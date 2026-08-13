@@ -133,7 +133,15 @@ final class ProxyPicker: ObservableObject {
     /// does not own the connect form's fields, and a picker that reached into
     /// them would be writing to a draft it cannot see the rest of.
     func find(then apply: @escaping @MainActor (ProxyCandidate) -> Void) {
-        searchTask?.cancel()
+        // Cancelled *and* waited for, below, before the new search opens
+        // anything. Cancelling alone would leave the two overlapping for a
+        // round trip, and a superseded search can be probing the very proxy the
+        // new one is about to pick — which would present as the winner being
+        // busy, from our own app rather than from a stranger. Probing is
+        // touching other operators' equipment, so the overlap is worth removing
+        // even though it is brief.
+        let superseded = searchTask
+        superseded?.cancel()
 
         isSearching = true
         failure = nil
@@ -144,6 +152,12 @@ final class ProxyPicker: ObservableObject {
         searchTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if self.generation == generation { self.isSearching = false } }
+
+            // The cancelled search drops its sockets within a round trip — the
+            // probe closes its transport even on the cancelled path — so this
+            // is a short wait, and it is what keeps the two from probing at
+            // once. `Task<Void, Never>`, so awaiting it cannot throw.
+            await superseded?.value
 
             do {
                 let candidate = try await self.finder.fastestProxy { probed in

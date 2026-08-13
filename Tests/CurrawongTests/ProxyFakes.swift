@@ -21,6 +21,9 @@ final class FakeProxyFinder: ProxyFinder, @unchecked Sendable {
     private var storedCallCount = 0
     private var storedHoldUntilReleased = false
     private var storedReleased = false
+    private var storedIgnoresCancellation = false
+    private var storedInFlight = 0
+    private var storedMaxInFlight = 0
 
     /// Batch sizes to report through `onProgress` before returning, so a test
     /// can drive the progress count without a network.
@@ -55,12 +58,30 @@ final class FakeProxyFinder: ProxyFinder, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// The most searches that were ever inside this finder at once.
+    ///
+    /// The measurement that matters for proxy etiquette: probing touches other
+    /// operators' single-user machines, so two searches overlapping is a real
+    /// cost even when it is brief and even when both eventually succeed.
+    var maxInFlight: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedMaxInFlight
+    }
+
     /// Makes the next search park until ``release()``, for the states that only
     /// exist *during* one.
-    func holdUntilReleased() {
+    ///
+    /// - Parameter ignoringCancellation: keep parking even once cancelled, which
+    ///   is how a real probe behaves — it holds its socket until the round trip
+    ///   winds down rather than vanishing the instant `cancel()` is called. A
+    ///   fake that exits immediately on cancellation cannot show an overlap,
+    ///   because there is nothing left to overlap *with*.
+    func holdUntilReleased(ignoringCancellation: Bool = false) {
         lock.lock()
         storedHoldUntilReleased = true
         storedReleased = false
+        storedIgnoresCancellation = ignoringCancellation
         lock.unlock()
     }
 
@@ -74,11 +95,20 @@ final class FakeProxyFinder: ProxyFinder, @unchecked Sendable {
     {
         lock.lock()
         storedCallCount += 1
+        storedInFlight += 1
+        storedMaxInFlight = max(storedMaxInFlight, storedInFlight)
         let error = storedError
         let candidate = storedCandidate
         let holds = storedHoldUntilReleased
+        let ignoresCancellation = storedIgnoresCancellation
         let steps = storedProgressSteps
         lock.unlock()
+
+        defer {
+            lock.lock()
+            storedInFlight -= 1
+            lock.unlock()
+        }
 
         var probed = 0
         for step in steps {
@@ -87,7 +117,7 @@ final class FakeProxyFinder: ProxyFinder, @unchecked Sendable {
         }
 
         if holds {
-            while !isReleased, !Task.isCancelled {
+            while !isReleased, ignoresCancellation || !Task.isCancelled {
                 await Task.yield()
             }
             try Task.checkCancellation()

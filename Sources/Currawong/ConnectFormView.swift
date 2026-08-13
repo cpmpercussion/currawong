@@ -350,6 +350,18 @@ struct ConnectFormView: View {
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            // Carried across from the CLI, which prints the same thing, because
+            // it is an obligation rather than a nicety: a public proxy is
+            // somebody else's machine, it serves one user at a time, and
+            // echolink.org asks that they be used briefly. An operator who does
+            // not know that cannot honour it.
+            Text(
+                "Public proxies are other operators' machines, one user at a time. Use them "
+                + "briefly — a private proxy is the answer for sustained operating.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

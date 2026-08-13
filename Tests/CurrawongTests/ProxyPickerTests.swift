@@ -134,6 +134,39 @@ final class ProxyPickerTests: XCTestCase {
         XCTAssertNotNil(picker.chosen)
     }
 
+    /// Probing touches other operators' single-user machines, so a superseded
+    /// search must be *finished*, not merely cancelled, before the next one
+    /// opens anything. Otherwise the two overlap for a round trip and the old
+    /// search can be probing the proxy the new one is about to pick — the
+    /// winner presenting as busy, from our own app.
+    func testTheSupersededSearchIsFinishedBeforeTheNextOneStarts() async {
+        let finder = FakeProxyFinder()
+        // Ignores cancellation, as a real probe does — it holds its socket
+        // until the round trip winds down. That is the window an overlap would
+        // happen in, so it is the window the test has to reproduce.
+        finder.holdUntilReleased(ignoringCancellation: true)
+        let picker = ProxyPicker(finder: finder)
+
+        picker.find { _ in }
+        await waitUntil("the first search is in flight") { finder.callCount == 1 }
+
+        picker.find { _ in }
+
+        // Long enough that the second search's task has certainly been
+        // scheduled. Without this the assertion would hold whether or not the
+        // picker waits, because `find` returns before its task starts.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        finder.release()
+        await waitUntil("the second search finishes") { !picker.isSearching }
+
+        XCTAssertEqual(finder.callCount, 2, "both searches should have run")
+        XCTAssertEqual(
+            finder.maxInFlight, 1,
+            "two searches probed at once — a superseded search can be probing the proxy the "
+                + "new one is about to pick")
+    }
+
     // MARK: - What the operator reads
 
     func testTheSummaryNamesWhoHowFarAndHowQuick() {
