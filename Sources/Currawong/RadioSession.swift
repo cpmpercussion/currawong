@@ -197,6 +197,10 @@ final class RadioSession: ObservableObject {
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
+
+    /// Turns the directory server's host name into the address the library
+    /// takes. See ``HostResolver``.
+    private let resolver: any HostResolver
     private let now: @MainActor () -> Date
 
     // MARK: - Private state
@@ -222,12 +226,14 @@ final class RadioSession: ObservableObject {
         settingsStore: SettingsStore,
         secretStore: SecretStore,
         makeLink: @escaping LinkFactory,
+        resolver: any HostResolver = SystemHostResolver(),
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.audio = audio
         self.settingsStore = settingsStore
         self.secretStore = secretStore
         self.makeLink = makeLink
+        self.resolver = resolver
         self.now = now
 
         let loaded = ChannelSet.loaded(from: settingsStore)
@@ -439,9 +445,24 @@ final class RadioSession: ObservableObject {
             return
         }
 
+        // The directory server may be a host name, and the library takes four
+        // octets. Resolved here rather than in the link factory because that is
+        // synchronous and a DNS lookup is not — and resolved into a *copy*, so
+        // what gets saved as a channel stays the name the operator typed. An
+        // address cached in a channel would go stale silently; the name will
+        // not.
+        let resolved: NodeSettings
+        do {
+            resolved = try await resolveDirectoryServer(in: validated)
+        } catch {
+            connection = .disconnected
+            present(title: "Could not reach the directory server", message: "\(error)")
+            return
+        }
+
         let newLink: RadioLink
         do {
-            newLink = try makeLink(validated, secret)
+            newLink = try makeLink(resolved, secret)
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
@@ -463,6 +484,20 @@ final class RadioSession: ObservableObject {
 
         connection = .connected
         transmitState = newLink.transmitState()
+    }
+
+    /// A copy of `settings` whose directory server is an address rather than a
+    /// name.
+    ///
+    /// Only EchoLink has a directory server, and an empty one means "do not log
+    /// in to the directory" — a supported way to run — so both of those return
+    /// unchanged rather than resolving nothing.
+    private func resolveDirectoryServer(in settings: NodeSettings) async throws -> NodeSettings {
+        guard settings.mode.usesProxy, !settings.directoryServer.isEmpty else { return settings }
+
+        var resolved = settings
+        resolved.directoryServer = try await resolver.ipv4Address(for: settings.directoryServer)
+        return resolved
     }
 
     /// Hangs up. **Stops transmitting first**, and waits for that to land

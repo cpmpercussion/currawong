@@ -82,9 +82,11 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
 
     /// **EchoLink.** The directory server's IPv4 address, dotted quad.
     ///
-    /// No default, matching the library: the proxy tunnels a raw address, so
-    /// there is nothing to resolve, and baking one operator's choice of a third
-    /// party's server into the app would be a guess about infrastructure.
+    /// **A host name or a dotted quad.** The library takes only the quad — the
+    /// proxy's `OPEN` carries four raw octets and it resolves nothing — but the
+    /// app resolves a name before handing it over, because "know an IP address
+    /// off the top of your head" is not a thing to ask of somebody holding a
+    /// phone. See ``HostResolver``.
     ///
     /// The directory login is what *registers* the station as available. Skip it
     /// and every step still reports success while no node ever answers, so this
@@ -139,6 +141,18 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// The literal string a public EchoLink proxy expects, and the only proxy
     /// password ever seen on the wire. Not a secret; see ``proxyPassword``.
     static let defaultProxyPassword = "PUBLIC"
+
+    /// The directory server a new EchoLink channel starts with.
+    ///
+    /// `servers` rather than one of the regional names (`naeast`, `nasouth`,
+    /// `europe`): it answers with the whole pool and round-robins the order, so
+    /// it is the one choice that is not a guess about which region an operator
+    /// is nearest — and they all serve the same directory anyway.
+    ///
+    /// A name and not an address on purpose. The addresses behind it are
+    /// cloud-hosted and have no promise of stability, so an IP baked in here
+    /// would be a defect with a delay on it.
+    static let defaultDirectoryServer = "servers.echolink.org"
 
     init(
         id: UUID = UUID(),
@@ -275,8 +289,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
                 return "A node address is four numbers separated by dots, such as 13.57.14.183."
             case .invalidDirectoryServer:
                 return """
-                    The directory server must be an IP address, four numbers separated by \
-                    dots. A host name will not work: nothing here resolves one.
+                    The directory server must be a host name such as servers.echolink.org, or an \
+                    IP address as four numbers separated by dots.
                     """
             case .missingHost:
                 return "Enter the node's host name or address."
@@ -345,11 +359,17 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             // Empty is allowed and means "do not log in to the directory", which
             // the form warns about rather than refuses: it is a legitimate
             // experiment, and the library treats an absent directory server and
-            // an absent account password as the pair they are. Nonsense in the
-            // field is a different thing, and is refused here — the library
-            // resolves no names, so a host name would fail far from the typo.
+            // an absent account password as the pair they are.
+            //
+            // A host name is allowed too, and is now the default — the app
+            // resolves it before the library sees it (``HostResolver``). What is
+            // still refused is something that is neither: an address with a
+            // typo in it, which would otherwise resolve to nothing much later
+            // and much further away from the field it was typed in.
             if !trimmed.directoryServer.isEmpty {
-                guard Self.isDottedQuad(trimmed.directoryServer) else {
+                guard Self.isDottedQuad(trimmed.directoryServer)
+                    || Self.isPlausibleHostName(trimmed.directoryServer)
+                else {
                     throw ValidationError.invalidDirectoryServer
                 }
             }
@@ -384,6 +404,33 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         guard parts.count == 4 else { return false }
         return parts.allSatisfy { part in
             !part.isEmpty && part.allSatisfy(\.isNumber) && UInt8(part) != nil
+        }
+    }
+
+    /// Whether a string could be a host name worth trying to resolve.
+    ///
+    /// Deliberately permissive: this exists to catch `129.213.119` and
+    /// `naeast.echolink` typed as `naeast..echolink.org`, not to police the DNS.
+    /// Anything that gets past here and does not exist fails at resolution with
+    /// a message that names it, which is a perfectly good place to find out.
+    ///
+    /// Requires a dot, because a single label is far more likely to be a
+    /// half-typed address than a real host somebody meant.
+    static func isPlausibleHostName(_ text: String) -> Bool {
+        guard text.count <= 253, text.contains(".") else { return false }
+        let labels = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2 else { return false }
+
+        // All-numeric labels are an address being typed, not a name. `129.213.119`
+        // is otherwise a perfectly well-formed host name as far as the rules
+        // below are concerned, and treating it as one would send a dropped octet
+        // off to the resolver instead of reporting it here.
+        if labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) { return false }
+
+        return labels.allSatisfy { label in
+            !label.isEmpty && label.count <= 63
+                && label.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+                && label.first != "-" && label.last != "-"
         }
     }
 

@@ -366,11 +366,24 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(try settings.validated().directoryServer, "")
     }
 
-    /// Nonsense in the field is a different thing from an empty field. Nothing
-    /// resolves names on this path, so a host name here would fail a long way
-    /// from the typo that caused it.
+    /// A host name is accepted, and is now what a new EchoLink channel starts
+    /// with. The library still takes four octets — the app resolves the name
+    /// before it gets there, so the operator does not have to know an address.
+    func testAHostNameIsAllowed() throws {
+        for good in ["servers.echolink.org", "naeast.echolink.org", "a.b"] {
+            var settings = echoLink
+            settings.directoryServer = good
+            XCTAssertEqual(try settings.validated().directoryServer, good)
+        }
+    }
+
+    /// Nonsense in the field is a different thing from either. An address with
+    /// a dropped or oversized octet is refused here rather than sent to a
+    /// resolver that will fail a long way from the typo that caused it — note
+    /// `192.0.2`, which is well-formed as a *name* and is caught anyway,
+    /// because all-numeric labels are somebody typing an address.
     func testAMalformedDirectoryServerIsRefused() {
-        for bad in ["directory.example.org", "192.0.2", "192.0.2.300"] {
+        for bad in ["192.0.2", "192.0.2.300", "-lead.example.org", "double..dot.org", "nodots"] {
             var settings = echoLink
             settings.directoryServer = bad
             XCTAssertThrowsError(try settings.validated(), bad) {

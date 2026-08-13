@@ -41,6 +41,26 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
         callsign.hasPrefix("*") && callsign.uppercased().contains("TEST")
     }
 
+    /// Whether ``address`` is something the proxy could actually be asked to
+    /// open — four octets, and not one of the two that mean "nowhere".
+    ///
+    /// Deliberately *not* the library's `isConnectable`, which also requires a
+    /// node number. A conference is listed without one often enough, and
+    /// `*ECHOTEST*` is exactly the entry an operator reaches for first, so
+    /// refusing to save it for want of a number it was never going to have
+    /// would block the one station this browser most needs to hand over. The
+    /// only thing a channel needs from a listing is the address; that is what
+    /// is checked.
+    ///
+    /// `0.0.0.0` and `127.0.0.1` appear in real listings for stations that are
+    /// registered but not reachable. Both pass ``NodeSettings/isDottedQuad(_:)``
+    /// and so survive `validated()`, which is why they are caught here instead:
+    /// otherwise the channel saves cleanly and fails much later, inside the
+    /// proxy, with an error that names neither the station nor the reason.
+    var hasDialableAddress: Bool {
+        NodeSettings.isDottedQuad(address) && address != "0.0.0.0" && address != "127.0.0.1"
+    }
+
     /// A channel pointed at this station, filled in from an existing channel's
     /// proxy, directory server and callsign.
     ///

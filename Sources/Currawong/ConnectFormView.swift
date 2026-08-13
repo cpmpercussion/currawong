@@ -37,6 +37,10 @@ struct ConnectFormView: View {
     let isBusy: Bool
     let connectAction: () -> Void
 
+    /// The public-proxy finder's state. Only read when the mode uses a proxy,
+    /// which is EchoLink alone.
+    @ObservedObject var proxyPicker: ProxyPicker
+
     @State private var portText = ""
     @State private var timeoutText = ""
 
@@ -104,6 +108,16 @@ struct ConnectFormView: View {
                         portText = String(newMode.defaultPort)
                     }
                 }
+
+                // Only when the field is empty, so switching modes never
+                // overwrites a server the operator chose. Filled in rather than
+                // left blank because blank is a *legitimate* setting meaning
+                // "no directory login" — an operator who has not decided is not
+                // asking for that, and a station that skips the directory login
+                // is unreachable while every step still reports success.
+                if newMode.usesProxy && settings.directoryServer.isEmpty {
+                    settings.directoryServer = NodeSettings.defaultDirectoryServer
+                }
             }
 
             // Not decoration. Two of these modes have carried a real
@@ -158,6 +172,10 @@ struct ConnectFormView: View {
                     .keyboardType(.URL)
                 #endif
                 .autocorrectionDisabled()
+            }
+
+            if settings.mode.usesProxy {
+                proxyFinderRow
             }
 
             LabelledField(
@@ -277,6 +295,86 @@ struct ConnectFormView: View {
         }
     }
 
+    /// **EchoLink.** Fill in the proxy host and port by measurement rather than
+    /// by typing (EL-12).
+    ///
+    /// A phone cannot reach an EchoLink node directly, so a proxy is mandatory,
+    /// and the public ones are a list of strangers' machines that each carry one
+    /// user at a time. Choosing well means knowing which are near and which are
+    /// free right now — neither of which an operator can tell by looking at a
+    /// list, and both of which a probe answers in a second or two.
+    ///
+    /// **Finding nothing is an ordinary outcome, not an error.** Every public
+    /// proxy being taken is a normal state of the world, so the failure is
+    /// phrased as contention and the button stays right there to be pressed
+    /// again, rather than raising an alert that has to be dismissed first.
+    @ViewBuilder
+    private var proxyFinderRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    proxyPicker.find { candidate in
+                        settings.host = candidate.host
+                        // Through `portText`, not `settings.port`: the port
+                        // field is bound to the text and its `onChange` is what
+                        // writes the number back. Setting the number directly
+                        // would be overwritten by the stale text.
+                        portText = String(candidate.port)
+                    }
+                } label: {
+                    Label(
+                        proxyPicker.isSearching ? "Finding a proxy…" : "Find a public proxy",
+                        systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!isEditable || proxyPicker.isSearching)
+
+                if proxyPicker.isSearching {
+                    ProgressView().controlSize(.small)
+                    Button("Stop") { proxyPicker.cancel() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if proxyPicker.isSearching && proxyPicker.probedCount > 0 {
+                // The count moving is what distinguishes "working" from "hung"
+                // during the second or two of probing.
+                Text("Probed \(proxyPicker.probedCount)…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let chosen = proxyPicker.chosen, !proxyPicker.isSearching {
+                Label(chosen.summary, systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let failure = proxyPicker.failure {
+                Text(failure)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Carried across from the CLI, which prints the same thing, because
+            // it is an obligation rather than a nicety: a public proxy is
+            // somebody else's machine, it serves one user at a time, and
+            // echolink.org asks that they be used briefly. An operator who does
+            // not know that cannot honour it.
+            Text(
+                "Public proxies are other operators' machines, one user at a time. Use them "
+                + "briefly — a private proxy is the answer for sustained operating.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     /// **EchoLink.** The far station, named twice.
     ///
     /// Twice because nothing in the library resolves a callsign to an address —
@@ -317,14 +415,23 @@ struct ConnectFormView: View {
             .foregroundStyle(.secondary)
 
         LabelledField(label: "Directory server", systemImage: "list.bullet.rectangle") {
-            TextField("dotted quad", text: $settings.directoryServer)
+            TextField(NodeSettings.defaultDirectoryServer, text: $settings.directoryServer)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
-                    .keyboardType(.numbersAndPunctuation)
+                    .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
         }
+
+        // The node address above says "a host name will not work here", which
+        // is true of *that* field and would otherwise read as true of this one.
+        Text(
+            "A host name or an address. \(NodeSettings.defaultDirectoryServer) answers with the "
+            + "whole pool and is the one to use unless you have a reason not to.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
         // Worth its own sentence: skipping the directory login is the failure
         // where every step reports success and no call ever arrives, because

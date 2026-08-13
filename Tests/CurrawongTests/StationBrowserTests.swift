@@ -331,4 +331,54 @@ final class StationBrowserTests: XCTestCase {
 
         XCTAssertEqual(try channel.validated().peer, "13.57.14.183")
     }
+
+    // MARK: - Which listings can become a channel
+
+    func testAStationWithARealAddressIsDialable() {
+        XCTAssertTrue(DirectoryStation.fake(callsign: "VK1RBM", address: "203.0.113.9")
+            .hasDialableAddress)
+    }
+
+    /// The two addresses a listing uses for "registered, but not reachable".
+    /// Both are four valid octets, so `validated()` accepts them and the failure
+    /// would otherwise surface inside the proxy long after the save.
+    func testTheNowhereAddressesAreNotDialable() {
+        for address in ["0.0.0.0", "127.0.0.1"] {
+            XCTAssertFalse(
+                DirectoryStation.fake(callsign: "VK1XYZ", address: address).hasDialableAddress,
+                "\(address) is not somewhere the proxy can be asked to open")
+        }
+    }
+
+    func testAnEmptyOrMalformedAddressIsNotDialable() {
+        for address in ["", "not-an-address", "203.0.113", "203.0.113.999"] {
+            XCTAssertFalse(
+                DirectoryStation.fake(callsign: "VK1XYZ", address: address).hasDialableAddress,
+                "\(address) is not four octets")
+        }
+    }
+
+    /// The case that rules out using the library's `isConnectable` for this:
+    /// a conference is listed without a node number, which makes `isConnectable`
+    /// false, and `*ECHOTEST*` is the first station an operator wants. Saving it
+    /// has to stay possible.
+    func testAConferenceWithNoNodeNumberIsStillDialable() {
+        let echotest = DirectoryStation.fake(
+            callsign: "*ECHOTEST*",
+            nodeNumber: nil,
+            address: "13.57.14.183",
+            isConnectable: false)
+
+        XCTAssertFalse(echotest.isConnectable, "the listing carries no node number")
+        XCTAssertTrue(echotest.hasDialableAddress, "but it has an address, which is all a channel needs")
+    }
+
+    /// A busy station is dialable — `BUSY` is a fact about right now, not about
+    /// whether the entry can become a channel worth keeping.
+    func testABusyStationIsStillDialable() {
+        XCTAssertTrue(
+            DirectoryStation
+                .fake(callsign: "VK1RBM", address: "203.0.113.9", status: "BUSY")
+                .hasDialableAddress)
+    }
 }
