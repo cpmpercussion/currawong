@@ -214,6 +214,15 @@ private struct StationRow: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if !station.hasDialableAddress {
+                    // Said on the row rather than left to a disabled button,
+                    // because a button that is merely grey reads as a bug in
+                    // the app rather than a fact about the listing.
+                    Text("The directory lists no reachable address for this station.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Text(verbatim: subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -228,7 +237,7 @@ private struct StationRow: View {
                     .font(.caption)
             }
             .buttonStyle(.bordered)
-            .disabled(!canSaveChannel)
+            .disabled(!canSaveChannel || !station.hasDialableAddress)
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .contain)
