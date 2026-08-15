@@ -237,6 +237,19 @@ struct ConnectFormView: View {
                         #endif
                         .autocorrectionDisabled()
                 }
+
+                // The host and module above can both be typed, and an operator
+                // who knows a reflector should not be made to go somewhere else
+                // to enter it. But knowing one means having read a list on a
+                // website, so the pane that holds that list is named here
+                // rather than left to be discovered.
+                Text(
+                    "A single letter — reflectors put different conversations on different "
+                    + "modules. The Reflectors pane lists what is out there and fills both "
+                    + "fields in for you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if settings.mode.usesProxy {

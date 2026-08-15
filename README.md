@@ -38,6 +38,18 @@ address, so the directory listing is how a node is found: browse, search, and
 save a station as a channel ready to connect. It opens a directory-only session
 that contacts no node and transmits nothing.
 
+**Reflector chooser (M17).** The same idea for a milder problem: M17 host names
+are stable and can be typed, but a hundred and twenty-five reflectors across
+twenty countries is not something to remember. The list is the host file the
+M17 Project publishes at
+[`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json) — the
+underlying data is DVRef's — and the module is what you actually pick, since a
+reflector without one is nowhere. Multiprotocol URF reflectors are included but
+marked, and only their M17 and transcoding modules are offered; linking a DMR
+module from here would be a connection that fails or, worse, succeeds into
+silence. Unlike the station browser it fetches on first appearance, because a
+static JSON file inconveniences nobody where seizing a single-user proxy does.
+
 **Connect screen and on-screen PTT (APP-2).** A connect/disconnect control and a
 press-and-hold PTT button (PT-1). Audio is wired both ways: the microphone into
 the client while transmitting, received audio into playback. Node secrets and

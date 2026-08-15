@@ -54,6 +54,7 @@ struct RootView: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var browser: StationBrowser
+    @ObservedObject var reflectorBrowser: ReflectorBrowser
     @ObservedObject var proxyPicker: ProxyPicker
 
     @Environment(\.scenePhase) private var scenePhase
@@ -152,6 +153,11 @@ struct RootView: View {
             if session.settings.mode == .echoLink {
                 StationBrowserView(session: session, browser: browser)
                     .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+            }
+
+            if session.settings.mode == .m17 {
+                ReflectorBrowserView(session: session, browser: reflectorBrowser)
+                    .tabItem { Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted") }
             }
 
             AccessoryPane(
@@ -262,6 +268,8 @@ struct RootView: View {
             }
         case .stations:
             StationBrowserView(session: session, browser: browser)
+        case .reflectors:
+            ReflectorBrowserView(session: session, browser: reflectorBrowser)
         case .setup:
             AccessoryPane(
                 accessory: accessory,
@@ -275,6 +283,7 @@ struct RootView: View {
         case connect
         case keypad
         case stations
+        case reflectors
         case setup
 
         var id: String { rawValue }
@@ -284,19 +293,25 @@ struct RootView: View {
             case .connect: return "Connect"
             case .keypad: return "Keypad"
             case .stations: return "Stations"
+            case .reflectors: return "Reflectors"
             case .setup: return "Setup"
             }
         }
     }
 
-    /// Which panes the current mode has. Same two conditions as the tabs: no
-    /// keypad without a DTMF path (``RadioMode/sendsDTMF``), and no station
-    /// browser outside EchoLink, which is the only mode with a directory.
+    /// Which panes the current mode has. Same conditions as the tabs: no keypad
+    /// without a DTMF path (``RadioMode/sendsDTMF``), and each of the two
+    /// directories only in the mode it belongs to. They are separate panes
+    /// rather than one that changes contents because they are separate
+    /// networks — nothing in an EchoLink listing means anything to M17 — and a
+    /// pane whose title stayed put while everything under it changed would
+    /// suggest otherwise.
     private var visibleDetailPanes: [DetailPane] {
         DetailPane.allCases.filter { pane in
             switch pane {
             case .keypad: return session.settings.mode.sendsDTMF
             case .stations: return session.settings.mode == .echoLink
+            case .reflectors: return session.settings.mode == .m17
             case .connect, .setup: return true
             }
         }
@@ -370,10 +385,11 @@ private extension View {
 
 #Preview {
     let root = CompositionRoot()
-    return RootView(
+    RootView(
         session: root.session,
         accessory: root.accessory,
         remoteCommand: root.remoteCommand,
         browser: root.stationBrowser,
+        reflectorBrowser: root.reflectorBrowser,
         proxyPicker: root.proxyPicker)
 }

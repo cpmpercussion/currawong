@@ -111,6 +111,16 @@ final class CompositionRoot {
     /// library type only this file may name.
     let proxyPicker: ProxyPicker
 
+    /// **M17.** The reflector chooser's state, over the M17 Project's published
+    /// host file.
+    ///
+    /// Owned here for the first of ``stationBrowser``'s two reasons only: a
+    /// download that should survive a pane being scrolled away from. The second
+    /// does not apply — `HostFileReflectorDirectory` names no library type and
+    /// could have been built anywhere. It is here so that all three of the
+    /// app's network-backed pickers are assembled in one place.
+    let reflectorBrowser: ReflectorBrowser
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
@@ -131,7 +141,8 @@ final class CompositionRoot {
         accessory: BLEPTTController? = nil,
         remoteCommand: RemoteCommandPTTController? = nil,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
-        proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder()
+        proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
+        reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory()
     ) {
         let session = RadioSession(
             audio: audio,
@@ -161,6 +172,7 @@ final class CompositionRoot {
         self.remoteCommand = remoteCommand
         self.stationBrowser = StationBrowser(directory: stationDirectory)
         self.proxyPicker = ProxyPicker(finder: proxyFinder)
+        self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.
