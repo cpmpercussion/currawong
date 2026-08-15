@@ -45,20 +45,24 @@ final class RadioModeTests: XCTestCase {
             RadioMode.m17.unvalidatedWarning,
             "M17 must carry a warning until somebody has actually used it on air")
 
-        // EchoLink carried a live QSO through the library's CLI harness (M3,
-        // 2026-08-13), so it is validated — but not yet *from this app*, which
-        // is a different caveat and gets its own sentence rather than being
-        // flattened into M17's.
+        // EchoLink carried a live QSO on air (M3, 2026-08-13), so it is
+        // validated and carries no warning. It used to carry one saying the QSO
+        // had run through the CLI rather than this app — development history,
+        // not something an operator could act on, and a warning on two modes out
+        // of three is a warning nobody reads.
         XCTAssertTrue(RadioMode.echoLink.isValidatedOnAir)
-        XCTAssertNotNil(RadioMode.echoLink.unvalidatedWarning)
+        XCTAssertNil(RadioMode.echoLink.unvalidatedWarning)
     }
 
-    /// The two warnings say different things on purpose. Telling an operator
-    /// "unproven" about a mode that carried a QSO would train them to ignore
-    /// the warning that matters.
-    func testTheTwoCaveatsAreNotTheSameSentence() {
-        XCTAssertNotEqual(
-            RadioMode.m17.unvalidatedWarning, RadioMode.echoLink.unvalidatedWarning)
+    /// M17's warning is the only one, and it has to say the thing that matters:
+    /// that nobody has heard this mode on the air. A warning that degenerated
+    /// into a vague "experimental" would leave the operator no better informed.
+    func testTheM17WarningNamesWhatIsUnproven() throws {
+        let warning = try XCTUnwrap(RadioMode.m17.unvalidatedWarning)
+        XCTAssertTrue(
+            warning.contains("reflector"),
+            "the warning must name what has never happened, not just flag the mode")
+        XCTAssertTrue(warning.contains("sounds"))
     }
 
     func testTheModesAskForDifferentThings() {

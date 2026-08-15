@@ -432,16 +432,6 @@ struct ConnectFormView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-
-        // Worth its own sentence: skipping the directory login is the failure
-        // where every step reports success and no call ever arrives, because
-        // registering is what makes the station reachable at all.
-        Text(
-            "An IP address again. This is what lists you as available and what the station "
-            + "browser reads. Leave it empty and everything will appear to work while nobody "
-            + "can call you.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
     }
 
     /// Who we are to the far end — which is a different question in each mode,
@@ -490,10 +480,15 @@ struct ConnectFormView: View {
             // Two passwords on one screen is a trap, so it is named rather than
             // left to position: this is the one EchoLink issued with the
             // callsign, and it is the one the directory server checks.
+            //
+            // The consequence is spelled out because it is the failure where
+            // every step reports success and no call ever arrives: registering
+            // is what makes the station reachable at all. That sentence used to
+            // sit further up the form, orphaned from any field it described.
             Text(
                 "This is your EchoLink account password — the one issued with your callsign — "
-                + "and not the proxy password above. The directory server will not list "
-                + "stations, or register you, without it.")
+                + "and not the proxy password above. Without it the directory server will not "
+                + "list stations or register you, and nobody can call you.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

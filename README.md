@@ -75,8 +75,13 @@ at all**, and they are not equally unproven: EchoLink's whole path — proxy
 login, directory login, a node answering, audio both ways — has run from the
 library's command-line harness, most recently on 2026-08-13, whereas M17 has
 only ever got a link up. Nobody has heard M17 audio through this stack in either
-direction. The app says so where an operator chooses a mode, rather than
-offering three that look alike.
+direction, and the app says so where an operator chooses a mode.
+
+EchoLink carries no such warning on screen. Which harness drove the QSO is a
+fact about the state of this project rather than about the radio — an operator
+can act on "nobody has heard how this sounds" and cannot act on "it worked from
+the CLI", and a caution on two modes out of three is a caution nobody reads.
+That distinction lives here instead.
 
 What remains of the bring-up — audio quality judged from the other end,
 sustained receive, the watchdog and the interruption path, all exercised on real
