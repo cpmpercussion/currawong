@@ -253,22 +253,41 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         _ = pipeline()
     }
 
+    #if os(iOS)
+    /// Route audio to a paired Bluetooth headset's **hands-free profile**,
+    /// which is the one that carries a microphone — the half that matters for
+    /// PTT. A2DP is the other profile and is output only.
+    ///
+    /// **Spelled twice, and the `#if` is not about the OS version.** The iOS 26
+    /// SDK renamed `allowBluetooth` to `allowBluetoothHFP`; both are the same
+    /// option with the same raw value (`0x4`), and the new name is annotated
+    /// available from iOS 1.0, so this is purely a question of *which SDK is
+    /// compiling* and never of what the device supports. There is nothing to
+    /// gate at runtime, and no `#available` here would be correct.
+    ///
+    /// The old name is deprecated under the new SDK and the new name is absent
+    /// from the old one, so either spelling alone breaks somebody: this repo's
+    /// CI runs `macos-15` without pinning an Xcode, and pinning one is the
+    /// change that would let this collapse to a single line. `#if compiler` is
+    /// the available proxy for an SDK check — Xcode 26 ships Swift 6.2, Xcode
+    /// 16.4 shipped 6.1 — and an inactive `#if` branch is parsed but not
+    /// type-checked, which is what makes naming an absent symbol safe.
+    private static var bluetoothHFP: AVAudioSession.CategoryOptions {
+        #if compiler(>=6.2)
+        .allowBluetoothHFP
+        #else
+        .allowBluetooth
+        #endif
+    }
+    #endif
+
     /// The session half of ``configureSession()``, on its own so the repair path
     /// in ``startCapture(onFrame:)`` can reach it without building an engine.
     private func activateSession() throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        // Hands-free profile is the one that carries a microphone, which is
-        // the half that matters here.
-        //
-        // Spelled `.allowBluetooth` rather than `.allowBluetoothHFP`: the two
-        // are the same option with the same raw value, but the newer name does
-        // not exist in the iOS 18 SDK — and CI builds against it, which is why
-        // `main` has been red since BU-1 landed. The old spelling exists in
-        // both SDKs. Worth revisiting when CI's Xcode is new enough that the
-        // deprecation warning is the bigger nuisance.
         try session.setCategory(
-            .playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
+            .playAndRecord, mode: .voiceChat, options: [Self.bluetoothHFP, .defaultToSpeaker])
         try session.setActive(true)
         #endif
         // macOS has no AVAudioSession. Device selection there is the user's,
