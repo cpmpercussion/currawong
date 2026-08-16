@@ -147,6 +147,23 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Extensions extend the identifier (au.charlesmartin.currawong.liveactivity);
         # the Keychain access group is $(TeamID).au.charlesmartin.currawong.
+
+        # Where dyld looks for the embedded Codec2.framework, which is the
+        # difference between an app that runs and one that dies on launch.
+        #
+        # The two platforms put it in different places — `Currawong.app/
+        # Frameworks` on iOS, `Currawong.app/Contents/Frameworks` on macOS —
+        # and this is one multiplatform target, so a single value cannot be
+        # right for both. The default here is the iOS one, which built a macOS
+        # bundle whose executable searched `Contents/MacOS/Frameworks` and
+        # found nothing: `make build-macos` succeeded and the app then failed
+        # in dyld with "Library not loaded: @rpath/Codec2.framework". The tests
+        # solve the same iOS-versus-macOS layout question with
+        # BUNDLE_EXECUTABLE_FOLDER_PATH below; there is no equivalent variable
+        # for an executable-relative frameworks path, so this is conditioned on
+        # the SDK instead.
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
     scheme:
       testTargets:
         - CurrawongTests
