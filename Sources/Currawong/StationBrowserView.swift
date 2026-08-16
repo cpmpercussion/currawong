@@ -174,7 +174,8 @@ struct StationBrowserView: View {
                 })
         }
         .listStyle(.plain)
-        .frame(minHeight: 200)
+        // A floor, not a size; see the same frame in `ReflectorBrowserView`.
+        .frame(minHeight: 140)
     }
 }
 

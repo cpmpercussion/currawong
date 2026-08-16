@@ -167,7 +167,12 @@ struct ReflectorBrowserView: View {
                 })
         }
         .listStyle(.plain)
-        .frame(minHeight: 200)
+        // A floor rather than a size — the list takes the space going spare.
+        // Kept low on purpose: this pane is the tallest of them, and every
+        // point of rigid minimum here is a point the detail column can overflow
+        // by in a short window. The list scrolls internally, so a small one is
+        // cramped rather than broken.
+        .frame(minHeight: 140)
     }
 }
 

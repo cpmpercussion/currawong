@@ -267,14 +267,37 @@ struct RootView: View {
         }
     }
 
+    /// The pane picker, the session pane, and whichever pane is chosen.
+    ///
+    /// **The picker is at the top, and that is load-bearing.** It used to sit
+    /// between the session pane and the pane content, next to the thing it
+    /// chooses, which reads better and is wrong. The session pane is a fixed
+    /// column — status, meters, a PTT button with a `minHeight` — so it needs
+    /// something like 620 points and cannot give any of them back. In a window
+    /// shorter than the three regions together, a `VStack` does not shrink the
+    /// rigid child; it overflows past the bottom edge. The picker was the first
+    /// thing to go over that edge, which left an operator who had opened
+    /// Stations on the Stations pane with nothing on screen that could take
+    /// them off it — no back button, as reported.
+    ///
+    /// At the top it is laid out before anything can push it away — but being
+    /// first is not on its own enough, and the first version of this fix was
+    /// wrong in M17. **A `VStack` centres content it could not fit**, so a
+    /// column that overflows spills in *both* directions, and the picker went
+    /// off the top instead of the bottom. The Reflectors pane is taller than
+    /// Stations — the same 200-point list, plus the attribution line under it —
+    /// so M17 overflowed by enough to reach the top edge and EchoLink did not.
+    ///
+    /// `alignment: .top` is what actually pins it: the content's top edge is
+    /// held against the frame's, and everything that does not fit goes off the
+    /// bottom, where the pane's own list is already scrollable. Whatever a
+    /// future pane's height turns out to be, the picker is still there.
+    ///
+    /// The `minHeight` is the other half: it stops the window shrinking to
+    /// where the chosen pane has no room left to draw in, which the picker
+    /// being visible would otherwise hide rather than fix.
     private var detailColumn: some View {
         VStack(spacing: 0) {
-            sessionPane(showsHeader: false)
-                .padding(20)
-                .paneColumn()
-
-            Divider()
-
             // Bound to the *resolved* selection, so that a mode change which
             // takes the selected pane away moves the picker and the content
             // below it together rather than leaving the picker showing nothing.
@@ -296,9 +319,25 @@ struct RootView: View {
 
             Divider()
 
+            sessionPane(showsHeader: false)
+                .padding(20)
+                .paneColumn()
+
+            Divider()
+
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // See the note above: `.top` is what keeps the picker on screen when
+        // the column cannot fit, and it has to be here rather than on the
+        // picker itself — it is the *stack's* overflow that needs a direction.
+        .frame(maxHeight: .infinity, alignment: .top)
+        // What the three regions actually need: the picker, a session pane that
+        // cannot compress, and enough of the tallest pane to be worth showing.
+        // A window may be made smaller than this on a small screen — a minimum
+        // is a request, not a guarantee — which is exactly why the alignment
+        // above matters more than the number does.
+        .frame(minHeight: 620)
     }
 
     @ViewBuilder
