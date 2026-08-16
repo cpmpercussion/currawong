@@ -30,7 +30,8 @@ protocol SettingsStore: AnyObject, Sendable {
     func loadSelectedChannelID() -> UUID?
     func saveSelectedChannelID(_ id: UUID?)
 
-    /// The operator's callsign, which is app-wide rather than per channel.
+    /// The operator — callsign, name and location — which is app-wide rather
+    /// than per channel.
     ///
     /// `nil` means none has ever been saved *under its own key* — which is the
     /// signal to go looking for one in the channels written before the callsign
@@ -123,11 +124,19 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
             return identity
         }
 
-        let harvested =
-            Self.firstCallsign(inArrayAt: Self.channelsKey, defaults: defaults)
-            ?? Self.firstCallsign(inObjectAt: Self.key, defaults: defaults)
+        let blobs =
+            Self.storedChannelBlobs(defaults: defaults)
+            + [Self.storedNodeBlob(defaults: defaults)].compactMap { $0 }
 
-        return harvested.map { OperatorIdentity(callsign: $0) }
+        let harvested = OperatorIdentity(
+            callsign: Self.firstNonEmpty("callsign", in: blobs) ?? "",
+            operatorName: Self.firstNonEmpty("operatorName", in: blobs) ?? "",
+            location: Self.firstNonEmpty("location", in: blobs) ?? "")
+
+        // A callsign is what makes it an identity worth having. Name and
+        // location are optional everywhere else and are optional here too, so
+        // an install that had neither is simply not migrated.
+        return harvested.callsign.isEmpty ? nil : harvested
     }
 
     func saveIdentity(_ identity: OperatorIdentity) {
@@ -135,19 +144,31 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
         defaults.set(data, forKey: Self.identityKey)
     }
 
-    private static func firstCallsign(inArrayAt key: String, defaults: UserDefaults) -> String? {
-        guard let data = defaults.data(forKey: key),
-            let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return nil }
-        return array.lazy.compactMap { $0["callsign"] as? String }.first { !$0.isEmpty }
+    /// The first non-empty value of `key` across the stored blobs.
+    ///
+    /// Each field is harvested independently rather than all three being taken
+    /// from whichever channel had a callsign. They are three facts about one
+    /// person, so mixing their sources cannot produce a wrong person — whereas
+    /// insisting they come from one channel would silently drop a name the
+    /// operator had only ever filled in on their second channel.
+    private static func firstNonEmpty(_ key: String, in blobs: [[String: Any]]) -> String? {
+        blobs.lazy.compactMap { $0[key] as? String }.first { !$0.isEmpty }
     }
 
-    private static func firstCallsign(inObjectAt key: String, defaults: UserDefaults) -> String? {
+    /// Channels first, then the pre-APP-4 single node: the order they were
+    /// written in, so the newer answer wins.
+    private static func storedChannelBlobs(defaults: UserDefaults) -> [[String: Any]] {
+        guard let data = defaults.data(forKey: channelsKey),
+            let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return array
+    }
+
+    private static func storedNodeBlob(defaults: UserDefaults) -> [String: Any]? {
         guard let data = defaults.data(forKey: key),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let callsign = object["callsign"] as? String, !callsign.isEmpty
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return callsign
+        return object
     }
 }
 

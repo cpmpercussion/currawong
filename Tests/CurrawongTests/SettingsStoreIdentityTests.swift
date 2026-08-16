@@ -4,8 +4,9 @@ import XCTest
 
 @testable import Currawong
 
-/// Where the app-wide callsign is kept, and how it is found on the first launch
-/// after it stopped being a per-channel field.
+/// Where the app-wide operator details are kept — callsign, name and location —
+/// and how they are found on the first launch after they stopped being
+/// per-channel fields.
 ///
 /// **This is the migration test.** Everything else about the hoist is a
 /// compile-time change; this is the part that can silently lose an operator's
@@ -85,6 +86,49 @@ final class SettingsStoreIdentityTests: XCTestCase {
         ])
 
         XCTAssertEqual(store().loadIdentity(), OperatorIdentity(callsign: "VK1NEW"))
+    }
+
+    /// The name and location come forward with the callsign — they were
+    /// per-channel EchoLink fields on the same blobs.
+    func testTheNameAndLocationAreHarvestedToo() throws {
+        try writeRawChannels([
+            ["id": UUID().uuidString, "host": "proxy.example.org", "port": 8100,
+             "node": "*ECHOTEST*", "username": "", "callsign": "VK1XYZ",
+             "operatorName": "Charles", "location": "Canberra"]
+        ])
+
+        XCTAssertEqual(
+            store().loadIdentity(),
+            OperatorIdentity(callsign: "VK1XYZ", operatorName: "Charles", location: "Canberra"))
+    }
+
+    /// Each field is taken independently. An operator who filled the name in on
+    /// their second channel only should not lose it because the first channel
+    /// is where the callsign came from.
+    func testEachFieldIsHarvestedFromWhicheverChannelHasIt() throws {
+        try writeRawChannels([
+            ["id": UUID().uuidString, "host": "a.example.org", "port": 4569,
+             "node": "1", "username": "", "callsign": "VK1XYZ",
+             "operatorName": "", "location": ""],
+            ["id": UUID().uuidString, "host": "b.example.org", "port": 8100,
+             "node": "2", "username": "", "callsign": "",
+             "operatorName": "Charles", "location": "Canberra"],
+        ])
+
+        XCTAssertEqual(
+            store().loadIdentity(),
+            OperatorIdentity(callsign: "VK1XYZ", operatorName: "Charles", location: "Canberra"))
+    }
+
+    /// A name without a callsign is not an identity — there is nothing to
+    /// transmit under, so there is nothing to migrate.
+    func testANameWithoutACallsignIsNotAnIdentity() throws {
+        try writeRawChannels([
+            ["id": UUID().uuidString, "host": "a.example.org", "port": 4569,
+             "node": "1", "username": "", "callsign": "", "operatorName": "Charles"]
+        ])
+
+        XCTAssertNil(store().loadIdentity())
     }
 
     /// An operator with several channels may have left the callsign blank on

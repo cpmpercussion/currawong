@@ -112,9 +112,7 @@ final class CompositionRootTests: XCTestCase {
             port: 8100,
             node: "*ECHOTEST*",
             peer: "13.57.14.183",
-            directoryServer: "192.0.2.1",
-            operatorName: "Charles",
-            location: "Canberra")
+            directoryServer: "192.0.2.1")
     }
 
     /// The third mode builds the same ``RadioLink`` as the other two, and

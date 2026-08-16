@@ -27,8 +27,8 @@ import RadioCore
 ///
 /// The third one arriving without any change to ``RadioLink`` or
 /// ``RadioLinkEvent`` is the evidence that the seam is in the right place. What
-/// it did cost is below: two settings fields that only EchoLink reads, and one
-/// pairing rule the library enforces by throwing.
+/// it did cost is below: two operator details that only EchoLink transmits, and
+/// one pairing rule the library enforces by throwing.
 ///
 /// ## What this file has to do that `NetworkClient` should arguably do for it
 ///
@@ -438,8 +438,8 @@ final class CompositionRoot {
         var configuration = configuration ?? EchoLinkClient.Configuration(
             callsign: identity.callsign)
         configuration.callsign = identity.callsign
-        configuration.operatorName = settings.operatorName
-        configuration.location = settings.location
+        configuration.operatorName = identity.operatorName
+        configuration.location = identity.location
         configuration.transmitTimeout = watchdogTimeout(for: settings)
         configuration.accountPassword = accountPassword
         configuration.directoryServer = directoryServer
@@ -763,8 +763,8 @@ struct EchoLinkStationDirectory: StationDirectory {
         }
 
         var configuration = EchoLinkClient.Configuration(callsign: identity.callsign)
-        configuration.operatorName = settings.operatorName
-        configuration.location = settings.location
+        configuration.operatorName = identity.operatorName
+        configuration.location = identity.location
         configuration.accountPassword = EchoLinkAccountPassword(accountPassword)
         configuration.directoryServer = directoryServer
 

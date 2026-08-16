@@ -93,14 +93,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// being empty is a much bigger deal than an empty optional usually is.
     var directoryServer: String
 
-    /// **EchoLink.** The operator's name, shown to the far end beside the
-    /// callsign. May be empty.
-    var operatorName: String
-
-    /// **EchoLink.** A short location string for the directory listing — a town
-    /// or a three-letter airport code. May be empty.
-    var location: String
-
     /// The account the node authenticates us as. May be empty.
     var username: String
 
@@ -162,8 +154,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         peer: String = "",
         proxyPassword: String = NodeSettings.defaultProxyPassword,
         directoryServer: String = "",
-        operatorName: String = "",
-        location: String = "",
         username: String = "",
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
@@ -177,8 +167,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.peer = peer
         self.proxyPassword = proxyPassword
         self.directoryServer = directoryServer
-        self.operatorName = operatorName
-        self.location = location
         self.username = username
         self.transmitTimeout = transmitTimeout
     }
@@ -227,14 +215,13 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             ?? Self.defaultProxyPassword
         self.directoryServer =
             try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
-        self.operatorName = try container.decodeIfPresent(String.self, forKey: .operatorName) ?? ""
-        self.location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
-        // `callsign` may be present in a blob written before the callsign
-        // became app-wide. It is deliberately not read here: the type no longer
-        // has the field, and an unknown key in a keyed container is ignored.
-        // `UserDefaultsSettingsStore.loadIdentity()` is what harvests it, once,
-        // so that an operator updating the app does not have to retype it.
+        // `callsign`, `operatorName` and `location` may be present in a blob
+        // written before they became app-wide. They are deliberately not read
+        // here: the type no longer has those fields, and an unknown key in a
+        // keyed container is ignored. `UserDefaultsSettingsStore.loadIdentity()`
+        // is what harvests them, once, so that an operator updating the app
+        // does not have to retype them.
         self.transmitTimeout =
             try container.decodeIfPresent(TimeInterval.self, forKey: .transmitTimeout)
             ?? Self.defaultTransmitTimeout
@@ -331,8 +318,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             proxyPassword: proxyPassword.trimmed.isEmpty
                 ? Self.defaultProxyPassword : proxyPassword.trimmed,
             directoryServer: directoryServer.trimmed,
-            operatorName: operatorName.trimmed,
-            location: location.trimmed,
             username: username.trimmed,
             transmitTimeout: transmitTimeout)
 

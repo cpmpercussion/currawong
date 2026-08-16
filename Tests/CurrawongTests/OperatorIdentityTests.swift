@@ -61,8 +61,45 @@ final class OperatorIdentityTests: XCTestCase {
         XCTAssertNotEqual(echoLink.secretAccount(for: mine), echoLink.secretAccount(for: contest))
     }
 
+    // MARK: - Name and location
+
+    /// Trimmed, but neither required nor uppercased: they are display text
+    /// shown to another human, and blank is a legitimate thing to say.
+    func testTheNameAndLocationAreTrimmedButOptional() throws {
+        let validated = try OperatorIdentity(
+            callsign: "vk1xyz", operatorName: "  Charles ", location: " Canberra\n"
+        ).validated()
+
+        XCTAssertEqual(validated.operatorName, "Charles")
+        XCTAssertEqual(validated.location, "Canberra")
+
+        let bare = try OperatorIdentity(callsign: "VK1XYZ").validated()
+        XCTAssertEqual(bare.operatorName, "")
+        XCTAssertEqual(bare.location, "")
+    }
+
+    func testAMissingNameAndLocationDoNotBlockValidation() throws {
+        XCTAssertNoThrow(
+            try OperatorIdentity(callsign: "VK1XYZ", operatorName: "", location: "").validated())
+    }
+
+    /// Neither touches the Keychain account. Only the callsign keys a secret,
+    /// so an operator who moves house must not be asked for their EchoLink
+    /// password again.
+    func testChangingTheNameOrLocationDoesNotRepointASecret() {
+        let home = OperatorIdentity(
+            callsign: "VK1XYZ", operatorName: "Charles", location: "Canberra")
+        var away = home
+        away.location = "Sydney"
+        away.operatorName = "Chas"
+
+        let echoLink = NodeSettings(mode: .echoLink, host: "proxy.example.org")
+        XCTAssertEqual(echoLink.secretAccount(for: home), echoLink.secretAccount(for: away))
+    }
+
     func testItRoundTripsThroughCodable() throws {
-        let identity = OperatorIdentity(callsign: "VK1XYZ")
+        let identity = OperatorIdentity(
+            callsign: "VK1XYZ", operatorName: "Charles", location: "Canberra")
         let data = try JSONEncoder().encode(identity)
         XCTAssertEqual(try JSONDecoder().decode(OperatorIdentity.self, from: data), identity)
     }

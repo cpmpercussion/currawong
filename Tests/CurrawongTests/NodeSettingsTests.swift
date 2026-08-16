@@ -107,12 +107,12 @@ final class NodeSettingsTests: XCTestCase {
             keys,
             [
                 "id", "name", "mode", "host", "port", "node", "module",
-                "peer", "proxyPassword", "directoryServer", "operatorName", "location",
-                "username", "transmitTimeout",
+                "peer", "proxyPassword", "directoryServer", "username", "transmitTimeout",
             ])
         XCTAssertFalse(
-            keys.contains("callsign"),
-            "the callsign is the operator's and is stored once, not in every channel")
+            keys.contains("callsign") || keys.contains("operatorName")
+                || keys.contains("location"),
+            "callsign, name and location are the operator's and are stored once")
     }
 
     func testRoundTripsThroughTheDefaultsStore() {
@@ -310,9 +310,7 @@ final class NodeSettingsTests: XCTestCase {
         port: 8100,
         node: "*ECHOTEST*",
         peer: "13.57.14.183",
-        directoryServer: "192.0.2.1",
-        operatorName: "Charles",
-        location: "Canberra")
+        directoryServer: "192.0.2.1")
 
     func testAGoodEchoLinkChannelValidates() throws {
         XCTAssertEqual(try echoLink.validated(), echoLink)
@@ -471,8 +469,6 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.name, "")
         XCTAssertEqual(decoded.peer, "")
         XCTAssertEqual(decoded.directoryServer, "")
-        XCTAssertEqual(decoded.operatorName, "")
-        XCTAssertEqual(decoded.location, "")
         // Absent rather than empty: `PUBLIC` is the working value, so a blob
         // that never had the key must not decode to a proxy password that fails.
         XCTAssertEqual(decoded.proxyPassword, "PUBLIC")

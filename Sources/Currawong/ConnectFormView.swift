@@ -637,18 +637,24 @@ struct ConnectFormView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             LabelledField(label: "Operator name", systemImage: "person") {
-                TextField("optional", text: $settings.operatorName)
+                TextField("optional", text: $identity.operatorName)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
             }
 
             LabelledField(label: "Location", systemImage: "mappin.and.ellipse") {
-                TextField("Canberra", text: $settings.location)
+                TextField("Canberra", text: $identity.location)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
             }
 
-            Text("Both are shown to the far end and in the directory listing. Both may be empty.")
+            // App-wide like the callsign, and for the same reason — they are
+            // facts about the operator. Only EchoLink transmits them, so only
+            // this form offers them, but what they edit is the one stored value
+            // rather than a field of this channel.
+            Text(
+                "Both are shown to the far end and in the directory listing, and both may be "
+                + "empty. Like your callsign, they are yours rather than this channel's.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

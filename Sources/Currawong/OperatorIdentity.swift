@@ -31,8 +31,26 @@ struct OperatorIdentity: Equatable, Sendable, Codable {
     /// fight the operator mid-word.
     var callsign: String
 
-    init(callsign: String = "") {
+    /// **EchoLink.** The operator's name, shown to the far end and in the
+    /// directory listing. May be empty.
+    ///
+    /// Here rather than in `NodeSettings` for the same reason the callsign is:
+    /// it is a fact about the person, not about where they are connecting. Only
+    /// EchoLink transmits it, so only the EchoLink form offers it — but what it
+    /// edits is the one app-wide value, not a field of that channel.
+    var operatorName: String
+
+    /// **EchoLink.** A short location for the directory listing — a town, or a
+    /// three-letter airport code. May be empty.
+    ///
+    /// App-wide with the same caveat as ``operatorName``: an operator who
+    /// travels changes this once, not once per saved channel.
+    var location: String
+
+    init(callsign: String = "", operatorName: String = "", location: String = "") {
         self.callsign = callsign
+        self.operatorName = operatorName
+        self.location = location
     }
 
     /// Nobody identified yet — a fresh install, before the first thing is typed.
@@ -56,9 +74,15 @@ struct OperatorIdentity: Equatable, Sendable, Codable {
     /// their own frames and the third has nothing else to identify us by, but
     /// the real reason is the one in the message: transmitting unidentified is
     /// not legal anywhere, and this app is not going to make it easy.
+    /// The name and location are trimmed but **not** required and not
+    /// uppercased — they are display text shown to another human, and an
+    /// operator who leaves them blank has said something legitimate.
     func validated() throws -> OperatorIdentity {
         let trimmed = callsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !trimmed.isEmpty else { throw ValidationError.missingCallsign }
-        return OperatorIdentity(callsign: trimmed)
+        return OperatorIdentity(
+            callsign: trimmed,
+            operatorName: operatorName.trimmingCharacters(in: .whitespacesAndNewlines),
+            location: location.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
