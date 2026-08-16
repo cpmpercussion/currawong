@@ -54,7 +54,9 @@ struct RootView: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var browser: StationBrowser
+    @ObservedObject var reflectorBrowser: ReflectorBrowser
     @ObservedObject var proxyPicker: ProxyPicker
+    @ObservedObject var nodeLocator: NodeLocator
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -67,6 +69,10 @@ struct RootView: View {
     /// Which of the detail column's secondary panes is showing. Split layout
     /// only; the tab layout uses tabs for the same choice.
     @State private var detailPane: DetailPane = .connect
+
+    /// Which tab is showing. Compact layout only; the split layout uses
+    /// ``detailPane`` for the same choice.
+    @State private var selectedTab: Tab = .channels
 
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
@@ -122,14 +128,22 @@ struct RootView: View {
 
     /// iPhone. Five tabs, two of which are mode-dependent.
     ///
-    /// No `selection` binding on purpose: the Keypad and Stations tabs come and
-    /// go with the mode, and a stored selection pointing at a tab that no longer
-    /// exists is a blank screen. Letting SwiftUI own the selection means the
-    /// worst case of changing mode is landing back on the first tab.
+    /// **There is a `selection` binding, and it needs a guard.** This used to
+    /// have none, on the grounds that the Keypad and directory tabs come and go
+    /// with the mode and a selection pointing at a departed tab is a blank
+    /// screen. That reasoning still holds — what changed is that choosing a
+    /// station or reflector now has to *take* the operator to the connect
+    /// screen, and a tab layout cannot be driven without a binding.
+    ///
+    /// So the hazard is handled rather than avoided: ``effectiveTab`` resolves
+    /// the stored selection against the tabs the current mode actually has, on
+    /// read, exactly as ``effectiveDetailPane`` does for the split layout. The
+    /// worst case of changing mode is still landing back on Channels.
     private var tabLayout: some View {
-        TabView {
+        TabView(selection: tabSelection) {
             channelsPane
                 .tabItem { Label("Channels", systemImage: "list.bullet") }
+                .tag(Tab.channels)
 
             // Leaving this tab while keyed releases the key — see the note on
             // the type. Documented rather than worked around.
@@ -139,6 +153,7 @@ struct RootView: View {
                     .paneColumn()
             }
             .tabItem { Label("Session", systemImage: "dot.radiowaves.left.and.right") }
+            .tag(Tab.session)
 
             if session.settings.mode.sendsDTMF {
                 ScrollView {
@@ -147,11 +162,27 @@ struct RootView: View {
                         .paneColumn()
                 }
                 .tabItem { Label("Keypad", systemImage: "square.grid.3x3") }
+                .tag(Tab.keypad)
             }
 
             if session.settings.mode == .echoLink {
-                StationBrowserView(session: session, browser: browser)
-                    .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+                StationBrowserView(
+                    session: session, browser: browser, proxyPicker: proxyPicker,
+                    onChosen: { selectedTab = .channels }
+                )
+                .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(Tab.directory)
+            }
+
+            if session.settings.mode == .m17 {
+                ReflectorBrowserView(
+                    session: session, browser: reflectorBrowser,
+                    onChosen: { selectedTab = .channels }
+                )
+                .tabItem {
+                    Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .tag(Tab.directory)
             }
 
             AccessoryPane(
@@ -159,6 +190,32 @@ struct RootView: View {
                 remoteCommand: remoteCommand,
                 isTransmitting: false)
                 .tabItem { Label("Setup", systemImage: "gearshape") }
+                .tag(Tab.setup)
+        }
+    }
+
+    /// The tab layout's five destinations. The two directories share `directory`
+    /// because only one of them is ever present: they are the same slot filled
+    /// by whichever network the mode names.
+    private enum Tab: Hashable {
+        case channels, session, keypad, directory, setup
+    }
+
+    /// The stored selection, corrected against the tabs this mode has.
+    ///
+    /// Reading resolves; writing stores whatever was asked for. A mode change
+    /// can take the selected tab away, and correcting on read rather than in an
+    /// `onChange` means there is no frame in which the selection points at a
+    /// tab that is not there.
+    private var tabSelection: Binding<Tab> {
+        Binding(get: { effectiveTab }, set: { selectedTab = $0 })
+    }
+
+    private var effectiveTab: Tab {
+        switch selectedTab {
+        case .keypad where !session.settings.mode.sendsDTMF: return .channels
+        case .directory where !session.settings.mode.hasDirectory: return .channels
+        default: return selectedTab
         }
     }
 
@@ -211,14 +268,37 @@ struct RootView: View {
         }
     }
 
+    /// The pane picker, the session pane, and whichever pane is chosen.
+    ///
+    /// **The picker is at the top, and that is load-bearing.** It used to sit
+    /// between the session pane and the pane content, next to the thing it
+    /// chooses, which reads better and is wrong. The session pane is a fixed
+    /// column — status, meters, a PTT button with a `minHeight` — so it needs
+    /// something like 620 points and cannot give any of them back. In a window
+    /// shorter than the three regions together, a `VStack` does not shrink the
+    /// rigid child; it overflows past the bottom edge. The picker was the first
+    /// thing to go over that edge, which left an operator who had opened
+    /// Stations on the Stations pane with nothing on screen that could take
+    /// them off it — no back button, as reported.
+    ///
+    /// At the top it is laid out before anything can push it away — but being
+    /// first is not on its own enough, and the first version of this fix was
+    /// wrong in M17. **A `VStack` centres content it could not fit**, so a
+    /// column that overflows spills in *both* directions, and the picker went
+    /// off the top instead of the bottom. The Reflectors pane is taller than
+    /// Stations — the same 200-point list, plus the attribution line under it —
+    /// so M17 overflowed by enough to reach the top edge and EchoLink did not.
+    ///
+    /// `alignment: .top` is what actually pins it: the content's top edge is
+    /// held against the frame's, and everything that does not fit goes off the
+    /// bottom, where the pane's own list is already scrollable. Whatever a
+    /// future pane's height turns out to be, the picker is still there.
+    ///
+    /// The `minHeight` is the other half: it stops the window shrinking to
+    /// where the chosen pane has no room left to draw in, which the picker
+    /// being visible would otherwise hide rather than fix.
     private var detailColumn: some View {
         VStack(spacing: 0) {
-            sessionPane(showsHeader: false)
-                .padding(20)
-                .paneColumn()
-
-            Divider()
-
             // Bound to the *resolved* selection, so that a mode change which
             // takes the selected pane away moves the picker and the content
             // below it together rather than leaving the picker showing nothing.
@@ -240,9 +320,25 @@ struct RootView: View {
 
             Divider()
 
+            sessionPane(showsHeader: false)
+                .padding(20)
+                .paneColumn()
+
+            Divider()
+
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // See the note above: `.top` is what keeps the picker on screen when
+        // the column cannot fit, and it has to be here rather than on the
+        // picker itself — it is the *stack's* overflow that needs a direction.
+        .frame(maxHeight: .infinity, alignment: .top)
+        // What the three regions actually need: the picker, a session pane that
+        // cannot compress, and enough of the tallest pane to be worth showing.
+        // A window may be made smaller than this on a small screen — a minimum
+        // is a request, not a guarantee — which is exactly why the alignment
+        // above matters more than the number does.
+        .frame(minHeight: 620)
     }
 
     @ViewBuilder
@@ -261,7 +357,13 @@ struct RootView: View {
                     .paneColumn()
             }
         case .stations:
-            StationBrowserView(session: session, browser: browser)
+            StationBrowserView(
+                session: session, browser: browser, proxyPicker: proxyPicker,
+                onChosen: { detailPane = .connect })
+        case .reflectors:
+            ReflectorBrowserView(
+                session: session, browser: reflectorBrowser,
+                onChosen: { detailPane = .connect })
         case .setup:
             AccessoryPane(
                 accessory: accessory,
@@ -275,6 +377,7 @@ struct RootView: View {
         case connect
         case keypad
         case stations
+        case reflectors
         case setup
 
         var id: String { rawValue }
@@ -284,19 +387,25 @@ struct RootView: View {
             case .connect: return "Connect"
             case .keypad: return "Keypad"
             case .stations: return "Stations"
+            case .reflectors: return "Reflectors"
             case .setup: return "Setup"
             }
         }
     }
 
-    /// Which panes the current mode has. Same two conditions as the tabs: no
-    /// keypad without a DTMF path (``RadioMode/sendsDTMF``), and no station
-    /// browser outside EchoLink, which is the only mode with a directory.
+    /// Which panes the current mode has. Same conditions as the tabs: no keypad
+    /// without a DTMF path (``RadioMode/sendsDTMF``), and each of the two
+    /// directories only in the mode it belongs to. They are separate panes
+    /// rather than one that changes contents because they are separate
+    /// networks — nothing in an EchoLink listing means anything to M17 — and a
+    /// pane whose title stayed put while everything under it changed would
+    /// suggest otherwise.
     private var visibleDetailPanes: [DetailPane] {
         DetailPane.allCases.filter { pane in
             switch pane {
             case .keypad: return session.settings.mode.sendsDTMF
             case .stations: return session.settings.mode == .echoLink
+            case .reflectors: return session.settings.mode == .m17
             case .connect, .setup: return true
             }
         }
@@ -327,11 +436,39 @@ struct RootView: View {
         ConnectFormView(
             settings: $session.settings,
             secret: $session.secret,
+            identity: $session.identity,
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,
-            isBusy: session.connection.isBusy,
-            connectAction: { Task { await session.toggleConnection() } },
-            proxyPicker: proxyPicker)
+            isBusy: session.connection.isBusy || proxyPicker.isSearching,
+            connectAction: { Task { await connectOrDisconnect() } },
+            proxyPicker: proxyPicker,
+            nodeLocator: nodeLocator)
+    }
+
+    /// The Connect button's action: find a proxy first if this channel needs
+    /// one, then place or drop the call.
+    ///
+    /// Only on the way *out*. `toggleConnection` is one button for two verbs,
+    /// and hanging up does not need a proxy — sourcing one there would be a
+    /// second or two of probing strangers' machines in front of the one action
+    /// an operator may be in a hurry to complete.
+    ///
+    /// A search that finds nothing stops here rather than falling through to
+    /// `connect()`. Without the guard the call would go on to fail validation
+    /// with "enter the proxy's host name", which is both wrong — the app was
+    /// looking for one and every public proxy was busy — and the opposite of
+    /// useful, since it names a field the operator was never meant to fill in.
+    private func connectOrDisconnect() async {
+        if session.connection == .disconnected {
+            guard
+                await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
+                    session.settings.host = candidate.host
+                    session.settings.port = candidate.port
+                })
+            else { return }
+        }
+
+        await session.toggleConnection()
     }
 
     private var keypadPane: some View {
@@ -370,10 +507,12 @@ private extension View {
 
 #Preview {
     let root = CompositionRoot()
-    return RootView(
+    RootView(
         session: root.session,
         accessory: root.accessory,
         remoteCommand: root.remoteCommand,
         browser: root.stationBrowser,
-        proxyPicker: root.proxyPicker)
+        reflectorBrowser: root.reflectorBrowser,
+        proxyPicker: root.proxyPicker,
+        nodeLocator: root.nodeLocator)
 }

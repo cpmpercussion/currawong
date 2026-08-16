@@ -20,15 +20,15 @@ import RadioCore
 /// ## Three modes
 ///
 /// `settings.mode` chooses between an `IAX2Client`, an `M17Client` and an
-/// `EchoLinkClient`, and ``makeLink(settings:secret:)`` is the switch. Nothing
+/// `EchoLinkClient`, and ``makeLink(settings:identity:secret:)`` is the switch. Nothing
 /// above this file knows there is more than one library: all three factories
 /// return the same non-generic ``RadioLink``, which is exactly why that type
 /// stopped being generic — see its doc comment.
 ///
 /// The third one arriving without any change to ``RadioLink`` or
 /// ``RadioLinkEvent`` is the evidence that the seam is in the right place. What
-/// it did cost is below: two settings fields that only EchoLink reads, and one
-/// pairing rule the library enforces by throwing.
+/// it did cost is below: two operator details that only EchoLink transmits, and
+/// one pairing rule the library enforces by throwing.
 ///
 /// ## What this file has to do that `NetworkClient` should arguably do for it
 ///
@@ -111,12 +111,27 @@ final class CompositionRoot {
     /// library type only this file may name.
     let proxyPicker: ProxyPicker
 
+    /// **M17.** The reflector chooser's state, over the M17 Project's published
+    /// host file.
+    ///
+    /// Owned here for the first of ``stationBrowser``'s two reasons only: a
+    /// download that should survive a pane being scrolled away from. The second
+    /// does not apply — `HostFileReflectorDirectory` names no library type and
+    /// could have been built anywhere. It is here so that all three of the
+    /// app's network-backed pickers are assembled in one place.
+    let reflectorBrowser: ReflectorBrowser
+
+    /// **AllStarLink.** The node-number lookup's state, over the public stats
+    /// API. Owned here so a round trip survives a pane being scrolled away
+    /// from, like the other three network-backed helpers.
+    let nodeLocator: NodeLocator
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
     ///     **watchdog timeout is not taken from here** — it belongs to the
     ///     operator, so it travels in `NodeSettings` and is applied per link;
-    ///     see ``makeIAX2Link(settings:secret:configuration:)``.
+    ///     see ``makeIAX2Link(settings:identity:secret:configuration:)``.
     ///   - audio: the microphone and speaker. Injectable so a test never opens
     ///     either.
     init(
@@ -131,26 +146,30 @@ final class CompositionRoot {
         accessory: BLEPTTController? = nil,
         remoteCommand: RemoteCommandPTTController? = nil,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
-        proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder()
+        proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
+        reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
+        nodeLookup: any NodeLookup = AllStarLinkNodeLookup()
     ) {
         let session = RadioSession(
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { settings, secret in
+            makeLink: { settings, identity, secret in
                 // Dispatches on the mode in the settings; see `makeLink`.
                 // `configuration` is the IAX2 one, so it only applies there.
                 switch settings.mode {
                 case .allStarLink:
                     return CompositionRoot.makeIAX2Link(
-                        settings: settings, secret: secret, configuration: configuration)
+                        settings: settings, identity: identity, secret: secret,
+                        configuration: configuration)
                 case .m17:
-                    return try CompositionRoot.makeM17Link(settings: settings)
+                    return try CompositionRoot.makeM17Link(
+                        settings: settings, identity: identity)
                 case .echoLink:
                     // The secret is the operator's EchoLink *account* password
                     // here, not a node password — see `makeEchoLinkLink`.
                     return try CompositionRoot.makeEchoLinkLink(
-                        settings: settings, secret: secret)
+                        settings: settings, identity: identity, secret: secret)
                 }
             })
         let accessory = accessory ?? BLEPTTController()
@@ -161,6 +180,8 @@ final class CompositionRoot {
         self.remoteCommand = remoteCommand
         self.stationBrowser = StationBrowser(directory: stationDirectory)
         self.proxyPicker = ProxyPicker(finder: proxyFinder)
+        self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
+        self.nodeLocator = NodeLocator(lookup: nodeLookup)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.
@@ -208,6 +229,7 @@ final class CompositionRoot {
     /// always validated ones.
     static func makeIAX2Link(
         settings: NodeSettings,
+        identity: OperatorIdentity,
         secret: String,
         configuration: IAX2Client.Configuration = IAX2Client.Configuration()
     ) -> RadioLink {
@@ -218,7 +240,7 @@ final class CompositionRoot {
         let destination = IAX2Destination(
             host: settings.host,
             port: settings.port,
-            callsign: settings.callsign,
+            callsign: identity.callsign,
             username: settings.username,
             secret: secret,
             node: settings.node)
@@ -290,6 +312,7 @@ final class CompositionRoot {
     /// reflector, so this path is believed correct rather than known to be.
     static func makeM17Link(
         settings: NodeSettings,
+        identity: OperatorIdentity,
         configuration: M17Client.Configuration = M17Client.Configuration()
     ) throws -> RadioLink {
         var configuration = configuration
@@ -307,7 +330,7 @@ final class CompositionRoot {
             host: settings.host,
             port: settings.port,
             module: module,
-            callsign: settings.callsign)
+            callsign: identity.callsign)
 
         var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
         let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -394,6 +417,7 @@ final class CompositionRoot {
     ///     leveller, the tool string, the node-answer timings.
     static func makeEchoLinkLink(
         settings: NodeSettings,
+        identity: OperatorIdentity,
         secret: String,
         configuration: EchoLinkClient.Configuration? = nil
     ) throws -> RadioLink {
@@ -419,10 +443,10 @@ final class CompositionRoot {
         }
 
         var configuration = configuration ?? EchoLinkClient.Configuration(
-            callsign: settings.callsign)
-        configuration.callsign = settings.callsign
-        configuration.operatorName = settings.operatorName
-        configuration.location = settings.location
+            callsign: identity.callsign)
+        configuration.callsign = identity.callsign
+        configuration.operatorName = identity.operatorName
+        configuration.location = identity.location
         configuration.transmitTimeout = watchdogTimeout(for: settings)
         configuration.accountPassword = accountPassword
         configuration.directoryServer = directoryServer
@@ -509,14 +533,16 @@ final class CompositionRoot {
     ///
     /// The one place the app turns a mode into a concrete client, and the
     /// reason ``RadioLink`` stopped being generic — see its doc comment.
-    static func makeLink(settings: NodeSettings, secret: String) throws -> RadioLink {
+    static func makeLink(settings: NodeSettings, identity: OperatorIdentity, secret: String)
+        throws -> RadioLink
+    {
         switch settings.mode {
         case .allStarLink:
-            return makeIAX2Link(settings: settings, secret: secret)
+            return makeIAX2Link(settings: settings, identity: identity, secret: secret)
         case .m17:
-            return try makeM17Link(settings: settings)
+            return try makeM17Link(settings: settings, identity: identity)
         case .echoLink:
-            return try makeEchoLinkLink(settings: settings, secret: secret)
+            return try makeEchoLinkLink(settings: settings, identity: identity, secret: secret)
         }
     }
 }
@@ -726,11 +752,11 @@ struct EchoLinkStationDirectory: StationDirectory {
         self.resolver = resolver
     }
 
-    func stations(for settings: NodeSettings, accountPassword: String) async throws
-        -> [DirectoryStation]
-    {
+    func stations(
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+    ) async throws -> [DirectoryStation] {
         if let missing = StationBrowser.whatIsMissing(
-            in: settings, accountPassword: accountPassword)
+            in: settings, identity: identity, accountPassword: accountPassword)
         {
             throw missing
         }
@@ -743,9 +769,9 @@ struct EchoLinkStationDirectory: StationDirectory {
             throw StationDirectoryError.missingDirectoryServer
         }
 
-        var configuration = EchoLinkClient.Configuration(callsign: settings.callsign)
-        configuration.operatorName = settings.operatorName
-        configuration.location = settings.location
+        var configuration = EchoLinkClient.Configuration(callsign: identity.callsign)
+        configuration.operatorName = identity.operatorName
+        configuration.location = identity.location
         configuration.accountPassword = EchoLinkAccountPassword(accountPassword)
         configuration.directoryServer = directoryServer
 

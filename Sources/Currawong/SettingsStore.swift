@@ -29,6 +29,22 @@ protocol SettingsStore: AnyObject, Sendable {
     /// if the one that was has since been deleted.
     func loadSelectedChannelID() -> UUID?
     func saveSelectedChannelID(_ id: UUID?)
+
+    /// The operator — callsign, name and location — which is app-wide rather
+    /// than per channel.
+    ///
+    /// `nil` means none has ever been saved *under its own key* — which is the
+    /// signal to go looking for one in the channels written before the callsign
+    /// was hoisted out of them. See
+    /// ``UserDefaultsSettingsStore/loadIdentity()``.
+    func loadIdentity() -> OperatorIdentity?
+    func saveIdentity(_ identity: OperatorIdentity)
+
+    /// Software gain on the transmit path. App-wide: it compensates for this
+    /// device and this voice, not for where the audio is going. `nil` if the
+    /// operator has never set one.
+    func loadTransmitGain() -> TransmitGain?
+    func saveTransmitGain(_ gain: TransmitGain)
 }
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
@@ -50,6 +66,8 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let key = "au.charlesmartin.currawong.nodeSettings"
     private static let channelsKey = "au.charlesmartin.currawong.channels"
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
+    private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
+    private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
 
     private let defaults: UserDefaults
 
@@ -88,6 +106,96 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
             return
         }
         defaults.set(id.uuidString, forKey: Self.selectedKey)
+    }
+
+    /// The app-wide callsign, harvesting one from older per-channel settings if
+    /// this is the first launch since the callsign was hoisted out of them.
+    ///
+    /// **Why this reads raw JSON.** `NodeSettings` no longer has a `callsign`
+    /// property, so decoding a stored channel throws the old value away — which
+    /// is the correct behaviour for that type and the wrong behaviour exactly
+    /// once, on the launch after the update. Rather than keep a vestigial field
+    /// on `NodeSettings` for the benefit of a one-off, the migration reads the
+    /// stored blobs as dictionaries and takes the first non-empty callsign it
+    /// finds. The alternative is an operator who has to work out why the app
+    /// suddenly will not let them transmit.
+    ///
+    /// Channels first, then the pre-APP-4 single node, which is the order they
+    /// were written in. Nothing is written back here: saving is
+    /// ``saveIdentity(_:)``'s job and the session does it once the value has
+    /// been through `OperatorIdentity.validated()`.
+    func loadIdentity() -> OperatorIdentity? {
+        if let data = defaults.data(forKey: Self.identityKey),
+            let identity = try? JSONDecoder().decode(OperatorIdentity.self, from: data)
+        {
+            return identity
+        }
+
+        let blobs =
+            Self.storedChannelBlobs(defaults: defaults)
+            + [Self.storedNodeBlob(defaults: defaults)].compactMap { $0 }
+
+        let harvested = OperatorIdentity(
+            callsign: Self.firstNonEmpty("callsign", in: blobs) ?? "",
+            operatorName: Self.firstNonEmpty("operatorName", in: blobs) ?? "",
+            location: Self.firstNonEmpty("location", in: blobs) ?? "")
+
+        // A callsign is what makes it an identity worth having. Name and
+        // location are optional everywhere else and are optional here too, so
+        // an install that had neither is simply not migrated.
+        return harvested.callsign.isEmpty ? nil : harvested
+    }
+
+    func saveIdentity(_ identity: OperatorIdentity) {
+        guard let data = try? JSONEncoder().encode(identity) else { return }
+        defaults.set(data, forKey: Self.identityKey)
+    }
+
+    /// Stored as a bare number rather than as JSON: it is one scalar, and
+    /// `object(forKey:)` distinguishes "never set" from "set to zero", which
+    /// `double(forKey:)` alone would not — and zero is a meaningful setting.
+    func loadTransmitGain() -> TransmitGain? {
+        guard defaults.object(forKey: Self.transmitGainKey) != nil else { return nil }
+        return TransmitGain(decibels: defaults.double(forKey: Self.transmitGainKey))
+    }
+
+    func saveTransmitGain(_ gain: TransmitGain) {
+        defaults.set(gain.decibels, forKey: Self.transmitGainKey)
+    }
+
+    /// The first non-empty value of `key` across the stored blobs.
+    ///
+    /// Each field is harvested independently rather than all three being taken
+    /// from whichever channel had a callsign. They are three facts about one
+    /// person, so mixing their sources cannot produce a wrong person — whereas
+    /// insisting they come from one channel would silently drop a name the
+    /// operator had only ever filled in on their second channel.
+    /// Trimmed, and whitespace-only counts as absent. The blobs being read here
+    /// are pre-hoist channels, whose fields were never put through
+    /// `validated()` unless that channel had been connected with — so a
+    /// callsign of three spaces is a thing they can genuinely contain. Adopting
+    /// it would make it the operator's app-wide identity, which then reads as a
+    /// filled-in field that fails validation the first time they press Connect.
+    private static func firstNonEmpty(_ key: String, in blobs: [[String: Any]]) -> String? {
+        blobs.lazy
+            .compactMap { ($0[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    /// Channels first, then the pre-APP-4 single node: the order they were
+    /// written in, so the newer answer wins.
+    private static func storedChannelBlobs(defaults: UserDefaults) -> [[String: Any]] {
+        guard let data = defaults.data(forKey: channelsKey),
+            let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return array
+    }
+
+    private static func storedNodeBlob(defaults: UserDefaults) -> [String: Any]? {
+        guard let data = defaults.data(forKey: key),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return object
     }
 }
 

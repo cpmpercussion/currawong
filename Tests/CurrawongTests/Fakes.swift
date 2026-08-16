@@ -372,17 +372,62 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var stored: NodeSettings?
     private var storedChannels: [NodeSettings]?
     private var storedSelectedID: UUID?
+    private var storedIdentity: OperatorIdentity?
+    private var storedGain: TransmitGain?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
 
     init(
         initial: NodeSettings? = nil,
         channels: [NodeSettings]? = nil,
-        selectedID: UUID? = nil
+        selectedID: UUID? = nil,
+        identity: OperatorIdentity? = nil,
+        gain: TransmitGain? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
         self.storedSelectedID = selectedID
+        self.storedIdentity = identity
+        self.storedGain = gain
+    }
+
+    func loadIdentity() -> OperatorIdentity? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedIdentity
+    }
+
+    func saveIdentity(_ identity: OperatorIdentity) {
+        lock.lock()
+        storedIdentity = identity
+        lock.unlock()
+    }
+
+    func loadTransmitGain() -> TransmitGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedGain
+    }
+
+    func saveTransmitGain(_ gain: TransmitGain) {
+        lock.lock()
+        storedGain = gain
+        lock.unlock()
+    }
+
+    /// What ``saveTransmitGain(_:)`` last wrote.
+    var savedTransmitGain: TransmitGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedGain
+    }
+
+    /// What ``saveIdentity(_:)`` last wrote, for the tests about when the
+    /// callsign is persisted.
+    var savedIdentity: OperatorIdentity? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedIdentity
     }
 
     func load() -> NodeSettings? {
@@ -506,6 +551,10 @@ final class SessionHarness {
     /// name to an address on the way, for one.
     private(set) var settingsSeen: [NodeSettings] = []
 
+    /// The identity each link was built with, so a test can prove the app-wide
+    /// callsign — and not a stale per-channel one — is what reached the library.
+    private(set) var identitiesSeen: [OperatorIdentity] = []
+
     /// Bumped by the link's `close` callback, which is `@Sendable` and may run
     /// off the main actor, so it counts through a lock rather than a property.
     let closedLinks = Counter()
@@ -549,8 +598,7 @@ final class SessionHarness {
         host: "node.example.org",
         port: 4569,
         node: "55553",
-        username: "vk1xyz",
-        callsign: "VK1XYZ")
+        username: "vk1xyz")
 
     /// A second channel that also validates, for the tests about switching
     /// between them.
@@ -559,8 +607,7 @@ final class SessionHarness {
         host: "other.example.org",
         port: 4569,
         node: "12345",
-        username: "vk1abc",
-        callsign: "VK1ABC")
+        username: "vk1abc")
 
     /// An EchoLink channel that validates, for the tests about a mode whose
     /// secret account is shared between channels.
@@ -571,20 +618,20 @@ final class SessionHarness {
         port: 8100,
         node: "*ECHOTEST*",
         peer: "13.57.14.183",
-        directoryServer: "192.0.2.1",
-        operatorName: "Charles",
-        location: "Canberra",
-        callsign: "VK1XYZ")
+        directoryServer: "192.0.2.1")
 
     init(
         settings: NodeSettings? = SessionHarness.goodSettings,
         channels: [NodeSettings]? = nil,
         selectedID: UUID? = nil,
         secrets: [String: String] = [:],
-        resolver: any HostResolver = FakeHostResolver()
+        resolver: any HostResolver = FakeHostResolver(),
+        identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ"),
+        gain: TransmitGain? = nil
     ) {
         self.settingsStore = InMemorySettingsStore(
-            initial: settings, channels: channels, selectedID: selectedID)
+            initial: settings, channels: channels, selectedID: selectedID, identity: identity,
+            gain: gain)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks
@@ -592,10 +639,11 @@ final class SessionHarness {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { [unowned self] settings, secret in
+            makeLink: { [unowned self] settings, identity, secret in
                 if let error = self.makeLinkError { throw error }
                 self.linksMade += 1
                 self.settingsSeen.append(settings)
+                self.identitiesSeen.append(identity)
 
                 var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
                 let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -617,7 +665,7 @@ final class SessionHarness {
                     port: settings.port,
                     node: settings.node,
                     username: settings.username,
-                    callsign: settings.callsign,
+                    callsign: identity.callsign,
                     secret: secret)
                 return RadioLink(
                     // Reflects what was asked for, so a test can assert the

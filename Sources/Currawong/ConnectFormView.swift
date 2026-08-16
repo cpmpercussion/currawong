@@ -32,6 +32,11 @@ struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
+    /// The operator's callsign. **Not part of ``settings``** — it is app-wide,
+    /// so editing it here changes it for every channel, which is the intent.
+    /// See ``OperatorIdentity``.
+    @Binding var identity: OperatorIdentity
+
     let isEditable: Bool
     let connectTitle: String
     let isBusy: Bool
@@ -40,6 +45,10 @@ struct ConnectFormView: View {
     /// The public-proxy finder's state. Only read when the mode uses a proxy,
     /// which is EchoLink alone.
     @ObservedObject var proxyPicker: ProxyPicker
+
+    /// The node lookup's state. Only read in AllStarLink mode, which is the
+    /// only one with node numbers.
+    @ObservedObject var nodeLocator: NodeLocator
 
     @State private var portText = ""
     @State private var timeoutText = ""
@@ -56,6 +65,8 @@ struct ConnectFormView: View {
             // live, because it is the one that hangs up.
             fields
                 .disabled(!isEditable)
+
+            proxySourcingStatus
 
             Button(action: connectAction) {
                 HStack {
@@ -82,6 +93,51 @@ struct ConnectFormView: View {
         .onChange(of: timeoutText) { newValue in
             if let timeout = NodeSettings.parseTransmitTimeout(newValue) {
                 settings.transmitTimeout = timeout
+            }
+        }
+        // The port can now change without this form touching it: Connect and
+        // the Stations pane both source a proxy when the channel has none, and
+        // that writes a port. `portText` is only seeded in `onAppear`, so
+        // without this the field would go on showing the old number while the
+        // connection used the new one — and the *next* keystroke in it would
+        // write the stale value back over the proxy's.
+        //
+        // The guard is what stops the loop: `portText`'s own `onChange` writes
+        // `settings.port`, which lands back here.
+        .onChange(of: settings.port) { newPort in
+            if portText != String(newPort) { portText = String(newPort) }
+        }
+    }
+
+    /// What the Connect button is doing before it connects.
+    ///
+    /// The same two lines live in ``proxyFinderRow``, which is inside a
+    /// disclosure group that is collapsed on the common path — so on the path
+    /// that matters, pressing Connect with no proxy set, neither of them would
+    /// be seen. This is the copy that is always visible, and it is only drawn
+    /// while there is something to say.
+    @ViewBuilder
+    private var proxySourcingStatus: some View {
+        if settings.mode.usesProxy {
+            if proxyPicker.isSearching {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(
+                        proxyPicker.probedCount > 0
+                            ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                            : "Finding a public proxy…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("Stop") { proxyPicker.cancel() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            } else if let failure = proxyPicker.failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -138,151 +194,329 @@ struct ConnectFormView: View {
     private var fields: some View {
         VStack(alignment: .leading, spacing: 14) {
             modePicker
+            channelNameField
 
-            // The channel's own name. Optional, and the placeholder shows what
-            // the list will call it if it stays empty — so an operator can see
-            // the fallback is reasonable and skip the field, rather than
-            // wondering what an unnamed channel looks like.
-            LabelledField(label: "Channel name", systemImage: "tag") {
-                TextField(
-                    settings.displayName.isEmpty ? "New channel" : settings.displayName,
-                    text: $settings.name
-                )
-                .textFieldStyle(.roundedBorder)
+            // EchoLink asks for two or three times as much as the other modes,
+            // and most of it is infrastructure rather than a destination — so
+            // it gets an order of its own. See ``echoLinkFields``.
+            if settings.mode.usesProxy {
+                echoLinkFields
+            } else {
+                directFields
             }
 
-            Text(destinationHeading)
-                .font(.headline)
+            Divider()
 
-            // Same two fields, three meanings. In EchoLink these address the
-            // *proxy* — the node is reached only through the tunnel and is
-            // named further down — and mislabelling them is the fastest way to
-            // have someone type a node's address here and wait for a
-            // connection that was never going to arrive.
-            LabelledField(
-                label: settings.mode.usesProxy ? "Proxy host" : "Host", systemImage: "network"
-            ) {
-                TextField(
-                    settings.mode.usesProxy ? "proxy.example.org" : "node.example.org",
-                    text: $settings.host
-                )
+            safetyFields
+        }
+    }
+
+    /// The channel's own name. Optional, and the placeholder shows what the
+    /// list will call it if it stays empty — so an operator can see the
+    /// fallback is reasonable and skip the field, rather than wondering what an
+    /// unnamed channel looks like.
+    private var channelNameField: some View {
+        LabelledField(label: "Channel name", systemImage: "tag") {
+            TextField(
+                settings.displayName.isEmpty ? "New channel" : settings.displayName,
+                text: $settings.name
+            )
+            .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    /// **AllStarLink and M17.** Where to, then who we are. Both modes dial the
+    /// thing the operator is thinking of, so the destination comes first.
+    @ViewBuilder
+    private var directFields: some View {
+        Text(destinationHeading)
+            .font(.headline)
+
+        hostAndPortFields
+
+        if settings.mode.usesNodeNumber {
+            nodeNumberField
+            nodeLookupRow
+        }
+
+        if settings.mode.usesModule {
+            moduleField
+        }
+
+        Divider()
+
+        Text("You")
+            .font(.headline)
+
+        identityFields
+    }
+
+    /// **EchoLink.** Sign in, choose a station, and leave the plumbing alone.
+    ///
+    /// The other two modes ask for a destination and a callsign. EchoLink asks
+    /// for a proxy host, a proxy port, a proxy password, a node callsign, a node
+    /// address, a directory server, an account password, a name and a location —
+    /// and an operator meeting that form has no way to tell that six of the nine
+    /// are the same every time and two of them are filled in by pressing a
+    /// button.
+    ///
+    /// So it is ordered by *how often it changes* rather than by protocol layer:
+    ///
+    /// 1. **Your account.** Callsign and password. These are the operator, not
+    ///    the channel — the Keychain has always known that, filing an EchoLink
+    ///    secret under `echolink:<callsign>` and sharing it across every channel
+    ///    with that callsign — but the form used to present them last, below the
+    ///    plumbing, as though they were per-destination settings.
+    /// 2. **Where to.** The station, which is the only part that really varies,
+    ///    and which the Stations pane fills in.
+    /// 3. **How to get there.** The proxy and the directory server, folded away.
+    ///    A public proxy is found by pressing a button and the directory server
+    ///    has one sensible value, so this is a drawer to open when something is
+    ///    wrong rather than a form to fill in.
+    @ViewBuilder
+    private var echoLinkFields: some View {
+        Text("Your EchoLink account")
+            .font(.headline)
+
+        identityFields
+
+        Divider()
+
+        Text("Where to")
+            .font(.headline)
+
+        echoLinkNodeFields
+
+        Divider()
+
+        // Collapsed by default: on the common path the operator opens this
+        // never, and on the uncommon one they open it once. It is *not* hidden
+        // — a proxy that has gone away is diagnosed in here, and a drawer that
+        // cannot be found is the same as a missing field.
+        DisclosureGroup("Proxy and directory server") {
+            VStack(alignment: .leading, spacing: 14) {
+                proxyFinderRow
+                hostAndPortFields
+                proxyPasswordField
+                directoryServerField
+            }
+            .padding(.top, 10)
+        }
+        .font(.headline)
+    }
+
+    /// SF-1. Its own section in every mode, because the watchdog is the one
+    /// setting on this screen that exists to stop something bad rather than to
+    /// make something work.
+    @ViewBuilder
+    private var safetyFields: some View {
+        Text("Safety")
+            .font(.headline)
+
+        watchdogField
+    }
+
+    @ViewBuilder
+    private var hostAndPortFields: some View {
+        LabelledField(
+            label: settings.mode.usesProxy ? "Proxy host" : "Host", systemImage: "network"
+        ) {
+            TextField(
+                settings.mode.usesProxy ? "proxy.example.org" : "node.example.org",
+                text: $settings.host
+            )
+            .textFieldStyle(.roundedBorder)
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+            #endif
+            .autocorrectionDisabled()
+        }
+
+        LabelledField(
+            label: settings.mode.usesProxy ? "Proxy port" : "Port", systemImage: "number"
+        ) {
+            TextField(String(settings.mode.defaultPort), text: $portText)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .keyboardType(.numberPad)
+                #endif
+        }
+    }
+
+    @ViewBuilder
+    private var proxyPasswordField: some View {
+        LabelledField(label: "Proxy password", systemImage: "lock.open") {
+            // A plain TextField on purpose. `PUBLIC` is the literal a public
+            // proxy expects and is not a secret; hiding it behind dots would
+            // imply it is one, and would stop the operator seeing that it is
+            // still set correctly.
+            TextField(NodeSettings.defaultProxyPassword, text: $settings.proxyPassword)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
                 #endif
                 .autocorrectionDisabled()
-            }
+        }
 
-            if settings.mode.usesProxy {
-                proxyFinderRow
-            }
+        Text(
+            "Public proxies all use \(NodeSettings.defaultProxyPassword), which is not a secret "
+            + "and is stored with the channel. A private proxy's password would be stored the "
+            + "same way — less carefully than your account password.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 
-            LabelledField(
-                label: settings.mode.usesProxy ? "Proxy port" : "Port", systemImage: "number"
-            ) {
-                TextField(String(settings.mode.defaultPort), text: $portText)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .keyboardType(.numberPad)
-                    #endif
-            }
+    /// **AllStarLink.** The node to dial.
+    private var nodeNumberField: some View {
+        LabelledField(label: "Node number", systemImage: "antenna.radiowaves.left.and.right") {
+            TextField("55553", text: $settings.node)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                // A summary describing a node the operator has since typed over
+                // would sit there looking authoritative.
+                .onChange(of: settings.node) { _ in nodeLocator.clear() }
+        }
+    }
 
-            if settings.mode.usesProxy {
-                LabelledField(label: "Proxy password", systemImage: "lock.open") {
-                    // A plain TextField on purpose. `PUBLIC` is the literal a
-                    // public proxy expects and is not a secret; hiding it
-                    // behind dots would imply it is one, and would stop the
-                    // operator seeing that it is still set correctly.
-                    TextField(NodeSettings.defaultProxyPassword, text: $settings.proxyPassword)
-                        .textFieldStyle(.roundedBorder)
-                        #if os(iOS)
-                            .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
+    /// **AllStarLink.** Fill in the host by asking the directory rather than by
+    /// knowing it.
+    ///
+    /// A node number is what everybody quotes on the air; the address behind it
+    /// is not something an operator carries around, and for a node that
+    /// re-registers on a dynamic address it is not something they can carry
+    /// around. AllStarLink publishes the mapping, so the app asks.
+    ///
+    /// **The field stays editable.** A private node is not in the directory at
+    /// all and its owner gives you the address directly, so the lookup is an
+    /// offer rather than a gate.
+    @ViewBuilder
+    private var nodeLookupRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    nodeLocator.find(node: settings.node) { registration in
+                        settings.host = registration.host
+                        // Through `portText`, not `settings.port`: the port
+                        // field is bound to the text and its `onChange` writes
+                        // the number back, so setting the number directly would
+                        // be overwritten by the stale text. Same trap the proxy
+                        // finder documents.
+                        portText = String(registration.port)
+                    }
+                } label: {
+                    Label(
+                        nodeLocator.isSearching ? "Looking up…" : "Look up this node",
+                        systemImage: "magnifyingglass")
                 }
+                .buttonStyle(.bordered)
+                .disabled(
+                    nodeLocator.isSearching
+                        || settings.node.trimmingCharacters(in: .whitespaces).isEmpty)
 
-                Text(
-                    "Public proxies all use \(NodeSettings.defaultProxyPassword), which is not a "
-                    + "secret and is stored with the channel. A private proxy's password would be "
-                    + "stored the same way — less carefully than your account password below.")
+                if nodeLocator.isSearching {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if let found = nodeLocator.found {
+                Label(
+                    found.isActive
+                        ? found.summary
+                        : "\(found.summary) — the directory does not call it active",
+                    systemImage: found.isActive ? "checkmark.circle" : "exclamationmark.circle")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(found.isActive ? Color.green : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            // The three modes reach the far end differently: AllStarLink dials
-            // a node number, M17 links a module on a reflector, EchoLink names
-            // a station twice — once for the operator and once for the wire.
-            // Showing all of them would mean fields that quietly do nothing.
-            if settings.mode.usesNodeNumber {
-                LabelledField(
-                    label: "Node number", systemImage: "antenna.radiowaves.left.and.right"
-                ) {
-                    TextField("55553", text: $settings.node)
-                        .textFieldStyle(.roundedBorder)
-                        #if os(iOS)
-                            .keyboardType(.numbersAndPunctuation)
-                            .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
-                }
+            if let failure = nodeLocator.failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            if settings.mode.usesModule {
-                LabelledField(label: "Module", systemImage: "square.grid.2x2") {
-                    TextField("C", text: $settings.module)
-                        .textFieldStyle(.roundedBorder)
-                        #if os(iOS)
-                            .textInputAutocapitalization(.characters)
-                        #endif
-                        .autocorrectionDisabled()
-                }
-            }
-
-            if settings.mode.usesProxy {
-                echoLinkNodeFields
-            }
-
-            Divider()
-
-            Text("You")
-                .font(.headline)
-
-            LabelledField(label: "Callsign", systemImage: "person.wave.2") {
-                TextField("VK1XYZ", text: $settings.callsign)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .textInputAutocapitalization(.characters)
-                    #endif
-                    .autocorrectionDisabled()
-            }
-
-            identityFields
-
-            Divider()
-
-            Text("Safety")
-                .font(.headline)
-
-            LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
-                TextField(String(Int(NodeSettings.defaultTransmitTimeout)), text: $timeoutText)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .keyboardType(.numberPad)
-                    #endif
-            }
-
-            // SF-1 is enforced in the library, not here, and it is not
-            // optional — the field sets the number, it cannot switch the
-            // watchdog off. Worth saying, so nobody goes looking for the switch.
             Text(
-                "The longest a single transmission may last before Currawong unkeys for you. "
-                + "Between \(Int(NodeSettings.transmitTimeoutRange.lowerBound)) and "
-                + "\(Int(NodeSettings.transmitTimeoutRange.upperBound)) seconds; it cannot be "
-                + "turned off. A short value is the quickest way to prove the watchdog works.")
+                "AllStarLink publishes where each node last registered, so the host above can be "
+                + "filled in from the number. A private node is not listed — type its address by "
+                + "hand.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// **M17.** The module to link on the reflector.
+    @ViewBuilder
+    private var moduleField: some View {
+        LabelledField(label: "Module", systemImage: "square.grid.2x2") {
+            TextField("C", text: $settings.module)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .textInputAutocapitalization(.characters)
+                #endif
+                .autocorrectionDisabled()
+        }
+
+        // The host and module can both be typed, and an operator who knows a
+        // reflector should not be made to go somewhere else to enter it. But
+        // knowing one means having read a list on a website, so the pane that
+        // holds that list is named here rather than left to be discovered.
+        Text(
+            "A single letter — reflectors put different conversations on different modules. "
+            + "The Reflectors pane lists what is out there and fills both fields in for you.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var callsignField: some View {
+        LabelledField(label: "Callsign", systemImage: "person.wave.2") {
+            TextField("VK1XYZ", text: $identity.callsign)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .textInputAutocapitalization(.characters)
+                #endif
+                .autocorrectionDisabled()
+        }
+
+        // The one field on this form that is not about the channel. Said
+        // plainly, because an operator who changed it expecting to affect only
+        // the channel in front of them would be wrong in a way that matters:
+        // this is what identifies them on the air, everywhere.
+        Text("Your callsign, used on every channel and in every mode.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var watchdogField: some View {
+        LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
+            TextField(String(Int(NodeSettings.defaultTransmitTimeout)), text: $timeoutText)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .keyboardType(.numberPad)
+                #endif
+        }
+
+        // SF-1 is enforced in the library, not here, and it is not optional —
+        // the field sets the number, it cannot switch the watchdog off. Worth
+        // saying, so nobody goes looking for the switch.
+        Text(
+            "The longest a single transmission may last before Currawong unkeys for you. "
+            + "Between \(Int(NodeSettings.transmitTimeoutRange.lowerBound)) and "
+            + "\(Int(NodeSettings.transmitTimeoutRange.upperBound)) seconds; it cannot be "
+            + "turned off. A short value is the quickest way to prove the watchdog works.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// What the first block of fields is addressing. Three words for three
@@ -409,11 +643,21 @@ struct ConnectFormView: View {
 
         Text(
             "Four numbers separated by dots — a callsign or a host name will not work here. "
-            + "EchoLink addresses change as stations come and go, so use the station browser "
+            + "EchoLink addresses change as stations come and go, so use the Stations pane "
             + "rather than typing one from memory.")
             .font(.caption)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 
+    /// **EchoLink.** Which directory server to log in to.
+    ///
+    /// In the drawer with the proxy, because it is infrastructure and has one
+    /// right answer. It is filled in with that answer when the mode is chosen —
+    /// blank is a *legitimate* setting meaning "no directory login", and an
+    /// operator who has not decided is not asking for that.
+    @ViewBuilder
+    private var directoryServerField: some View {
         LabelledField(label: "Directory server", systemImage: "list.bullet.rectangle") {
             TextField(NodeSettings.defaultDirectoryServer, text: $settings.directoryServer)
                 .textFieldStyle(.roundedBorder)
@@ -424,31 +668,27 @@ struct ConnectFormView: View {
                 .autocorrectionDisabled()
         }
 
-        // The node address above says "a host name will not work here", which
-        // is true of *that* field and would otherwise read as true of this one.
+        // The node address says "a host name will not work here", which is true
+        // of *that* field and would otherwise read as true of this one.
         Text(
             "A host name or an address. \(NodeSettings.defaultDirectoryServer) answers with the "
             + "whole pool and is the one to use unless you have a reason not to.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-
-        // Worth its own sentence: skipping the directory login is the failure
-        // where every step reports success and no call ever arrives, because
-        // registering is what makes the station reachable at all.
-        Text(
-            "An IP address again. This is what lists you as available and what the station "
-            + "browser reads. Leave it empty and everything will appear to work while nobody "
-            + "can call you.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
     }
 
     /// Who we are to the far end — which is a different question in each mode,
     /// and in two of the three involves a password that must not be confused
     /// with the other one on this screen.
+    ///
+    /// The callsign leads, in every mode. It is the one field on this form that
+    /// is about the operator rather than about the destination, and in EchoLink
+    /// it is also the account name.
     @ViewBuilder
     private var identityFields: some View {
+        callsignField
+
         switch settings.mode {
         case .allStarLink:
             LabelledField(label: "Username", systemImage: "person") {
@@ -490,26 +730,50 @@ struct ConnectFormView: View {
             // Two passwords on one screen is a trap, so it is named rather than
             // left to position: this is the one EchoLink issued with the
             // callsign, and it is the one the directory server checks.
+            //
+            // The consequence is spelled out because it is the failure where
+            // every step reports success and no call ever arrives: registering
+            // is what makes the station reachable at all. That sentence used to
+            // sit further up the form, orphaned from any field it described.
             Text(
                 "This is your EchoLink account password — the one issued with your callsign — "
-                + "and not the proxy password above. The directory server will not list "
-                + "stations, or register you, without it.")
+                + "and not the proxy password. Without it the directory server will not list "
+                + "stations or register you, and nobody can call you.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Said out loud because the storage has always worked this way and
+            // the form never admitted it: an EchoLink secret is filed under
+            // `echolink:<callsign>`, so it is shared by every EchoLink channel
+            // with that callsign. An operator who thought it was per-channel
+            // would be surprised twice — once when a new channel already knew
+            // their password, and once when changing it here changed it
+            // everywhere.
+            Text("Entered once: every EchoLink channel with this callsign uses the same account.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             LabelledField(label: "Operator name", systemImage: "person") {
-                TextField("optional", text: $settings.operatorName)
+                TextField("optional", text: $identity.operatorName)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
             }
 
             LabelledField(label: "Location", systemImage: "mappin.and.ellipse") {
-                TextField("Canberra", text: $settings.location)
+                TextField("Canberra", text: $identity.location)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
             }
 
-            Text("Both are shown to the far end and in the directory listing. Both may be empty.")
+            // App-wide like the callsign, and for the same reason — they are
+            // facts about the operator. Only EchoLink transmits them, so only
+            // this form offers them, but what they edit is the one stored value
+            // rather than a field of this channel.
+            Text(
+                "Both are shown to the far end and in the directory listing, and both may be "
+                + "empty. Like your callsign, they are yours rather than this channel's.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -59,6 +59,8 @@ struct SessionPane: View {
 
             StatusPanel(session: session)
 
+            LevelMetersView(session: session)
+
             PushToTalkButton(
                 isEnabled: session.connection.isConnected,
                 isTransmitting: session.isTransmitting,

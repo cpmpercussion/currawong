@@ -93,19 +93,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// being empty is a much bigger deal than an empty optional usually is.
     var directoryServer: String
 
-    /// **EchoLink.** The operator's name, shown to the far end beside the
-    /// callsign. May be empty.
-    var operatorName: String
-
-    /// **EchoLink.** A short location string for the directory listing — a town
-    /// or a three-letter airport code. May be empty.
-    var location: String
-
     /// The account the node authenticates us as. May be empty.
     var username: String
-
-    /// The operator's callsign, sent as the calling name.
-    var callsign: String
 
     /// **SF-1.** How long one transmission may last before the library's
     /// watchdog unkeys, in seconds.
@@ -165,10 +154,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         peer: String = "",
         proxyPassword: String = NodeSettings.defaultProxyPassword,
         directoryServer: String = "",
-        operatorName: String = "",
-        location: String = "",
         username: String = "",
-        callsign: String = "",
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
         self.id = id
@@ -181,10 +167,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.peer = peer
         self.proxyPassword = proxyPassword
         self.directoryServer = directoryServer
-        self.operatorName = operatorName
-        self.location = location
         self.username = username
-        self.callsign = callsign
         self.transmitTimeout = transmitTimeout
     }
 
@@ -232,10 +215,13 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             ?? Self.defaultProxyPassword
         self.directoryServer =
             try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
-        self.operatorName = try container.decodeIfPresent(String.self, forKey: .operatorName) ?? ""
-        self.location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
-        self.callsign = try container.decode(String.self, forKey: .callsign)
+        // `callsign`, `operatorName` and `location` may be present in a blob
+        // written before they became app-wide. They are deliberately not read
+        // here: the type no longer has those fields, and an unknown key in a
+        // keyed container is ignored. `UserDefaultsSettingsStore.loadIdentity()`
+        // is what harvests them, once, so that an operator updating the app
+        // does not have to retype them.
         self.transmitTimeout =
             try container.decodeIfPresent(TimeInterval.self, forKey: .transmitTimeout)
             ?? Self.defaultTransmitTimeout
@@ -256,14 +242,57 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// host must not be mistaken for an authenticated AllStarLink connection to
     /// the same host. Its dialled target is a module letter rather than a node
     /// number, and the prefix makes the two unmistakable.
-    var secretAccount: String {
+    /// Takes the identity rather than reading a stored callsign, since the
+    /// callsign is the operator's and no longer the channel's — but the account
+    /// *strings* are unchanged, so every secret already in the Keychain is still
+    /// found under the same name.
+    ///
+    /// **``OperatorIdentity/normalisedCallsign``, not `callsign`.** The identity
+    /// is stored as typed and only uppercased at `connect()`, so the two paths
+    /// disagreed: the secret was *written* under the validated `VK1XYZ` and, on
+    /// the next launch, *read* back under whatever had been typed. A callsign
+    /// entered in lower case therefore lost its password every relaunch — the
+    /// field came up empty, which reads as the app having forgotten it.
+    /// Normalising here fixes the read without moving anything: what is already
+    /// in the Keychain was written in this form.
+    func secretAccount(for identity: OperatorIdentity) -> String {
         switch mode {
         case .allStarLink:
             return "\(username)@\(host):\(port)/\(node)"
         case .m17:
-            return "m17:\(callsign)@\(host):\(port)/\(module)"
+            return "m17:\(identity.normalisedCallsign)@\(host):\(port)/\(module)"
         case .echoLink:
-            return "echolink:\(callsign)"
+            return "echolink:\(identity.normalisedCallsign)"
+        }
+    }
+
+    /// Whether two channels point at the same place on the same network.
+    ///
+    /// Identity, name and the operator's own preferences are excluded: a
+    /// channel renamed "Sunday net" is still the same reflector module, and
+    /// offering to save it a second time under a different name is how a
+    /// channel list fills up with entries an operator cannot tell apart.
+    ///
+    /// Compared per mode, because the fields that name a destination differ:
+    /// AllStarLink dials a node number at a host, M17 links a module on a
+    /// reflector, and EchoLink tunnels to a literal address — where the
+    /// *address* decides who answers, so two entries with one callsign and
+    /// different addresses are genuinely two places.
+    func isSamePlace(as other: NodeSettings) -> Bool {
+        guard mode == other.mode else { return false }
+
+        let sameEndpoint =
+            host.caseInsensitiveCompare(other.host) == .orderedSame && port == other.port
+
+        switch mode {
+        case .allStarLink:
+            return sameEndpoint && node.trimmed == other.node.trimmed
+        case .m17:
+            return sameEndpoint
+                && module.trimmed.uppercased() == other.module.trimmed.uppercased()
+        case .echoLink:
+            return peer.trimmed == other.peer.trimmed
+                && node.trimmed.uppercased() == other.node.trimmed.uppercased()
         }
     }
 
@@ -271,7 +300,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     enum ValidationError: Error, Equatable, CustomStringConvertible {
         case missingHost
         case missingNode
-        case missingCallsign
         case missingModule
         case invalidModule
         case missingPeerAddress
@@ -296,8 +324,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
                 return "Enter the node's host name or address."
             case .missingNode:
                 return "Enter the node number to call."
-            case .missingCallsign:
-                return "Enter your callsign. Transmitting without identifying is not legal anywhere."
             case .missingModule:
                 return "Enter the reflector module to link, a single letter A-Z."
             case .invalidModule:
@@ -310,8 +336,9 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     ///
     /// `username` and the secret are *not* required: a node with no account
     /// configured expects neither, and the library omits empty fields rather
-    /// than sending blank ones. `callsign` is required in both modes, because
-    /// unidentified transmission is not a thing this app is going to make easy.
+    /// than sending blank ones. The callsign is required, but it is no longer
+    /// here to check — see ``OperatorIdentity/validated()``, which
+    /// `RadioSession.connect()` calls alongside this.
     ///
     /// Which of ``node`` and ``module`` is insisted on is the mode's business,
     /// per `RadioMode.usesNodeNumber` and `RadioMode.usesModule` — demanding
@@ -330,14 +357,10 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             proxyPassword: proxyPassword.trimmed.isEmpty
                 ? Self.defaultProxyPassword : proxyPassword.trimmed,
             directoryServer: directoryServer.trimmed,
-            operatorName: operatorName.trimmed,
-            location: location.trimmed,
             username: username.trimmed,
-            callsign: callsign.trimmed.uppercased(),
             transmitTimeout: transmitTimeout)
 
         guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
-        guard !trimmed.callsign.isEmpty else { throw ValidationError.missingCallsign }
 
         if mode.usesNodeNumber {
             guard !trimmed.node.isEmpty else { throw ValidationError.missingNode }

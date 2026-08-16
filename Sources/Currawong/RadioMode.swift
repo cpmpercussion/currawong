@@ -44,9 +44,7 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
     /// ``isValidatedOnAir``.
     case m17
 
-    /// EchoLink through a proxy, GSM 06.10 audio. Validated on air by the
-    /// library's CLI harness (Milestone M3, 2026-08-13) but never yet from this
-    /// app — see ``unvalidatedWarning``.
+    /// EchoLink through a proxy, GSM 06.10 audio. Validated on air.
     case echoLink
 
     var id: String { rawValue }
@@ -79,13 +77,15 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
 
     /// Whether this mode's stack has ever carried a real conversation.
     ///
-    /// **This is not decoration.** AllStarLink has carried a two-way
-    /// conversation through this stack, and so has EchoLink — through the
-    /// library's CLI rather than through this app, but the protocol code is the
-    /// same code. M17 has never been transmitted to a reflector by anyone, and
-    /// its decoded audio has never been listened to. An operator picking M17 is
-    /// the first person to try it, and the UI says so rather than presenting
-    /// three equal choices.
+    /// **This is not decoration.** AllStarLink and EchoLink have both carried a
+    /// two-way conversation through this protocol code. M17 has never been
+    /// transmitted to a reflector by anyone, and its decoded audio has never
+    /// been listened to. An operator picking M17 is the first person to try it,
+    /// and the UI says so rather than presenting three equal choices.
+    ///
+    /// The threshold is *this stack has worked on air*, not *this stack has
+    /// worked from this app* — which QSO ran through which harness is
+    /// development history, and belongs in the plan rather than on screen.
     var isValidatedOnAir: Bool {
         switch self {
         case .allStarLink, .echoLink: return true
@@ -96,24 +96,36 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
     /// Shown beside the picker when there is something the operator should know
     /// before trusting the mode.
     ///
-    /// Two different kinds of caveat, deliberately not flattened into one: M17
-    /// has never worked anywhere, and EchoLink has worked but not from here.
-    /// Telling an operator "unproven" about a mode that carried a QSO yesterday
-    /// would train them to ignore the warning that matters.
+    /// **One warning, on the one mode that has never worked.** An earlier
+    /// version also cautioned that EchoLink had only ever been driven from the
+    /// command-line harness, which was a note about the state of the project
+    /// rather than about the radio: it told the operator nothing they could act
+    /// on, and a caution on two modes out of three is a caution nobody reads.
+    /// M17 keeps its warning because "nobody has heard how this sounds" is a
+    /// fact about what is about to go out over the air.
     var unvalidatedWarning: String? {
         switch self {
-        case .allStarLink:
+        case .allStarLink, .echoLink:
             return nil
         case .m17:
             return """
-                M17 has never been transmitted to a real reflector. It may not work \
-                at all, and if it does, nobody has yet heard how it sounds.
+                Experimental. M17 has never been transmitted to a real reflector — \
+                it may not work, and nobody has yet heard how it sounds.
                 """
-        case .echoLink:
-            return """
-                EchoLink has carried a live QSO through the command-line harness, \
-                but never yet from this app.
-                """
+        }
+    }
+
+    /// Whether this mode has somewhere to browse for a destination.
+    ///
+    /// EchoLink has the directory listing, which is the only way to turn a
+    /// callsign into an address. M17 has the published reflector list, which is
+    /// a convenience rather than a necessity. AllStarLink has neither yet — its
+    /// node numbers resolve through a lookup rather than a list, which is a
+    /// different shape of thing and does not want a pane.
+    var hasDirectory: Bool {
+        switch self {
+        case .echoLink, .m17: return true
+        case .allStarLink: return false
         }
     }
 

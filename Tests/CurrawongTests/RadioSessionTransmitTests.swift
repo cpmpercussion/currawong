@@ -325,6 +325,70 @@ final class RadioSessionTransmitTests: XCTestCase {
             "the tap must be gone, so there is nothing left to produce a frame")
     }
 
+    /// The gain is applied on the way to the wire, not just on the meter.
+    func testTheTransmitGainIsAppliedToWhatIsSent() async {
+        let harness = SessionHarness()
+        harness.session.transmitGain = TransmitGain(decibels: 6)
+        await harness.connect()
+        await harness.keyDown()
+
+        harness.audio.produceFrame(Array(repeating: Int16(1000), count: 160))
+
+        let sent = try? XCTUnwrap(harness.client.sentFrames.first)
+        XCTAssertEqual(sent?.first ?? 0, 1995, accuracy: 5, "+6 dB doubles it")
+    }
+
+    /// **The gain applies to the transmission in progress.** It was snapshotted
+    /// at key-down at first, on the reasoning that a mid-over change is audible
+    /// as a swell. That reasoning lost to a simpler one once the slider moved
+    /// next to the meter: an operator watching the bar while they speak and
+    /// dragging the control directly beneath it will conclude the control is
+    /// broken, and a swell they caused deliberately is not a defect.
+    func testChangingTheGainAppliesToTheOverInProgress() async {
+        let harness = SessionHarness()
+        await harness.connect()
+        await harness.keyDown()
+
+        harness.audio.produceFrame(Array(repeating: Int16(1000), count: 160))
+        harness.session.transmitGain = TransmitGain(decibels: 6)
+        harness.audio.produceFrame(Array(repeating: Int16(1000), count: 160))
+
+        XCTAssertEqual(harness.client.sentFrames.first?.first, 1000, "before the change")
+        XCTAssertEqual(
+            Double(harness.client.sentFrames.last?.first ?? 0), 1995, accuracy: 5,
+            "after it, without waiting for the next over")
+    }
+
+    /// The meter reads what left, so an operator setting a gain against it is
+    /// looking at the thing the gain changes.
+    func testTheTransmitMeterSeesWhatWasSent() async {
+        let harness = SessionHarness()
+        await harness.connect()
+        await harness.keyDown()
+
+        XCTAssertEqual(harness.session.transmitMeter.decibels, AudioLevelMeter.floorDB)
+
+        harness.audio.produceFrame(Array(repeating: Int16.max / 2, count: 160))
+
+        XCTAssertEqual(harness.session.transmitMeter.decibels, -6, accuracy: 0.1)
+    }
+
+    /// Persisted on change: an operator who finds their level and loses it on
+    /// relaunch has not been helped.
+    func testChangingTheGainStoresIt() {
+        let harness = SessionHarness()
+
+        harness.session.transmitGain = TransmitGain(decibels: 9)
+
+        XCTAssertEqual(harness.settingsStore.savedTransmitGain?.decibels, 9)
+    }
+
+    func testTheStoredGainIsLoadedAtInit() {
+        let harness = SessionHarness(gain: TransmitGain(decibels: 15))
+
+        XCTAssertEqual(harness.session.transmitGain.decibels, 15)
+    }
+
     // MARK: Failing to key
 
     func testAMicrophoneFailureFailsClosedAndIsReported() async {

@@ -12,6 +12,8 @@ import XCTest
 /// type. That property is what `RadioLink` gave up its generic parameter for,
 /// and it is what these tests pin.
 final class RadioModeTests: XCTestCase {
+    /// The operator. App-wide now, rather than a settings field.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
 
     // MARK: - The mode itself
 
@@ -45,20 +47,24 @@ final class RadioModeTests: XCTestCase {
             RadioMode.m17.unvalidatedWarning,
             "M17 must carry a warning until somebody has actually used it on air")
 
-        // EchoLink carried a live QSO through the library's CLI harness (M3,
-        // 2026-08-13), so it is validated — but not yet *from this app*, which
-        // is a different caveat and gets its own sentence rather than being
-        // flattened into M17's.
+        // EchoLink carried a live QSO on air (M3, 2026-08-13), so it is
+        // validated and carries no warning. It used to carry one saying the QSO
+        // had run through the CLI rather than this app — development history,
+        // not something an operator could act on, and a warning on two modes out
+        // of three is a warning nobody reads.
         XCTAssertTrue(RadioMode.echoLink.isValidatedOnAir)
-        XCTAssertNotNil(RadioMode.echoLink.unvalidatedWarning)
+        XCTAssertNil(RadioMode.echoLink.unvalidatedWarning)
     }
 
-    /// The two warnings say different things on purpose. Telling an operator
-    /// "unproven" about a mode that carried a QSO would train them to ignore
-    /// the warning that matters.
-    func testTheTwoCaveatsAreNotTheSameSentence() {
-        XCTAssertNotEqual(
-            RadioMode.m17.unvalidatedWarning, RadioMode.echoLink.unvalidatedWarning)
+    /// M17's warning is the only one, and it has to say the thing that matters:
+    /// that nobody has heard this mode on the air. A warning that degenerated
+    /// into a vague "experimental" would leave the operator no better informed.
+    func testTheM17WarningNamesWhatIsUnproven() throws {
+        let warning = try XCTUnwrap(RadioMode.m17.unvalidatedWarning)
+        XCTAssertTrue(
+            warning.contains("reflector"),
+            "the warning must name what has never happened, not just flag the mode")
+        XCTAssertTrue(warning.contains("sounds"))
     }
 
     func testTheModesAskForDifferentThings() {
@@ -105,12 +111,12 @@ final class RadioModeTests: XCTestCase {
     private func allStarSettings() -> NodeSettings {
         NodeSettings(
             host: "node.example.org", port: 4569, node: "55553",
-            username: "vk1xyz", callsign: "VK1XYZ")
+            username: "vk1xyz")
     }
 
     private func m17Settings() -> NodeSettings {
         var settings = NodeSettings(
-            host: "reflector.example.org", port: 17000, callsign: "VK1XYZ")
+            host: "reflector.example.org", port: 17000)
         settings.mode = .m17
         settings.module = "C"
         return settings
@@ -123,22 +129,20 @@ final class RadioModeTests: XCTestCase {
             port: 8100,
             node: "*ECHOTEST*",
             peer: "13.57.14.183",
-            directoryServer: "192.0.2.1",
-            callsign: "VK1XYZ")
+            directoryServer: "192.0.2.1")
     }
 
     @MainActor
     func testTheFactoryDispatchesOnTheModeInTheSettings() throws {
-        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2")
+        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2")
         defer { allStar.close() }
         XCTAssertEqual(allStar.mode, .allStarLink)
 
-        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), secret: "")
+        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: "")
         defer { m17.close() }
         XCTAssertEqual(m17.mode, .m17)
 
-        let echoLink = try CompositionRoot.makeLink(
-            settings: echoLinkSettings(), secret: "account-password")
+        let echoLink = try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password")
         defer { echoLink.close() }
         XCTAssertEqual(echoLink.mode, .echoLink)
     }
@@ -150,9 +154,9 @@ final class RadioModeTests: XCTestCase {
     @MainActor
     func testAllThreeModesProduceTheSameKindOfLink() throws {
         let links: [RadioLink] = [
-            try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2"),
-            try CompositionRoot.makeLink(settings: m17Settings(), secret: ""),
-            try CompositionRoot.makeLink(settings: echoLinkSettings(), secret: ""),
+            try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2"),
+            try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: ""),
+            try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: ""),
         ]
         defer { links.forEach { $0.close() } }
 
@@ -166,7 +170,7 @@ final class RadioModeTests: XCTestCase {
     /// lazily inside connect (AU-5).
     @MainActor
     func testBuildingAnM17LinkConnectsNothing() async throws {
-        let link = try CompositionRoot.makeM17Link(settings: m17Settings())
+        let link = try CompositionRoot.makeM17Link(settings: m17Settings(), identity: vk1xyz)
         defer { link.close() }
 
         XCTAssertEqual(link.transmitState(), .idle)
@@ -181,7 +185,7 @@ final class RadioModeTests: XCTestCase {
     /// backstop rather than the first line of defence.
     @MainActor
     func testM17RefusesDTMFRatherThanSwallowingIt() async throws {
-        let link = try CompositionRoot.makeM17Link(settings: m17Settings())
+        let link = try CompositionRoot.makeM17Link(settings: m17Settings(), identity: vk1xyz)
         defer { link.close() }
 
         do {
@@ -199,7 +203,7 @@ final class RadioModeTests: XCTestCase {
         var settings = m17Settings()
         settings.module = "CC"
 
-        XCTAssertThrowsError(try CompositionRoot.makeM17Link(settings: settings)) { error in
+        XCTAssertThrowsError(try CompositionRoot.makeM17Link(settings: settings, identity: vk1xyz)) { error in
             XCTAssertEqual(error as? M17LinkError, .invalidModule("CC"))
         }
     }

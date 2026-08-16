@@ -9,8 +9,10 @@ import SwiftUI
 /// proxy tunnels four literal octets, so `*ECHOTEST*` is not something the app
 /// can dial; the directory listing is the only thing that turns a callsign into
 /// an address, and this is the view over it. Tapping a station therefore does
-/// not connect — it **saves a channel** already filled in with the address,
-/// which is the piece the operator could not have typed.
+/// not connect — it **fills in the connect screen** with the address, which is
+/// the piece the operator could not have typed, and takes you there. Nothing is
+/// saved until the connection succeeds; browsing six thousand entries should
+/// not leave six thousand channels behind.
 ///
 /// ## It does not fetch on appear, on purpose
 ///
@@ -28,11 +30,22 @@ struct StationBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: StationBrowser
 
-    /// Adding a channel is refused while a link is up, by `RadioSession`. The
-    /// browser itself stays usable — reading the directory mid-call is only a
-    /// second proxy session, and looking up who is on is a reasonable thing to
-    /// do — but the button that would save one says why it cannot.
-    private var canSaveChannel: Bool { session.connection == .disconnected }
+    /// The public-proxy finder. Here because a listing is read *through* a
+    /// proxy, so Refresh is one of the two moments a proxy is needed — see
+    /// ``ProxyPicker/sourceProxyIfNeeded(for:apply:)``. Its state is shown in
+    /// ``status`` as well, because from this pane the search is a step of the
+    /// refresh rather than something happening on another screen.
+    @ObservedObject var proxyPicker: ProxyPicker
+
+    /// Called after a station is chosen, so the container can show the connect
+    /// screen.
+    var onChosen: () -> Void = {}
+
+    /// Repointing the draft is refused while a link is up, by `RadioSession`.
+    /// The browser itself stays usable — reading the directory mid-call is only
+    /// a second proxy session, and looking up who is on is a reasonable thing
+    /// to do — but the button that would choose one says why it cannot.
+    private var canChoose: Bool { session.connection == .disconnected }
 
     /// Wall-clock time only. A directory listing that is a day old is a
     /// different kind of wrong from one that is ten minutes old, and the date
@@ -73,12 +86,33 @@ struct StationBrowserView: View {
             }
 
             Button {
-                browser.load(for: session.settings, accountPassword: session.secret)
+                Task { await refresh() }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .disabled(browser.isLoading)
+            .disabled(browser.isLoading || proxyPicker.isSearching)
         }
+    }
+
+    /// Source a proxy if the channel has not got one, then read the directory.
+    ///
+    /// The two steps are one button because they are one intention. A listing
+    /// travels through a proxy, so an operator who has just added an EchoLink
+    /// channel and pressed Refresh needs one — and being told to go to another
+    /// pane, open a drawer and press a different button first is a detour
+    /// through information they cannot act on. `settings` is read again after
+    /// the await: the proxy was written into it while we were waiting.
+    private func refresh() async {
+        guard
+            await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
+                session.settings.host = candidate.host
+                session.settings.port = candidate.port
+            })
+        else { return }
+
+        browser.load(
+            for: session.settings, identity: session.identity,
+            accountPassword: session.secret)
     }
 
     private var searchField: some View {
@@ -100,6 +134,34 @@ struct StationBrowserView: View {
     /// operator needs to know the rows they are looking at are the old ones.
     @ViewBuilder
     private var status: some View {
+        // Ahead of the fetch's own spinner, because it happens first and the
+        // two are steps of one press. Without this the pane sits still for the
+        // second or two the probing takes and Refresh looks like it missed.
+        if proxyPicker.isSearching {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(
+                    proxyPicker.probedCount > 0
+                        ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                        : "Finding a public proxy…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Cancel") { proxyPicker.cancel() }
+                    .buttonStyle(.bordered)
+            }
+        }
+
+        // The picker's failure, not the browser's: when no proxy could be
+        // found there was never a fetch to fail, and "they were all busy" is
+        // the thing to say rather than "enter the proxy's host name".
+        if let failure = proxyPicker.failure, !proxyPicker.isSearching {
+            Label(failure, systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
         if browser.isLoading {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -119,8 +181,8 @@ struct StationBrowserView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        if !canSaveChannel {
-            Text("Disconnect before saving a station as a channel.")
+        if !canChoose {
+            Text("Disconnect before choosing a different station.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -137,9 +199,9 @@ struct StationBrowserView: View {
 
             if browser.search.isEmpty {
                 Text(
-                    "Refresh reads the EchoLink directory using the current channel's proxy, "
-                    + "directory server and account password. All three have to be filled in on "
-                    + "the connect form first, and the channel has to be an EchoLink one.")
+                    "Refresh reads the EchoLink directory. It needs your callsign and account "
+                    + "password from the connect form, and the channel has to be an EchoLink "
+                    + "one; if the channel has no proxy yet, Refresh finds a public one first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -158,26 +220,29 @@ struct StationBrowserView: View {
         List(browser.visibleStations) { station in
             StationRow(
                 station: station,
-                canSaveChannel: canSaveChannel,
-                saveChannel: {
-                    session.addChannel(station.channel(basedOn: session.settings))
+                canChoose: canChoose,
+                choose: {
+                    guard session.chooseChannel(station.channel(basedOn: session.settings))
+                    else { return }
+                    onChosen()
                 })
         }
         .listStyle(.plain)
-        .frame(minHeight: 200)
+        // A floor, not a size; see the same frame in `ReflectorBrowserView`.
+        .frame(minHeight: 140)
     }
 }
 
 /// One station, and the button that turns it into somewhere to go.
 ///
-/// The button is labelled "Save as channel" rather than carrying the whole row,
-/// because tapping a row in a list of six thousand entries reads as "open this"
-/// and what actually happens is a new saved channel appearing in another pane.
-/// Naming the effect is cheaper than explaining it afterwards.
+/// The button carries the label rather than the whole row, because tapping a
+/// row in a list of six thousand entries reads as "open this" — and what
+/// happens is that another pane changes. Naming the effect is cheaper than
+/// explaining it afterwards.
 private struct StationRow: View {
     let station: DirectoryStation
-    let canSaveChannel: Bool
-    let saveChannel: () -> Void
+    let canChoose: Bool
+    let choose: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -231,13 +296,13 @@ private struct StationRow: View {
 
             Spacer(minLength: 0)
 
-            Button(action: saveChannel) {
-                Label("Save as channel", systemImage: "plus.circle")
+            Button(action: choose) {
+                Label("Use this station", systemImage: "arrow.right.circle")
                     .labelStyle(.titleAndIcon)
                     .font(.caption)
             }
             .buttonStyle(.bordered)
-            .disabled(!canSaveChannel || !station.hasDialableAddress)
+            .disabled(!canChoose || !station.hasDialableAddress)
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .contain)

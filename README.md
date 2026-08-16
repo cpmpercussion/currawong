@@ -38,6 +38,39 @@ address, so the directory listing is how a node is found: browse, search, and
 save a station as a channel ready to connect. It opens a directory-only session
 that contacts no node and transmits nothing.
 
+**Reflector chooser (M17).** The same idea for a milder problem: M17 host names
+are stable and can be typed, but a hundred and twenty-five reflectors across
+twenty countries is not something to remember. The list is the host file the
+M17 Project publishes at
+[`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json) — the
+underlying data is DVRef's, used under CC BY 4.0 and credited in the pane — and
+the module is what you actually pick, since a reflector without one is
+nowhere. Multiprotocol URF reflectors are included but
+marked, and only their M17 and transcoding modules are offered; linking a DMR
+module from here would be a connection that fails or, worse, succeeds into
+silence. Unlike the station browser it fetches on first appearance, because a
+static JSON file inconveniences nobody where seizing a single-user proxy does.
+
+**Node lookup (AllStarLink).** A node number is what gets quoted on the air; the
+address behind it is not something anyone carries around, and for a node on a
+dynamic address it cannot be. AllStarLink publishes where each node last
+registered, so the connect form asks: type the number, press Look up, and the
+host fills itself in. A private node is not listed and the field stays
+editable — the lookup is an offer, not a gate.
+
+**Level meters and microphone gain.** Peak meters for transmit and receive,
+scaled in dB with the good/hot/clipping zones marked, because "am I too quiet?"
+is otherwise a question only a stranger on the air can answer. iOS does not let
+an app change the microphone's own level (`inputGain` is not settable on the
+built-in mic), so the gain control scales the captured samples instead — 0 to
++30 dB, hard-limited so a loud syllable flat-tops rather than wrapping to a
+click. The slider sits with the meters rather than on the connect form, because
+the gain belongs to the phone and not to any channel, and because the form locks
+its fields while a link is up — which is the only time you can tell what to set
+it to. It applies to the transmission in progress. Fixed gain rather than an AGC: a compressor would also pump the room
+noise up between words, which on a repeater is antisocial in a way you cannot
+hear from your own end.
+
 **Connect screen and on-screen PTT (APP-2).** A connect/disconnect control and a
 press-and-hold PTT button (PT-1). Audio is wired both ways: the microphone into
 the client while transmitting, received audio into playback. Node secrets and
@@ -75,8 +108,13 @@ at all**, and they are not equally unproven: EchoLink's whole path — proxy
 login, directory login, a node answering, audio both ways — has run from the
 library's command-line harness, most recently on 2026-08-13, whereas M17 has
 only ever got a link up. Nobody has heard M17 audio through this stack in either
-direction. The app says so where an operator chooses a mode, rather than
-offering three that look alike.
+direction, and the app says so where an operator chooses a mode.
+
+EchoLink carries no such warning on screen. Which harness drove the QSO is a
+fact about the state of this project rather than about the radio — an operator
+can act on "nobody has heard how this sounds" and cannot act on "it worked from
+the CLI", and a caution on two modes out of three is a caution nobody reads.
+That distinction lives here instead.
 
 What remains of the bring-up — audio quality judged from the other end,
 sustained receive, the watchdog and the interruption path, all exercised on real

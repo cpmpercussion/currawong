@@ -94,13 +94,22 @@ protocol StationDirectory: Sendable {
     ///     The node fields are ignored: this opens a directory-only session and
     ///     never contacts a node.
     ///   - accountPassword: the operator's EchoLink account password.
-    func stations(for settings: NodeSettings, accountPassword: String) async throws
-        -> [DirectoryStation]
+    ///   - identity: the operator's callsign, which is who the directory server
+    ///     is asked to log in as.
+    func stations(
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+    ) async throws -> [DirectoryStation]
 }
 
 /// What can go wrong before the library is even asked.
 enum StationDirectoryError: Error, Equatable, CustomStringConvertible {
     case notEchoLink
+
+    /// The directory server logs us in *as* a callsign, so an anonymous browse
+    /// is not a thing that exists. Reported first, because the callsign is
+    /// app-wide and a missing one is wrong for every channel.
+    case missingCallsign
+
     case missingProxy
     case missingDirectoryServer
     case missingAccountPassword
@@ -109,6 +118,8 @@ enum StationDirectoryError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .notEchoLink:
             return "The station directory is an EchoLink thing; this channel is not an EchoLink channel."
+        case .missingCallsign:
+            return "Enter your callsign. The directory server logs you in as a station, not anonymously."
         case .missingProxy:
             return "Enter the proxy's host name or address. The directory is reached through it."
         case .missingDirectoryServer:
@@ -180,10 +191,12 @@ final class StationBrowser: ObservableObject {
 
     /// Fetches the listing. A second call while one is in flight replaces it —
     /// the operator has changed something and wants the new answer.
-    func load(for settings: NodeSettings, accountPassword: String) {
+    func load(for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String) {
         fetchTask?.cancel()
 
-        if let complaint = Self.whatIsMissing(in: settings, accountPassword: accountPassword) {
+        if let complaint = Self.whatIsMissing(
+            in: settings, identity: identity, accountPassword: accountPassword)
+        {
             stations = []
             failure = complaint.description
             isLoading = false
@@ -212,7 +225,7 @@ final class StationBrowser: ObservableObject {
 
             do {
                 let fetched = try await self.directory.stations(
-                    for: settings, accountPassword: accountPassword)
+                    for: settings, identity: identity, accountPassword: accountPassword)
                 guard !Task.isCancelled else { return }
                 self.stations = fetched
                 self.fetchedAt = self.now()
@@ -239,10 +252,13 @@ final class StationBrowser: ObservableObject {
     /// error that names none of them.
     /// `nonisolated` because the directory implementation checks it too, off the
     /// main actor, and one copy of the rule is the point.
-    nonisolated static func whatIsMissing(in settings: NodeSettings, accountPassword: String)
-        -> StationDirectoryError?
-    {
+    nonisolated static func whatIsMissing(
+        in settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+    ) -> StationDirectoryError? {
         guard settings.mode == .echoLink else { return .notEchoLink }
+        if identity.callsign.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .missingCallsign
+        }
         if settings.host.trimmingCharacters(in: .whitespaces).isEmpty { return .missingProxy }
         if settings.directoryServer.trimmingCharacters(in: .whitespaces).isEmpty {
             return .missingDirectoryServer

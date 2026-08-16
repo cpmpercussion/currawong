@@ -45,7 +45,9 @@ struct CurrawongApp: App {
             accessory: root.accessory,
             remoteCommand: root.remoteCommand,
             browser: root.stationBrowser,
-            proxyPicker: root.proxyPicker)
+            reflectorBrowser: root.reflectorBrowser,
+            proxyPicker: root.proxyPicker,
+            nodeLocator: root.nodeLocator)
             // The PTT input controllers, once, for the process. `RootView`
             // starts the session's own SF-3 observation itself — that is the
             // view's business and it should not depend on anybody

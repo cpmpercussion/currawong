@@ -22,6 +22,7 @@
 #   make test SIMULATOR='iPhone 16'
 #   make build DEVELOPMENT_TEAM=XXXXXXXXXX
 #   make build SIGNING='CODE_SIGNING_ALLOWED=NO'   # unsigned CI build
+#   make build PROVISIONING=''                     # never touch the network
 
 SCHEME       := Currawong
 PROJECT      := Currawong.xcodeproj
@@ -38,7 +39,19 @@ MACOS_DEST      := platform=macOS
 # Passed through to xcodebuild; empty by default. See the header.
 SIGNING ?=
 
-XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED_DATA) $(SIGNING)
+# The app carries one entitlement — the Keychain access group, without which
+# macOS refuses every write to the data protection keychain with "a required
+# entitlement isn't present". An entitlement means a provisioning profile, and
+# a profile that does not exist yet means Xcode has to fetch or create one,
+# which it will only do when asked. Without this flag a first build on a fresh
+# machine fails with "No profiles for 'au.charlesmartin.currawong' were found".
+#
+# It needs an Apple ID with the team in Xcode's accounts, and the network. A CI
+# build has neither and does not need either: `SIGNING='CODE_SIGNING_ALLOWED=NO'`
+# skips signing, and the flag is then inert.
+PROVISIONING ?= -allowProvisioningUpdates
+
+XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED_DATA) $(PROVISIONING) $(SIGNING)
 
 CODEC2 := Codec2.xcframework
 

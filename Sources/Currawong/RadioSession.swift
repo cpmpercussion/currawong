@@ -94,9 +94,15 @@ final class RadioSession: ObservableObject {
         var id: Kind { kind }
     }
 
-    /// How the composition root turns settings plus a secret into a link.
-    /// Throws, because building a destination can reject what was typed.
-    typealias LinkFactory = @MainActor (NodeSettings, String) throws -> RadioLink
+    /// How the composition root turns a destination, an operator and a secret
+    /// into a link. Throws, because building a destination can reject what was
+    /// typed.
+    ///
+    /// The identity is its own type rather than a third `String` so that it
+    /// cannot be swapped with the secret at a call site — see
+    /// ``OperatorIdentity``.
+    typealias LinkFactory =
+        @MainActor (NodeSettings, OperatorIdentity, String) throws -> RadioLink
 
     /// How long after the last inbound frame the receive indicator stays lit.
     /// Two and a half frames — long enough not to flicker on the 20 ms grid,
@@ -128,6 +134,43 @@ final class RadioSession: ObservableObject {
     /// The secret, in memory only. It reaches the Keychain in ``connect()``
     /// and `UserDefaults` never.
     @Published var secret: String
+
+    /// What the microphone is putting on the air, **after** ``transmitGain``.
+    /// Post-gain because that is the number the operator is trying to set, and
+    /// a meter reading the input while the gain changes what leaves would be
+    /// actively misleading.
+    ///
+    /// Not `@Published`: it is written fifty times a second from the audio
+    /// thread, and the views poll it instead. See ``AudioLevelMeter``.
+    let transmitMeter = AudioLevelMeter()
+
+    /// What is arriving from the far end.
+    let receiveMeter = AudioLevelMeter()
+
+    /// Software gain on captured audio (0 to +30 dB).
+    ///
+    /// App-wide rather than per channel, like the operator's identity: it
+    /// compensates for this device and this voice, not for where the audio is
+    /// going. Persisted on change, because an operator who finds their level
+    /// and then loses it on relaunch has not been helped.
+    @Published var transmitGain: TransmitGain {
+        didSet {
+            guard transmitGain != oldValue else { return }
+            // The box is what the audio thread reads, so this is what makes a
+            // slider drag audible in the same breath rather than the next one.
+            gainBox.gain = transmitGain
+            settingsStore.saveTransmitGain(transmitGain)
+        }
+    }
+
+    /// The gain as the capture tap sees it. See ``TransmitGainBox``.
+    private let gainBox = TransmitGainBox()
+
+    /// Who is operating. **App-wide, not per channel** — one callsign is used on
+    /// every network, so the connect form edits this rather than a field of the
+    /// selected channel. Persisted by ``connect()`` and ``saveDraft()`` the same
+    /// way the channel list is.
+    @Published var identity: OperatorIdentity
 
     @Published private(set) var connection: ConnectionStatus = .disconnected
 
@@ -165,6 +208,11 @@ final class RadioSession: ObservableObject {
     @Published private(set) var receivedDTMF: String = ""
 
     @Published private(set) var alert: OperatorAlert?
+
+    /// Alerts raised while another was already on screen, oldest first. Drained
+    /// by ``dismissAlert()``; see ``present(title:message:)`` for why this has
+    /// to exist rather than the newest simply winning.
+    private var pendingAlerts: [OperatorAlert] = []
 
     /// SF-1 / SF-3. Why the operator was unkeyed by something other than
     /// themselves.
@@ -243,7 +291,17 @@ final class RadioSession: ObservableObject {
         // which is the same thing the app did before it had a channel list.
         let current = loaded.selected ?? NodeSettings()
         self.settings = current
-        self.secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+
+        // Before the secret is fetched: for two of the three modes the Keychain
+        // account is derived from the callsign, so an identity loaded after this
+        // would look the secret up under `echolink:` with nothing after the
+        // colon and come back empty.
+        let identity = settingsStore.loadIdentity() ?? .empty
+        self.identity = identity
+        let storedGain = settingsStore.loadTransmitGain() ?? .unity
+        self.transmitGain = storedGain
+        self.gainBox.gain = storedGain
+        self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
     // MARK: - Channels (APP-4)
@@ -276,6 +334,12 @@ final class RadioSession: ObservableObject {
     func saveDraft() {
         channels.update(settings)
         persistChannels()
+
+        // The identity travels with the draft rather than only with a
+        // connection, so a callsign typed and then never connected with is
+        // still there on the next launch. Stored as typed — validation, and
+        // therefore uppercasing, happens at `connect()`.
+        settingsStore.saveIdentity(identity)
     }
 
     /// Adds a channel, selects it, and points the draft at it.
@@ -291,6 +355,48 @@ final class RadioSession: ObservableObject {
         loadSelectedIntoDraft()
         persistChannels()
         return channel.id
+    }
+
+    /// Points the draft at somewhere chosen from a directory, **without saving
+    /// it**.
+    ///
+    /// The difference from ``addChannel(_:)`` is the whole reason this exists.
+    /// Browsing a directory is looking around, and looking around should not
+    /// leave anything behind: an operator who taps six reflectors to read their
+    /// modules used to get six saved channels, and tapping the same one twice
+    /// got two. What saves a channel is ``connect()`` — the channel list then
+    /// means "places I have actually been", which is the only definition that
+    /// stays useful.
+    ///
+    /// Nothing here writes to the list. `ChannelSet.update` ignores an id it
+    /// does not hold, so ``saveDraft()`` on an unsaved draft is a no-op, and the
+    /// draft survives until it is either connected to or replaced.
+    ///
+    /// - Returns: whether the draft now points at `channel`. `false` means a
+    ///   link is up and nothing changed.
+    @discardableResult
+    func chooseChannel(_ channel: NodeSettings) -> Bool {
+        // Same rule as `select(_:)` and `addChannel(_:)`: changing where we are
+        // pointed mid-call would leave the form describing one place and the
+        // audio coming from another.
+        guard connection == .disconnected else { return false }
+
+        // The draft being replaced may be a real channel with unsaved edits.
+        saveDraft()
+
+        // Already in the list? Select it rather than making a second copy of
+        // it. Two channels for one module are indistinguishable in the list and
+        // an operator cannot tell which one they are editing.
+        if let existing = channels.channels.first(where: { $0.isSamePlace(as: channel) }) {
+            channels.select(existing.id)
+            loadSelectedIntoDraft()
+            persistChannels()
+            return true
+        }
+
+        settings = channel
+        secret = (try? secretStore.secret(for: channel.secretAccount(for: identity))) ?? ""
+        return true
     }
 
     /// Deletes a channel.
@@ -325,7 +431,7 @@ final class RadioSession: ObservableObject {
     private func loadSelectedIntoDraft() {
         let current = channels.selected ?? NodeSettings()
         settings = current
-        secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+        secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
     private func persistChannels() {
@@ -370,6 +476,27 @@ final class RadioSession: ObservableObject {
     func connect() async {
         guard connection == .disconnected else { return }
 
+        // Two validations, because there are now two things being validated:
+        // where we are going, and who we are. The identity goes first — it is
+        // app-wide, so a missing callsign is wrong for every channel rather
+        // than for this one, and reporting a channel problem first would send
+        // the operator to the wrong field.
+        let validatedIdentity: OperatorIdentity
+        do {
+            validatedIdentity = try identity.validated()
+        } catch let error as OperatorIdentity.ValidationError {
+            present(title: "Check your callsign", message: error.description)
+            return
+        } catch {
+            present(title: "Check your callsign", message: "\(error)")
+            return
+        }
+
+        // Written back so the field shows what was actually used — the
+        // uppercased, trimmed form that went on the air.
+        identity = validatedIdentity
+        settingsStore.saveIdentity(validatedIdentity)
+
         let validated: NodeSettings
         do {
             validated = try settings.validated()
@@ -398,7 +525,7 @@ final class RadioSession: ObservableObject {
         settingsStore.save(validated)
 
         do {
-            try secretStore.setSecret(secret, for: validated.secretAccount)
+            try secretStore.setSecret(secret, for: validated.secretAccount(for: validatedIdentity))
         } catch {
             // Not fatal: the connection can proceed with the secret held in
             // memory. Saying so is better than silently forgetting it.
@@ -462,7 +589,7 @@ final class RadioSession: ObservableObject {
 
         let newLink: RadioLink
         do {
-            newLink = try makeLink(resolved, secret)
+            newLink = try makeLink(resolved, validatedIdentity, secret)
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
@@ -608,7 +735,22 @@ final class RadioSession: ObservableObject {
         if transmitDesired {
             guard connection.isConnected, !isTransmitting else { return }
             do {
-                try audio.startCapture(onFrame: link.sendCapturedFrame)
+                // Gain, then meter, then the wire. The order is the point: the
+                // meter reports what actually leaves, so the operator is
+                // setting the gain against the thing it changes.
+                //
+                // This closure runs on the audio thread fifty times a second.
+                // Every step is bounded work on 160 samples with no awaits —
+                // see `TransmitGainBox`, `TransmitGain.apply(to:)` and
+                // `AudioLevelMeter.note(_:)`.
+                let gainBox = self.gainBox
+                let meter = transmitMeter
+                transmitMeter.reset()
+                try audio.startCapture { frame in
+                    let amplified = gainBox.gain.apply(to: frame)
+                    meter.note(amplified)
+                    link.sendCapturedFrame(amplified)
+                }
                 try await link.startTransmit()
             } catch {
                 // Fail closed: microphone shut, client unkeyed, button
@@ -779,6 +921,8 @@ final class RadioSession: ObservableObject {
         let stream = link.receivedAudio
         let audio = self.audio
         let window = Self.receiveActivityWindow
+        let meter = self.receiveMeter
+        meter.reset()
 
         // Detached: playback enqueue takes a lock and allocates, fifty times a
         // second, and none of that belongs on the main actor. Only the
@@ -787,6 +931,7 @@ final class RadioSession: ObservableObject {
             var lastNoted = Date.distantPast
             for await pcm in stream {
                 audio.enqueuePlayback(pcm)
+                meter.note(pcm)
                 let arrival = Date()
                 if arrival.timeIntervalSince(lastNoted) >= window / 2 {
                     lastNoted = arrival
@@ -866,16 +1011,41 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Alerts
 
+    /// Dismisses the alert on screen and shows the next one waiting, if any.
     func dismissAlert() {
-        alert = nil
+        alert = pendingAlerts.isEmpty ? nil : pendingAlerts.removeFirst()
     }
 
     func dismissSafetyNotice() {
         safetyNotice = nil
     }
 
+    /// Says something to the operator, behind whatever is already being said.
+    ///
+    /// **Queued rather than assigned, because one attempt can raise two.** The
+    /// view presents a single alert bound to ``alert``, and SwiftUI does not
+    /// re-present when the value behind a showing alert is replaced — so the
+    /// second message was dropped, and dismissing the first cleared it.
+    ///
+    /// That was not theoretical. `connect()` warns when the secret could not be
+    /// saved and then carries on, so a macOS build without the Keychain
+    /// entitlement showed "the secret was not stored" and swallowed whatever
+    /// the connection itself then failed with: the operator was told about the
+    /// harmless problem and left to guess at the real one.
+    ///
+    /// Duplicates are dropped. Retrying a connection that fails the same way
+    /// twice should not build a stack of identical alerts to dismiss one by
+    /// one — `OperatorAlert` compares on its words, not its id, for this.
     private func present(title: String, message: String) {
-        alert = OperatorAlert(title: title, message: message)
+        let next = OperatorAlert(title: title, message: message)
+
+        guard let showing = alert else {
+            alert = next
+            return
+        }
+
+        guard showing != next, !pendingAlerts.contains(next) else { return }
+        pendingAlerts.append(next)
     }
 
     // MARK: - Teardown

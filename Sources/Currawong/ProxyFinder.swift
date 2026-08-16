@@ -117,10 +117,11 @@ final class ProxyPicker: ObservableObject {
     @Published private(set) var failure: String?
 
     private let finder: ProxyFinder
-    private var searchTask: Task<Void, Never>?
+    private var searchTask: Task<ProxyCandidate?, Never>?
 
-    /// Bumped by every ``find(then:)`` so a superseded search can tell that it
-    /// is one — the same hazard, and the same guard, as `StationBrowser`.
+    /// Bumped by every search, however it was started, so a superseded one can
+    /// tell that it is — the same hazard, and the same guard, as
+    /// `StationBrowser`.
     private var generation = 0
 
     init(finder: ProxyFinder) {
@@ -133,6 +134,41 @@ final class ProxyPicker: ObservableObject {
     /// does not own the connect form's fields, and a picker that reached into
     /// them would be writing to a draft it cannot see the rest of.
     func find(then apply: @escaping @MainActor (ProxyCandidate) -> Void) {
+        beginSearch(apply: apply)
+    }
+
+    /// The same search, awaited.
+    ///
+    /// The button path above fires and forgets; ``sourceProxyIfNeeded`` has to
+    /// *wait*, because the thing it is finding a proxy for cannot start until
+    /// there is one. Both go through ``beginSearch(apply:)``, so a search
+    /// started either way is the same single search — same spinner, same probe
+    /// count, same cancellation — rather than a second one racing the first for
+    /// the same strangers' machines.
+    ///
+    /// - Returns: the proxy, or nil if none was found, the search failed, or it
+    ///   was superseded. In the failure case ``failure`` says why, which is
+    ///   what the caller should be showing rather than a message of its own.
+    @discardableResult
+    func findProxy() async -> ProxyCandidate? {
+        await beginSearch(apply: nil).value
+    }
+
+    /// The search itself, and the one place that touches the picker's state.
+    ///
+    /// **Everything up to `searchTask = task` happens synchronously**, before
+    /// this returns: the spinner going up is the caller's own effect, not
+    /// something that lands a hop later. ``find(then:)`` is called straight
+    /// from a button, and a picker that had not yet started when the press
+    /// returned would let a second press start a second search.
+    ///
+    /// `apply` runs *inside* the task, next to `chosen`, rather than being left
+    /// to the awaiting caller — so by the time the spinner comes down, the
+    /// proxy is already in the form.
+    @discardableResult
+    private func beginSearch(
+        apply: (@MainActor (ProxyCandidate) -> Void)?
+    ) -> Task<ProxyCandidate?, Never> {
         // Cancelled *and* waited for, below, before the new search opens
         // anything. Cancelling alone would leave the two overlapping for a
         // round trip, and a superseded search can be probing the very proxy the
@@ -149,15 +185,15 @@ final class ProxyPicker: ObservableObject {
         generation += 1
         let generation = generation
 
-        searchTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return ProxyCandidate?.none }
             defer { if self.generation == generation { self.isSearching = false } }
 
             // The cancelled search drops its sockets within a round trip — the
             // probe closes its transport even on the cancelled path — so this
             // is a short wait, and it is what keeps the two from probing at
-            // once. `Task<Void, Never>`, so awaiting it cannot throw.
-            await superseded?.value
+            // once. `Never` as the failure type, so awaiting it cannot throw.
+            _ = await superseded?.value
 
             do {
                 let candidate = try await self.finder.fastestProxy { probed in
@@ -168,16 +204,52 @@ final class ProxyPicker: ObservableObject {
                         self.probedCount = probed
                     }
                 }
-                guard !Task.isCancelled, self.generation == generation else { return }
+                guard !Task.isCancelled, self.generation == generation else { return nil }
                 self.chosen = candidate
-                apply(candidate)
+                apply?(candidate)
+                return candidate
             } catch is CancellationError {
-                return
+                return nil
             } catch {
-                guard !Task.isCancelled, self.generation == generation else { return }
+                guard !Task.isCancelled, self.generation == generation else { return nil }
                 self.failure = "\(error)"
+                return nil
             }
         }
+
+        searchTask = task
+        return task
+    }
+
+    /// Makes sure `settings` names a proxy before an operation that needs one,
+    /// finding a public one if it does not.
+    ///
+    /// A proxy is not a preference, it is plumbing: EchoLink cannot be reached
+    /// from a phone without one, and there is nothing an operator knows that
+    /// would let them fill the field in better than a probe can. So the two
+    /// places that need a proxy — reading the directory, and placing a call —
+    /// source one at the moment they need it rather than refusing and naming a
+    /// field. That is only true of an *empty* field: a proxy the operator typed
+    /// or the app already found is theirs, and repointing it silently under a
+    /// channel they had set up would be the worse surprise. Use "Find a public
+    /// proxy" in the connect form to replace one deliberately.
+    ///
+    /// - Parameter apply: writes the proxy into whatever holds the draft. As in
+    ///   ``find(then:)``, this type does not reach into the form itself.
+    /// - Returns: whether the caller may proceed — true when a proxy was
+    ///   already there or one was found, false when one was needed and the
+    ///   search came back empty. On false, ``failure`` says why.
+    func sourceProxyIfNeeded(
+        for settings: NodeSettings,
+        apply: @MainActor (ProxyCandidate) -> Void
+    ) async -> Bool {
+        guard settings.mode.usesProxy,
+            settings.host.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return true }
+
+        guard let candidate = await findProxy() else { return false }
+        apply(candidate)
+        return true
     }
 
     func cancel() {
