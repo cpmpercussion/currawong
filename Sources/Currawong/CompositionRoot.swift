@@ -121,6 +121,11 @@ final class CompositionRoot {
     /// app's network-backed pickers are assembled in one place.
     let reflectorBrowser: ReflectorBrowser
 
+    /// **AllStarLink.** The node-number lookup's state, over the public stats
+    /// API. Owned here so a round trip survives a pane being scrolled away
+    /// from, like the other three network-backed helpers.
+    let nodeLocator: NodeLocator
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
@@ -142,7 +147,8 @@ final class CompositionRoot {
         remoteCommand: RemoteCommandPTTController? = nil,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
-        reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory()
+        reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
+        nodeLookup: any NodeLookup = AllStarLinkNodeLookup()
     ) {
         let session = RadioSession(
             audio: audio,
@@ -175,6 +181,7 @@ final class CompositionRoot {
         self.stationBrowser = StationBrowser(directory: stationDirectory)
         self.proxyPicker = ProxyPicker(finder: proxyFinder)
         self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
+        self.nodeLocator = NodeLocator(lookup: nodeLookup)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.

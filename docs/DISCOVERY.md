@@ -120,11 +120,15 @@ API"), not a specification.
   `ReflectorBrowser` and `ReflectorBrowserView`, in the Reflectors pane. See the
   README. The parser handles both entry shapes and filters URF modules to the
   ones an M17 client can use.
-- **AllStarLink lookup — not started.** Not a browser but a *resolver*: the
-  operator types a node number, the app asks the stats API for `ipaddr`, and the
-  host field stops being something a human has to know. Should degrade to the
-  manual host field when the lookup fails or the node is private. Would also
-  give "is it keyed / who is it linked to" for free, later.
+- **AllStarLink lookup — done.** `NodeLookup`, `AllStarLinkNodeLookup` and
+  `NodeLocator`, as a button beside the node number on the connect form. A
+  resolver rather than a browser: an operator already knows the node number,
+  because that is what everybody quotes on the air, and what they do not know is
+  the address behind it. The host field stays editable, because a private node
+  is not in the directory at all and its owner hands out the address directly.
+  Three outcomes are distinguished, since the fix differs: no such node, listed
+  but never registered, and the directory unreachable. "Is it keyed / who is it
+  linked to" is in the same response and is not read yet.
 - **Open question for the maintainer — Web Transceiver.** Worth a plan row
   either way, even if the answer is "not now", so it is not rediscovered. Note
   it is library work and new protocol work, with its own clean-room question:

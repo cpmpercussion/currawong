@@ -51,6 +51,10 @@ struct ConnectFormView: View {
     /// which is EchoLink alone.
     @ObservedObject var proxyPicker: ProxyPicker
 
+    /// The node lookup's state. Only read in AllStarLink mode, which is the
+    /// only one with node numbers.
+    @ObservedObject var nodeLocator: NodeLocator
+
     @State private var portText = ""
     @State private var timeoutText = ""
 
@@ -190,6 +194,7 @@ struct ConnectFormView: View {
 
         if settings.mode.usesNodeNumber {
             nodeNumberField
+            nodeLookupRow
         }
 
         if settings.mode.usesModule {
@@ -373,6 +378,77 @@ struct ConnectFormView: View {
                     .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
+                // A summary describing a node the operator has since typed over
+                // would sit there looking authoritative.
+                .onChange(of: settings.node) { _ in nodeLocator.clear() }
+        }
+    }
+
+    /// **AllStarLink.** Fill in the host by asking the directory rather than by
+    /// knowing it.
+    ///
+    /// A node number is what everybody quotes on the air; the address behind it
+    /// is not something an operator carries around, and for a node that
+    /// re-registers on a dynamic address it is not something they can carry
+    /// around. AllStarLink publishes the mapping, so the app asks.
+    ///
+    /// **The field stays editable.** A private node is not in the directory at
+    /// all and its owner gives you the address directly, so the lookup is an
+    /// offer rather than a gate.
+    @ViewBuilder
+    private var nodeLookupRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    nodeLocator.find(node: settings.node) { registration in
+                        settings.host = registration.host
+                        // Through `portText`, not `settings.port`: the port
+                        // field is bound to the text and its `onChange` writes
+                        // the number back, so setting the number directly would
+                        // be overwritten by the stale text. Same trap the proxy
+                        // finder documents.
+                        portText = String(registration.port)
+                    }
+                } label: {
+                    Label(
+                        nodeLocator.isSearching ? "Looking up…" : "Look up this node",
+                        systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    nodeLocator.isSearching
+                        || settings.node.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                if nodeLocator.isSearching {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if let found = nodeLocator.found {
+                Label(
+                    found.isActive
+                        ? found.summary
+                        : "\(found.summary) — the directory does not call it active",
+                    systemImage: found.isActive ? "checkmark.circle" : "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(found.isActive ? Color.green : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let failure = nodeLocator.failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text(
+                "AllStarLink publishes where each node last registered, so the host above can be "
+                + "filled in from the number. A private node is not listed — type its address by "
+                + "hand.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

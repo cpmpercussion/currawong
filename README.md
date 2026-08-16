@@ -51,6 +51,23 @@ module from here would be a connection that fails or, worse, succeeds into
 silence. Unlike the station browser it fetches on first appearance, because a
 static JSON file inconveniences nobody where seizing a single-user proxy does.
 
+**Node lookup (AllStarLink).** A node number is what gets quoted on the air; the
+address behind it is not something anyone carries around, and for a node on a
+dynamic address it cannot be. AllStarLink publishes where each node last
+registered, so the connect form asks: type the number, press Look up, and the
+host fills itself in. A private node is not listed and the field stays
+editable — the lookup is an offer, not a gate.
+
+**Level meters and microphone gain.** Peak meters for transmit and receive,
+scaled in dB with the good/hot/clipping zones marked, because "am I too quiet?"
+is otherwise a question only a stranger on the air can answer. iOS does not let
+an app change the microphone's own level (`inputGain` is not settable on the
+built-in mic), so the gain control scales the captured samples instead — 0 to
++30 dB, hard-limited so a loud syllable flat-tops rather than wrapping to a
+click. Fixed gain rather than an AGC: a compressor would also pump the room
+noise up between words, which on a repeater is antisocial in a way you cannot
+hear from your own end.
+
 **Connect screen and on-screen PTT (APP-2).** A connect/disconnect control and a
 press-and-hold PTT button (PT-1). Audio is wired both ways: the microphone into
 the client while transmitting, received audio into playback. Node secrets and

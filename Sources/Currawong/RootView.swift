@@ -56,6 +56,7 @@ struct RootView: View {
     @ObservedObject var browser: StationBrowser
     @ObservedObject var reflectorBrowser: ReflectorBrowser
     @ObservedObject var proxyPicker: ProxyPicker
+    @ObservedObject var nodeLocator: NodeLocator
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -400,7 +401,8 @@ struct RootView: View {
             connectTitle: connectTitle,
             isBusy: session.connection.isBusy,
             connectAction: { Task { await session.toggleConnection() } },
-            proxyPicker: proxyPicker)
+            proxyPicker: proxyPicker,
+            nodeLocator: nodeLocator)
     }
 
     private var keypadPane: some View {
@@ -445,5 +447,6 @@ private extension View {
         remoteCommand: root.remoteCommand,
         browser: root.stationBrowser,
         reflectorBrowser: root.reflectorBrowser,
-        proxyPicker: root.proxyPicker)
+        proxyPicker: root.proxyPicker,
+        nodeLocator: root.nodeLocator)
 }
