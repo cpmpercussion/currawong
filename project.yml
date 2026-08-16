@@ -56,6 +56,8 @@ targets:
       - path: Sources/Currawong
         excludes:
           - Info.plist
+          # Consumed by the signing phase, not copied into the bundle.
+          - Currawong.entitlements
     dependencies:
       # The app depends on the library products only. It talks to IAX2Kit and
       # M17Kit through RadioCore's `NetworkClient`; the concrete `IAX2Client`
@@ -164,6 +166,11 @@ targets:
         # the SDK instead.
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
         "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
+
+        # The Keychain access group. Required on macOS for the data protection
+        # keychain `KeychainSecretStore` asks for, and a no-op restatement of
+        # the implicit group on iOS — see the comment in the file itself.
+        CODE_SIGN_ENTITLEMENTS: Sources/Currawong/Currawong.entitlements
     scheme:
       testTargets:
         - CurrawongTests

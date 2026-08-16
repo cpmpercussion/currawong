@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	The one entitlement this app asks for, and it exists because of macOS.
+
+	`KeychainSecretStore` sets `kSecUseDataProtectionKeychain` so that both
+	platforms get the same item semantics and no login-keychain prompt. On iOS
+	that keychain is the only one and an app is implicitly in the access group
+	named by its own application identifier, so it worked with no entitlements
+	file at all. On macOS the data protection keychain is opt-in, and opting in
+	without naming an access group fails every write with errSecMissingEntitlement
+	— "A required entitlement isn't present" — which the app reported as the
+	secret not being stored while the connection carried on.
+
+	The value is the implicit group: the team prefix and the bundle identifier,
+	which is what iOS was already using. So this grants nothing new — it says
+	out loud what was assumed — and needs no capability enabled on the app ID.
+	It is the group CLAUDE.md names, $(TeamID).au.charlesmartin.currawong.
+
+	Nothing else belongs here. In particular there is no App Sandbox — turning
+	it on would also grant a keychain group, but it would bring the network,
+	microphone and Bluetooth access this app is built on under separate
+	entitlements — and no multicast entitlement, which PD-3 forbids.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)au.charlesmartin.currawong</string>
+	</array>
+</dict>
+</plist>
