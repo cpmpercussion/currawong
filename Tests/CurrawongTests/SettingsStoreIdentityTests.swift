@@ -145,6 +145,36 @@ final class SettingsStoreIdentityTests: XCTestCase {
         XCTAssertEqual(store().loadIdentity(), OperatorIdentity(callsign: "VK1XYZ"))
     }
 
+    /// A pre-hoist channel was never put through `validated()` unless it had
+    /// been connected with, so a callsign of nothing but spaces is something
+    /// these blobs can really contain. Harvesting it would make it the
+    /// operator's app-wide identity: a field that looks filled in and fails
+    /// the moment they press Connect.
+    func testAWhitespaceOnlyCallsignIsNotHarvested() throws {
+        try writeRawChannels([
+            ["id": UUID().uuidString, "host": "a.example.org", "port": 4569,
+             "node": "1", "username": "", "callsign": "   "],
+            ["id": UUID().uuidString, "host": "b.example.org", "port": 4569,
+             "node": "2", "username": "", "callsign": "VK1XYZ"],
+        ])
+
+        XCTAssertEqual(store().loadIdentity(), OperatorIdentity(callsign: "VK1XYZ"))
+    }
+
+    /// And what is harvested arrives trimmed, rather than carrying whatever
+    /// spacing the old field happened to hold.
+    func testAHarvestedIdentityIsTrimmed() throws {
+        try writeRawChannels([
+            ["id": UUID().uuidString, "host": "a.example.org", "port": 4569,
+             "node": "1", "username": "", "callsign": " VK1XYZ ",
+             "operatorName": "  Charles ", "location": " Canberra "],
+        ])
+
+        XCTAssertEqual(
+            store().loadIdentity(),
+            OperatorIdentity(callsign: "VK1XYZ", operatorName: "Charles", location: "Canberra"))
+    }
+
     /// A saved identity is authoritative. Once the operator has one of their
     /// own, an old callsign still sitting in the stored channels must not
     /// override it — otherwise changing your callsign would not survive a

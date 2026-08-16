@@ -170,8 +170,16 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// person, so mixing their sources cannot produce a wrong person — whereas
     /// insisting they come from one channel would silently drop a name the
     /// operator had only ever filled in on their second channel.
+    /// Trimmed, and whitespace-only counts as absent. The blobs being read here
+    /// are pre-hoist channels, whose fields were never put through
+    /// `validated()` unless that channel had been connected with — so a
+    /// callsign of three spaces is a thing they can genuinely contain. Adopting
+    /// it would make it the operator's app-wide identity, which then reads as a
+    /// filled-in field that fails validation the first time they press Connect.
     private static func firstNonEmpty(_ key: String, in blobs: [[String: Any]]) -> String? {
-        blobs.lazy.compactMap { $0[key] as? String }.first { !$0.isEmpty }
+        blobs.lazy
+            .compactMap { ($0[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 
     /// Channels first, then the pre-APP-4 single node: the order they were
