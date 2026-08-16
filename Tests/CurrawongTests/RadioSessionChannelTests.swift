@@ -313,6 +313,101 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertNil(harness.session.alert, "saving a draft is not a validation gate")
     }
 
+    // MARK: - Choosing from a directory
+
+    /// **The bug this exists to prevent.** Browsing used to save a channel per
+    /// tap, so reading the modules on six reflectors left six channels behind
+    /// and tapping one twice left two copies of it.
+    func testChoosingFromADirectorySavesNothing() {
+        let harness = SessionHarness(settings: nil, channels: [], selectedID: nil)
+
+        let chosen = M17Reflector.fake(designator: "M17-432", host: "m17-432.example.org")
+            .channel(module: "H", basedOn: harness.session.settings)
+        XCTAssertTrue(harness.session.chooseChannel(chosen))
+
+        XCTAssertEqual(harness.session.settings.host, "m17-432.example.org")
+        XCTAssertEqual(harness.session.settings.module, "H")
+        XCTAssertTrue(
+            harness.session.channels.channels.isEmpty,
+            "looking around must not leave a channel behind")
+    }
+
+    /// Six taps, no channels. The draft simply follows the last one.
+    func testBrowsingSeveralReflectorsLeavesNothingBehind() {
+        let harness = SessionHarness(settings: nil, channels: [], selectedID: nil)
+
+        for letter in ["A", "B", "C", "D", "E", "H"] {
+            let reflector = M17Reflector.fake(designator: "M17-432")
+            harness.session.chooseChannel(
+                reflector.channel(module: letter, basedOn: harness.session.settings))
+        }
+
+        XCTAssertTrue(harness.session.channels.channels.isEmpty)
+        XCTAssertEqual(harness.session.settings.module, "H")
+    }
+
+    /// Connecting is what saves it — the channel list means "places I have
+    /// been", which is the definition that stays useful.
+    func testConnectingSavesTheChosenChannel() async {
+        let harness = SessionHarness(settings: nil, channels: [], selectedID: nil)
+        harness.session.chooseChannel(SessionHarness.goodSettings)
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.session.channels.channels.count, 1)
+        XCTAssertEqual(harness.settingsStore.savedChannels?.count, 1)
+    }
+
+    /// Choosing somewhere already saved selects it instead of making a second
+    /// copy. Two channels for one module are indistinguishable in the list.
+    func testChoosingSomewhereAlreadySavedSelectsItInstead() {
+        let saved = M17Reflector.fake(designator: "M17-432", host: "m17-432.example.org")
+            .channel(module: "H", basedOn: NodeSettings())
+        let other = SessionHarness.goodSettings
+        let harness = SessionHarness(
+            settings: nil, channels: [other, saved], selectedID: other.id)
+
+        // A fresh value for the same place: different id, different name.
+        var again = M17Reflector.fake(designator: "M17-432", host: "M17-432.example.org")
+            .channel(module: "h", basedOn: NodeSettings())
+        again.name = "Sunday net"
+
+        XCTAssertTrue(harness.session.chooseChannel(again))
+
+        XCTAssertEqual(harness.session.channels.channels.count, 2, "no second copy")
+        XCTAssertEqual(
+            harness.session.channels.selectedID, saved.id,
+            "the existing channel is selected, keeping its name and its id")
+        XCTAssertEqual(harness.session.settings.id, saved.id)
+    }
+
+    /// Repointing the draft mid-call would leave the form describing one place
+    /// and the audio coming from another — the rule `select(_:)` already has.
+    func testChoosingIsRefusedWhileConnected() async {
+        let harness = SessionHarness()
+        await harness.connect()
+
+        let before = harness.session.settings
+        XCTAssertFalse(harness.session.chooseChannel(SessionHarness.echoLinkSettings))
+        XCTAssertEqual(harness.session.settings, before)
+    }
+
+    /// Unsaved edits to a real channel must survive being pointed elsewhere.
+    func testChoosingKeepsUnsavedEditsToTheChannelItLeaves() {
+        let existing = SessionHarness.goodSettings
+        let harness = SessionHarness(
+            settings: nil, channels: [existing], selectedID: existing.id)
+        harness.session.settings.name = "Renamed"
+
+        harness.session.chooseChannel(
+            M17Reflector.fake(designator: "M17-432").channel(
+                module: "H", basedOn: NodeSettings()))
+
+        XCTAssertEqual(
+            harness.settingsStore.savedChannels?.first?.name, "Renamed",
+            "the channel being left keeps what was typed into it")
+    }
+
     func testReorderingIsPersisted() {
         let harness = SessionHarness(
             settings: nil, channels: [allStar, other, echo], selectedID: allStar.id)

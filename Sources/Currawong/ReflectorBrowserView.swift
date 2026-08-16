@@ -13,16 +13,23 @@ import SwiftUI
 /// hundred and twenty-five reflectors across twenty countries is not something
 /// to hold in your head.
 ///
-/// Tapping a module **saves a channel** rather than connecting, which is the
-/// same bargain the station browser strikes: the operator gets somewhere to go
-/// back to, and nothing goes on the air until they press the button that says
-/// it will.
+/// Tapping a module **fills in the connect screen and takes you to it**. It
+/// does not save a channel and it does not go on the air: browsing is looking
+/// around, and looking around should leave nothing behind. The channel is saved
+/// when the connection succeeds, so the list means "places I have been" rather
+/// than "reflectors I once tapped".
 struct ReflectorBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: ReflectorBrowser
 
-    /// Adding a channel is refused while a link is up, by `RadioSession`.
-    private var canSaveChannel: Bool { session.connection == .disconnected }
+    /// Called after a module is chosen, so the container can show the connect
+    /// screen. Choosing somewhere to go and then being left in the list reads
+    /// as nothing having happened — which is exactly what the operator reported
+    /// before this existed.
+    var onChosen: () -> Void = {}
+
+    /// Repointing the draft is refused while a link is up, by `RadioSession`.
+    private var canChoose: Bool { session.connection == .disconnected }
 
     private static let listedFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -108,8 +115,8 @@ struct ReflectorBrowserView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        if !canSaveChannel {
-            Text("Disconnect before saving a reflector as a channel.")
+        if !canChoose {
+            Text("Disconnect before choosing a different reflector.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -150,10 +157,13 @@ struct ReflectorBrowserView: View {
         List(browser.visibleReflectors) { reflector in
             ReflectorRow(
                 reflector: reflector,
-                canSaveChannel: canSaveChannel,
-                saveChannel: { module in
-                    session.addChannel(
-                        reflector.channel(module: module, basedOn: session.settings))
+                canChoose: canChoose,
+                choose: { module in
+                    guard
+                        session.chooseChannel(
+                            reflector.channel(module: module, basedOn: session.settings))
+                    else { return }
+                    onChosen()
                 })
         }
         .listStyle(.plain)
@@ -164,13 +174,13 @@ struct ReflectorBrowserView: View {
 /// One reflector, and its modules as the things you actually pick.
 ///
 /// The module is the choice, not the reflector: connecting to `M17-AUS` means
-/// nothing until you say which module, and an operator who saved a reflector
+/// nothing until you say which module, and an operator who chose a reflector
 /// and then had to go and find the module field has been made to do the work
 /// twice. So each module is its own button.
 private struct ReflectorRow: View {
     let reflector: M17Reflector
-    let canSaveChannel: Bool
-    let saveChannel: (String) -> Void
+    let canChoose: Bool
+    let choose: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -216,7 +226,7 @@ private struct ReflectorRow: View {
         FlowLayout(spacing: 6) {
             ForEach(reflector.modules) { module in
                 Button {
-                    saveChannel(module.letter)
+                    choose(module.letter)
                 } label: {
                     HStack(spacing: 4) {
                         Text(verbatim: module.letter)
@@ -229,9 +239,9 @@ private struct ReflectorRow: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(!canSaveChannel)
-                .accessibilityLabel("Save \(reflector.designator) module \(module.letter)")
-                .accessibilityHint("Adds a channel for this module")
+                .disabled(!canChoose)
+                .accessibilityLabel("Choose \(reflector.designator) module \(module.letter)")
+                .accessibilityHint("Fills in the connect screen for this module")
             }
         }
     }

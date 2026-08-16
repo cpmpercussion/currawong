@@ -115,6 +115,20 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// Whether this mode has somewhere to browse for a destination.
+    ///
+    /// EchoLink has the directory listing, which is the only way to turn a
+    /// callsign into an address. M17 has the published reflector list, which is
+    /// a convenience rather than a necessity. AllStarLink has neither yet — its
+    /// node numbers resolve through a lookup rather than a list, which is a
+    /// different shape of thing and does not want a pane.
+    var hasDirectory: Bool {
+        switch self {
+        case .echoLink, .m17: return true
+        case .allStarLink: return false
+        }
+    }
+
     /// Whether this mode dials a node number and authenticates.
     ///
     /// Drives which fields the connect form shows, and which of them

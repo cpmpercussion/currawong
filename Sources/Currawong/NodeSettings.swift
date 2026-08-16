@@ -257,6 +257,36 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// Whether two channels point at the same place on the same network.
+    ///
+    /// Identity, name and the operator's own preferences are excluded: a
+    /// channel renamed "Sunday net" is still the same reflector module, and
+    /// offering to save it a second time under a different name is how a
+    /// channel list fills up with entries an operator cannot tell apart.
+    ///
+    /// Compared per mode, because the fields that name a destination differ:
+    /// AllStarLink dials a node number at a host, M17 links a module on a
+    /// reflector, and EchoLink tunnels to a literal address — where the
+    /// *address* decides who answers, so two entries with one callsign and
+    /// different addresses are genuinely two places.
+    func isSamePlace(as other: NodeSettings) -> Bool {
+        guard mode == other.mode else { return false }
+
+        let sameEndpoint =
+            host.caseInsensitiveCompare(other.host) == .orderedSame && port == other.port
+
+        switch mode {
+        case .allStarLink:
+            return sameEndpoint && node.trimmed == other.node.trimmed
+        case .m17:
+            return sameEndpoint
+                && module.trimmed.uppercased() == other.module.trimmed.uppercased()
+        case .echoLink:
+            return peer.trimmed == other.peer.trimmed
+                && node.trimmed.uppercased() == other.node.trimmed.uppercased()
+        }
+    }
+
     /// What is wrong with a set of settings the operator has typed.
     enum ValidationError: Error, Equatable, CustomStringConvertible {
         case missingHost

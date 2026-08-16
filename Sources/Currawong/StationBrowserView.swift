@@ -9,8 +9,10 @@ import SwiftUI
 /// proxy tunnels four literal octets, so `*ECHOTEST*` is not something the app
 /// can dial; the directory listing is the only thing that turns a callsign into
 /// an address, and this is the view over it. Tapping a station therefore does
-/// not connect — it **saves a channel** already filled in with the address,
-/// which is the piece the operator could not have typed.
+/// not connect — it **fills in the connect screen** with the address, which is
+/// the piece the operator could not have typed, and takes you there. Nothing is
+/// saved until the connection succeeds; browsing six thousand entries should
+/// not leave six thousand channels behind.
 ///
 /// ## It does not fetch on appear, on purpose
 ///
@@ -28,11 +30,15 @@ struct StationBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: StationBrowser
 
-    /// Adding a channel is refused while a link is up, by `RadioSession`. The
-    /// browser itself stays usable — reading the directory mid-call is only a
-    /// second proxy session, and looking up who is on is a reasonable thing to
-    /// do — but the button that would save one says why it cannot.
-    private var canSaveChannel: Bool { session.connection == .disconnected }
+    /// Called after a station is chosen, so the container can show the connect
+    /// screen.
+    var onChosen: () -> Void = {}
+
+    /// Repointing the draft is refused while a link is up, by `RadioSession`.
+    /// The browser itself stays usable — reading the directory mid-call is only
+    /// a second proxy session, and looking up who is on is a reasonable thing
+    /// to do — but the button that would choose one says why it cannot.
+    private var canChoose: Bool { session.connection == .disconnected }
 
     /// Wall-clock time only. A directory listing that is a day old is a
     /// different kind of wrong from one that is ten minutes old, and the date
@@ -121,8 +127,8 @@ struct StationBrowserView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        if !canSaveChannel {
-            Text("Disconnect before saving a station as a channel.")
+        if !canChoose {
+            Text("Disconnect before choosing a different station.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -160,9 +166,11 @@ struct StationBrowserView: View {
         List(browser.visibleStations) { station in
             StationRow(
                 station: station,
-                canSaveChannel: canSaveChannel,
-                saveChannel: {
-                    session.addChannel(station.channel(basedOn: session.settings))
+                canChoose: canChoose,
+                choose: {
+                    guard session.chooseChannel(station.channel(basedOn: session.settings))
+                    else { return }
+                    onChosen()
                 })
         }
         .listStyle(.plain)
@@ -172,14 +180,14 @@ struct StationBrowserView: View {
 
 /// One station, and the button that turns it into somewhere to go.
 ///
-/// The button is labelled "Save as channel" rather than carrying the whole row,
-/// because tapping a row in a list of six thousand entries reads as "open this"
-/// and what actually happens is a new saved channel appearing in another pane.
-/// Naming the effect is cheaper than explaining it afterwards.
+/// The button carries the label rather than the whole row, because tapping a
+/// row in a list of six thousand entries reads as "open this" — and what
+/// happens is that another pane changes. Naming the effect is cheaper than
+/// explaining it afterwards.
 private struct StationRow: View {
     let station: DirectoryStation
-    let canSaveChannel: Bool
-    let saveChannel: () -> Void
+    let canChoose: Bool
+    let choose: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -233,13 +241,13 @@ private struct StationRow: View {
 
             Spacer(minLength: 0)
 
-            Button(action: saveChannel) {
-                Label("Save as channel", systemImage: "plus.circle")
+            Button(action: choose) {
+                Label("Use this station", systemImage: "arrow.right.circle")
                     .labelStyle(.titleAndIcon)
                     .font(.caption)
             }
             .buttonStyle(.bordered)
-            .disabled(!canSaveChannel || !station.hasDialableAddress)
+            .disabled(!canChoose || !station.hasDialableAddress)
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .contain)

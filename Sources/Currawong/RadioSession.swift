@@ -318,6 +318,48 @@ final class RadioSession: ObservableObject {
         return channel.id
     }
 
+    /// Points the draft at somewhere chosen from a directory, **without saving
+    /// it**.
+    ///
+    /// The difference from ``addChannel(_:)`` is the whole reason this exists.
+    /// Browsing a directory is looking around, and looking around should not
+    /// leave anything behind: an operator who taps six reflectors to read their
+    /// modules used to get six saved channels, and tapping the same one twice
+    /// got two. What saves a channel is ``connect()`` — the channel list then
+    /// means "places I have actually been", which is the only definition that
+    /// stays useful.
+    ///
+    /// Nothing here writes to the list. `ChannelSet.update` ignores an id it
+    /// does not hold, so ``saveDraft()`` on an unsaved draft is a no-op, and the
+    /// draft survives until it is either connected to or replaced.
+    ///
+    /// - Returns: whether the draft now points at `channel`. `false` means a
+    ///   link is up and nothing changed.
+    @discardableResult
+    func chooseChannel(_ channel: NodeSettings) -> Bool {
+        // Same rule as `select(_:)` and `addChannel(_:)`: changing where we are
+        // pointed mid-call would leave the form describing one place and the
+        // audio coming from another.
+        guard connection == .disconnected else { return false }
+
+        // The draft being replaced may be a real channel with unsaved edits.
+        saveDraft()
+
+        // Already in the list? Select it rather than making a second copy of
+        // it. Two channels for one module are indistinguishable in the list and
+        // an operator cannot tell which one they are editing.
+        if let existing = channels.channels.first(where: { $0.isSamePlace(as: channel) }) {
+            channels.select(existing.id)
+            loadSelectedIntoDraft()
+            persistChannels()
+            return true
+        }
+
+        settings = channel
+        secret = (try? secretStore.secret(for: channel.secretAccount(for: identity))) ?? ""
+        return true
+    }
+
     /// Deletes a channel.
     ///
     /// **The Keychain secret is left alone.** A deleted channel's secret is

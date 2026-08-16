@@ -69,6 +69,10 @@ struct RootView: View {
     /// only; the tab layout uses tabs for the same choice.
     @State private var detailPane: DetailPane = .connect
 
+    /// Which tab is showing. Compact layout only; the split layout uses
+    /// ``detailPane`` for the same choice.
+    @State private var selectedTab: Tab = .channels
+
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
     }
@@ -123,14 +127,22 @@ struct RootView: View {
 
     /// iPhone. Five tabs, two of which are mode-dependent.
     ///
-    /// No `selection` binding on purpose: the Keypad and Stations tabs come and
-    /// go with the mode, and a stored selection pointing at a tab that no longer
-    /// exists is a blank screen. Letting SwiftUI own the selection means the
-    /// worst case of changing mode is landing back on the first tab.
+    /// **There is a `selection` binding, and it needs a guard.** This used to
+    /// have none, on the grounds that the Keypad and directory tabs come and go
+    /// with the mode and a selection pointing at a departed tab is a blank
+    /// screen. That reasoning still holds — what changed is that choosing a
+    /// station or reflector now has to *take* the operator to the connect
+    /// screen, and a tab layout cannot be driven without a binding.
+    ///
+    /// So the hazard is handled rather than avoided: ``effectiveTab`` resolves
+    /// the stored selection against the tabs the current mode actually has, on
+    /// read, exactly as ``effectiveDetailPane`` does for the split layout. The
+    /// worst case of changing mode is still landing back on Channels.
     private var tabLayout: some View {
-        TabView {
+        TabView(selection: tabSelection) {
             channelsPane
                 .tabItem { Label("Channels", systemImage: "list.bullet") }
+                .tag(Tab.channels)
 
             // Leaving this tab while keyed releases the key — see the note on
             // the type. Documented rather than worked around.
@@ -140,6 +152,7 @@ struct RootView: View {
                     .paneColumn()
             }
             .tabItem { Label("Session", systemImage: "dot.radiowaves.left.and.right") }
+            .tag(Tab.session)
 
             if session.settings.mode.sendsDTMF {
                 ScrollView {
@@ -148,16 +161,26 @@ struct RootView: View {
                         .paneColumn()
                 }
                 .tabItem { Label("Keypad", systemImage: "square.grid.3x3") }
+                .tag(Tab.keypad)
             }
 
             if session.settings.mode == .echoLink {
-                StationBrowserView(session: session, browser: browser)
-                    .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+                StationBrowserView(
+                    session: session, browser: browser, onChosen: { selectedTab = .channels }
+                )
+                .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(Tab.directory)
             }
 
             if session.settings.mode == .m17 {
-                ReflectorBrowserView(session: session, browser: reflectorBrowser)
-                    .tabItem { Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted") }
+                ReflectorBrowserView(
+                    session: session, browser: reflectorBrowser,
+                    onChosen: { selectedTab = .channels }
+                )
+                .tabItem {
+                    Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .tag(Tab.directory)
             }
 
             AccessoryPane(
@@ -165,6 +188,32 @@ struct RootView: View {
                 remoteCommand: remoteCommand,
                 isTransmitting: false)
                 .tabItem { Label("Setup", systemImage: "gearshape") }
+                .tag(Tab.setup)
+        }
+    }
+
+    /// The tab layout's five destinations. The two directories share `directory`
+    /// because only one of them is ever present: they are the same slot filled
+    /// by whichever network the mode names.
+    private enum Tab: Hashable {
+        case channels, session, keypad, directory, setup
+    }
+
+    /// The stored selection, corrected against the tabs this mode has.
+    ///
+    /// Reading resolves; writing stores whatever was asked for. A mode change
+    /// can take the selected tab away, and correcting on read rather than in an
+    /// `onChange` means there is no frame in which the selection points at a
+    /// tab that is not there.
+    private var tabSelection: Binding<Tab> {
+        Binding(get: { effectiveTab }, set: { selectedTab = $0 })
+    }
+
+    private var effectiveTab: Tab {
+        switch selectedTab {
+        case .keypad where !session.settings.mode.sendsDTMF: return .channels
+        case .directory where !session.settings.mode.hasDirectory: return .channels
+        default: return selectedTab
         }
     }
 
@@ -267,9 +316,12 @@ struct RootView: View {
                     .paneColumn()
             }
         case .stations:
-            StationBrowserView(session: session, browser: browser)
+            StationBrowserView(
+                session: session, browser: browser, onChosen: { detailPane = .connect })
         case .reflectors:
-            ReflectorBrowserView(session: session, browser: reflectorBrowser)
+            ReflectorBrowserView(
+                session: session, browser: reflectorBrowser,
+                onChosen: { detailPane = .connect })
         case .setup:
             AccessoryPane(
                 accessory: accessory,
