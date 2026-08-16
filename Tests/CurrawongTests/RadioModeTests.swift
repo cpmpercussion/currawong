@@ -34,38 +34,11 @@ final class RadioModeTests: XCTestCase {
         XCTAssertEqual(RadioMode.echoLink.defaultPort, 8100)
     }
 
-    /// **This is a safety property, not a cosmetic one.** Two of these three
-    /// modes have carried a real conversation and the third has never been
-    /// transmitted at all. If M17 ever quietly starts claiming to be
-    /// validated, an operator loses the only warning they get.
-    func testOnlyM17IsUnvalidatedOnAir() {
-        XCTAssertTrue(RadioMode.allStarLink.isValidatedOnAir)
-        XCTAssertNil(RadioMode.allStarLink.unvalidatedWarning)
-
-        XCTAssertFalse(RadioMode.m17.isValidatedOnAir)
-        XCTAssertNotNil(
-            RadioMode.m17.unvalidatedWarning,
-            "M17 must carry a warning until somebody has actually used it on air")
-
-        // EchoLink carried a live QSO on air (M3, 2026-08-13), so it is
-        // validated and carries no warning. It used to carry one saying the QSO
-        // had run through the CLI rather than this app — development history,
-        // not something an operator could act on, and a warning on two modes out
-        // of three is a warning nobody reads.
-        XCTAssertTrue(RadioMode.echoLink.isValidatedOnAir)
-        XCTAssertNil(RadioMode.echoLink.unvalidatedWarning)
-    }
-
-    /// M17's warning is the only one, and it has to say the thing that matters:
-    /// that nobody has heard this mode on the air. A warning that degenerated
-    /// into a vague "experimental" would leave the operator no better informed.
-    func testTheM17WarningNamesWhatIsUnproven() throws {
-        let warning = try XCTUnwrap(RadioMode.m17.unvalidatedWarning)
-        XCTAssertTrue(
-            warning.contains("reflector"),
-            "the warning must name what has never happened, not just flag the mode")
-        XCTAssertTrue(warning.contains("sounds"))
-    }
+    // The two tests that used to sit here pinned `isValidatedOnAir` and
+    // `unvalidatedWarning` — that M17 carried a caution and the other two did
+    // not. Both properties were removed on 2026-08-16, when M17 receive was
+    // proven on air and EchoLink ran from this app; see the note in
+    // `RadioMode.swift` for why nothing replaced them.
 
     func testTheModesAskForDifferentThings() {
         XCTAssertTrue(RadioMode.allStarLink.usesNodeNumber)

@@ -103,18 +103,25 @@ momentary, and says so wherever it can key the radio.
 Not yet: the Live Activity (SF-4, APP-3).
 
 **On the air.** Currawong keyed a live AllStarLink node from an iPhone for the
-first time on 2026-08-11. **The other two modes have not been used from the app
-at all**, and they are not equally unproven: EchoLink's whole path — proxy
-login, directory login, a node answering, audio both ways — has run from the
-library's command-line harness, most recently on 2026-08-13, whereas M17 has
-only ever got a link up. Nobody has heard M17 audio through this stack in either
-direction, and the app says so where an operator chooses a mode.
+first time on 2026-08-11. All three modes have since been used from the app:
 
-EchoLink carries no such warning on screen. Which harness drove the QSO is a
-fact about the state of this project rather than about the radio — an operator
-can act on "nobody has heard how this sounds" and cannot act on "it worked from
-the CLI", and a caution on two modes out of three is a caution nobody reads.
-That distinction lives here instead.
+- **AllStarLink** — keyed on 2026-08-11.
+- **EchoLink** — 2026-08-16: a `*ECHOTEST*` round trip, our own audio echoed
+  back, and then VK1RBM with the connection heard live off air on UHF.
+- **M17 receive** — 2026-08-16: a net on M17-434, intelligible for its length,
+  with transmitting stations' callsigns displayed.
+
+**M17 transmit is the one thing still unconfirmed.** It has been sent to
+M17-432 and other reflectors and accepted, and nobody has yet reported hearing
+it — so the encoder and the LSF fields are unproven at the far end. "The
+reflector took it" and "somebody found it readable" are different claims.
+
+**There is no longer a caution beside the mode picker.** There used to be one on
+M17, which was right while nobody had heard the mode at all. What is unproven
+now is narrower than a mode — one direction of one mode — and a warning on a
+mode whose receive path the operator can hear working is a warning they learn
+to dismiss. Development status lives here and in the plan, where it can be
+stated precisely; the interface says things an operator can act on.
 
 What remains of the bring-up — audio quality judged from the other end,
 sustained receive, the watchdog and the interruption path, all exercised on real

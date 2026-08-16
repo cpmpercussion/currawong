@@ -176,18 +176,6 @@ struct ConnectFormView: View {
                 }
             }
 
-            // Not decoration. Two of these modes have carried a real
-            // conversation and one has never been transmitted at all, and the
-            // two that work are not equally proven — the mode itself owns that
-            // distinction, so the form just displays whatever it says. An
-            // operator deserves to know which is which before they key up
-            // rather than after.
-            if let warning = settings.mode.unvalidatedWarning {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 

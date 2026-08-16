@@ -75,45 +75,22 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Whether this mode's stack has ever carried a real conversation.
-    ///
-    /// **This is not decoration.** AllStarLink and EchoLink have both carried a
-    /// two-way conversation through this protocol code. M17 has never been
-    /// transmitted to a reflector by anyone, and its decoded audio has never
-    /// been listened to. An operator picking M17 is the first person to try it,
-    /// and the UI says so rather than presenting three equal choices.
-    ///
-    /// The threshold is *this stack has worked on air*, not *this stack has
-    /// worked from this app* — which QSO ran through which harness is
-    /// development history, and belongs in the plan rather than on screen.
-    var isValidatedOnAir: Bool {
-        switch self {
-        case .allStarLink, .echoLink: return true
-        case .m17: return false
-        }
-    }
-
-    /// Shown beside the picker when there is something the operator should know
-    /// before trusting the mode.
-    ///
-    /// **One warning, on the one mode that has never worked.** An earlier
-    /// version also cautioned that EchoLink had only ever been driven from the
-    /// command-line harness, which was a note about the state of the project
-    /// rather than about the radio: it told the operator nothing they could act
-    /// on, and a caution on two modes out of three is a caution nobody reads.
-    /// M17 keeps its warning because "nobody has heard how this sounds" is a
-    /// fact about what is about to go out over the air.
-    var unvalidatedWarning: String? {
-        switch self {
-        case .allStarLink, .echoLink:
-            return nil
-        case .m17:
-            return """
-                Experimental. M17 has never been transmitted to a real reflector — \
-                it may not work, and nobody has yet heard how it sounds.
-                """
-        }
-    }
+    // On-air validation status used to live here, as `isValidatedOnAir` and an
+    // `unvalidatedWarning` shown beside the picker. Both are gone as of
+    // 2026-08-16, and not because the modes became equal.
+    //
+    // M17 receive was proven that evening — a net on M17-434, intelligible for
+    // its length, callsigns displayed — and EchoLink ran from this app the same
+    // day. What is left unproven is narrower than a mode: M17 *transmit* has
+    // been accepted by reflectors and never confirmed heard by anybody. A
+    // per-mode caution cannot say that without saying more than it means, and a
+    // warning on a mode whose receive path the operator can hear working is a
+    // warning they learn to dismiss.
+    //
+    // It also had exactly one reader, who knows the state of the project better
+    // than any label could put it. Development status belongs in the plan and
+    // the README; the interface should say things an operator can act on.
+    // Restore something here if this app ever has users who are not its author.
 
     /// Whether this mode has somewhere to browse for a destination.
     ///
