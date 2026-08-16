@@ -39,8 +39,9 @@ save a station as a channel ready to connect. It opens a directory-only session
 that contacts no node and transmits nothing.
 
 **Reflector chooser (M17).** The same idea for a milder problem: M17 host names
-are stable and can be typed, but a hundred and twenty-five reflectors across
-twenty countries is not something to remember. The list is the host file the
+are stable and can be typed, but the published list ran to 125 reflectors when
+it was last read, which is not something to remember. The list is the host file
+the
 M17 Project publishes at
 [`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json) — the
 underlying data is DVRef's, used under CC BY 4.0 and credited in the pane — and

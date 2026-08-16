@@ -47,9 +47,9 @@ struct NodeRegistration: Equatable, Sendable {
 /// **Why this is a lookup and not a browser.** EchoLink and M17 got panes
 /// because their directories are lists worth reading: who is on, which
 /// reflectors exist. AllStarLink's is neither — an operator already knows the
-/// node number they want, because it is what everybody quotes on the air, and
-/// what they do not know is the address behind it. So this answers one question
-/// about one node rather than offering thirty thousand rows to scroll.
+/// node number they want, because it is what gets quoted on the air, and what
+/// they do not know is the address behind it. So this answers one question
+/// about one node rather than offering the whole register to scroll.
 ///
 /// A protocol so the button can be tested without the network.
 protocol NodeLookup: Sendable {
