@@ -421,6 +421,23 @@ struct ConnectFormView: View {
                     .font(.caption)
                     .foregroundStyle(found.isActive ? Color.green : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
+
+                // The counterpart to the reflector list's dashboard link, and
+                // shown for the same reason: the lookup answers where to dial,
+                // and the node's own page answers everything else — what it is
+                // linked to, who keyed it last. Only after a successful lookup,
+                // so it never offers a page for a number that is not a node.
+                if let dashboard = found.dashboard {
+                    Link(destination: dashboard) {
+                        Label("Node page — connections, last heard", systemImage: "safari")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel(
+                        "Open the page for node \(found.node) in the browser")
+                    .accessibilityHint("Shows what this node is connected to and who was last heard")
+                }
             }
 
             if let failure = nodeLocator.failure {

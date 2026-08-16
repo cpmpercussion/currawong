@@ -250,6 +250,99 @@ final class M17HostFileTests: XCTestCase {
         XCTAssertTrue(
             reflectors.contains { !$0.isMultiprotocol },
             "the list is mostly native M17; parsing none means the letter form broke")
+
+        // 117 of 125 on 2026-08-16. A majority rather than an exact count: the
+        // published list changes daily, and the thing worth catching is the
+        // `url` key being renamed or dropped, which would take every link with
+        // it rather than a few.
+        let linked = reflectors.filter { $0.dashboard != nil }
+        XCTAssertGreaterThan(
+            linked.count, reflectors.count / 2,
+            "most published entries carry a dashboard URL; parsing almost none means the field "
+                + "moved")
+        for reflector in linked {
+            XCTAssertTrue(
+                ["http", "https"].contains(reflector.dashboard?.scheme?.lowercased() ?? ""),
+                "\(reflector.designator) has a non-web dashboard link")
+        }
+    }
+
+    // MARK: - The dashboard link
+
+    /// The `url` field becomes a tappable link. This is the only field in the
+    /// file the operator can act on rather than read, which is why the next
+    /// three tests exist.
+    func testReadsTheDashboardURL() throws {
+        let reflectors = try M17HostFile.parse(
+            Self.hostFile(
+                """
+                {
+                  "designator": "M17-002",
+                  "url": "http://urf001.cumbriacq.com:98/urf/",
+                  "ipv4": "89.240.4.99",
+                  "modules": ["A"],
+                  "port": 17000
+                }
+                """))
+
+        let reflector = try XCTUnwrap(reflectors.first)
+        XCTAssertEqual(
+            reflector.dashboard, URL(string: "http://urf001.cumbriacq.com:98/urf/"),
+            "the port and path are part of the address; a trimmed one goes to the wrong page")
+    }
+
+    /// Eight of the hundred and twenty-five published entries have no `url`.
+    /// They are ordinary reflectors, not broken ones — the row simply carries no
+    /// link.
+    func testAReflectorWithNoDashboardIsStillAReflector() throws {
+        let reflectors = try M17HostFile.parse(
+            Self.hostFile(
+                """
+                {
+                  "designator": "M17-002",
+                  "url": null,
+                  "ipv4": "89.240.4.99",
+                  "modules": ["A"],
+                  "port": 17000
+                }
+                """))
+
+        let reflector = try XCTUnwrap(reflectors.first)
+        XCTAssertNil(reflector.dashboard)
+        XCTAssertEqual(reflector.host, "89.240.4.99", "the rest of the entry is unaffected")
+    }
+
+    /// **The one that matters.** The host file is fetched from a third party and
+    /// this field is handed to the system opener. Anything that is not a web
+    /// address is refused rather than passed on to whichever app claims its
+    /// scheme.
+    func testOnlyAWebAddressBecomesALink() {
+        XCTAssertNotNil(M17HostFile.dashboard(from: "https://hamsat.eu/m17"))
+        XCTAssertNotNil(
+            M17HostFile.dashboard(from: "http://m17-097.newenglanddigitalradio.com/"),
+            "half the published dashboards are plain HTTP; the link is opened in a browser, "
+                + "so ATS has no say in it")
+        XCTAssertNotNil(M17HostFile.dashboard(from: "HTTPS://Example.test/m17"))
+
+        for hostile in [
+            "mailto:someone@example.test",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "sometherapp://open?do=something",
+            "tel:+61000",
+            // A scheme with nothing behind it opens a browser error page, which
+            // is a worse way to learn the listing was empty.
+            "https://",
+            "not a url at all",
+            "",
+            "   ",
+        ] {
+            XCTAssertNil(
+                M17HostFile.dashboard(from: hostile),
+                "\(hostile) must not become something the operator can tap")
+        }
+
+        XCTAssertNil(M17HostFile.dashboard(from: nil))
     }
 
     // MARK: - The fetch around the parse

@@ -28,6 +28,28 @@ struct NodeRegistration: Equatable, Sendable {
     /// Whether the directory calls the node active.
     var isActive: Bool
 
+    /// The node's page on AllStarLink's stats site, the counterpart to an M17
+    /// reflector's dashboard.
+    ///
+    /// `https://stats.allstarlink.org/nodeinfo.cgi?node=<node>` — what is
+    /// linked to when a node number is quoted on the air. It carries the things
+    /// a lookup deliberately does not: what the node is currently connected to,
+    /// who keyed it last and when, how long it has been up. The lookup answers
+    /// "where do I dial", which is a different and smaller question; this is
+    /// where an operator goes for the rest.
+    ///
+    /// Built from the node number rather than returned by the API, because the
+    /// stats API has no field for it and the URL is a fixed shape. `nil` unless
+    /// the number is digits — everything AllStarLink issues is, and refusing
+    /// anything else means free text the operator typed can never be spliced
+    /// into a URL.
+    var dashboard: URL? {
+        let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.allSatisfy(\.isASCII), trimmed.allSatisfy(\.isNumber)
+        else { return nil }
+        return URL(string: "https://stats.allstarlink.org/nodeinfo.cgi?node=\(trimmed)")
+    }
+
     /// "WB6NIL · ASL Public Hub · 18.224.69.177", skipping whatever is missing.
     ///
     /// One line rather than a row of fields: the operator is confirming that

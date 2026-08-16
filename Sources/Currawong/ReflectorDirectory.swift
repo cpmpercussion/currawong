@@ -56,6 +56,20 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
     /// The modules that can be linked from here, in the listing's order.
     var modules: [ReflectorModule]
 
+    /// The reflector's own dashboard, where the listing gives one.
+    ///
+    /// This is the page that answers the questions the host file cannot: who was
+    /// last heard and when, which modules have anybody on them, what the
+    /// reflector is currently bridging. None of that is in `M17Hosts.json`, and
+    /// there is no aggregate feed for it — every reflector runs its own
+    /// dashboard, in its own dialect of HTML. So this is a link out rather than
+    /// something the app scrapes and parses.
+    ///
+    /// `nil` when the listing has no URL for it, which is eight entries of a
+    /// hundred and twenty-five, and also when what it has is not a web address
+    /// — see ``M17HostFile``, which is where that judgement is made.
+    var dashboard: URL? = nil
+
     /// Whether this is a multiprotocol reflector — a URF bridging M17 to D-Star,
     /// DMR and others — rather than a native M17 one.
     ///

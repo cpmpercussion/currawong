@@ -54,6 +54,39 @@ enum M17HostFile {
     /// the reflector will convert.
     private static let usableModes: Set<String> = ["M17", "ALL"]
 
+    /// The URL schemes a dashboard link may use.
+    ///
+    /// **A filter, not a formality.** Every other field in this file becomes
+    /// text on a row; this one becomes something the operator can tap, and the
+    /// file is fetched from a third party. Handing an arbitrary string to the
+    /// system opener is handing a stranger the choice of which app to launch —
+    /// a `mailto:` or a custom scheme belonging to some other application would
+    /// go through as readily as a web page. So a dashboard is a web page or it
+    /// is nothing.
+    ///
+    /// `http` is here alongside `https` because roughly half the published
+    /// dashboards are plain HTTP and dropping them would quietly remove the
+    /// link from half the list. App Transport Security does not object: the URL
+    /// is handed to the browser, and nothing in this app connects to it.
+    private static let dashboardSchemes: Set<String> = ["http", "https"]
+
+    /// A tappable dashboard link from the listing's `url` field, if it is one.
+    ///
+    /// Internal rather than private so the rule is testable on its own — what
+    /// gets rejected here matters more than what gets through.
+    static func dashboard(from listed: String?) -> URL? {
+        guard let text = listed?.nonEmpty,
+            let url = URL(string: text),
+            let scheme = url.scheme?.lowercased(),
+            dashboardSchemes.contains(scheme),
+            // A scheme and no host is `http:` followed by nothing useful. It
+            // would open the browser onto an error page rather than fail here,
+            // which is a worse way to find out.
+            url.host?.isEmpty == false
+        else { return nil }
+        return url
+    }
+
     /// Parses the host file.
     ///
     /// Entries that survive parsing but have nowhere to connect to — no host
@@ -87,11 +120,12 @@ enum M17HostFile {
         var port: UInt16?
         var sponsor: String?
         var country: String?
+        var url: String?
         var modules: Modules?
         var enabledModes: [String]?
 
         enum CodingKeys: String, CodingKey {
-            case designator, name, dns, ipv4, port, sponsor, country, modules
+            case designator, name, dns, ipv4, port, sponsor, country, url, modules
             case enabledModes = "enabled_modes"
         }
 
@@ -111,6 +145,7 @@ enum M17HostFile {
                 sponsor: sponsor?.nonEmpty,
                 country: country?.nonEmpty,
                 modules: modules,
+                dashboard: M17HostFile.dashboard(from: url),
                 isMultiprotocol: isMultiprotocol)
         }
 
