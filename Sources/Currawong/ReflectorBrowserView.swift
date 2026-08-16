@@ -212,6 +212,8 @@ private struct ReflectorRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
 
+            dashboardLink
+
             if !reflector.hasDialableHost {
                 Text("The list gives no address for this reflector.")
                     .font(.caption)
@@ -222,6 +224,35 @@ private struct ReflectorRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
+    }
+
+    /// The reflector's own dashboard, opened in the browser.
+    ///
+    /// **Why a link and not a panel.** What an operator wants before calling is
+    /// the thing the host file does not carry: who was last heard, on which
+    /// module, and how long ago. Every reflector publishes that on its own
+    /// dashboard and no two publish it the same way — there is no feed to read,
+    /// only a hundred-odd pages of hand-rolled HTML. Scraping them would mean
+    /// the list quietly going wrong whenever somebody restyles theirs. A link
+    /// hands the operator the page the information is actually on, and stays
+    /// right by doing nothing.
+    ///
+    /// Absent rather than disabled when the listing has no URL: a greyed link
+    /// invites a tap that will not happen.
+    @ViewBuilder
+    private var dashboardLink: some View {
+        if let dashboard = reflector.dashboard {
+            Link(destination: dashboard) {
+                Label("Dashboard — who is on, last heard", systemImage: "safari")
+                    .font(.caption)
+            }
+            // Plain, so the whole row does not read as one big tappable thing
+            // in a list where the modules are the buttons that matter.
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .accessibilityLabel("Open the \(reflector.designator) dashboard in the browser")
+            .accessibilityHint("Shows who was last heard on this reflector")
+        }
     }
 
     /// The modules, wrapped rather than in a row: a native M17 reflector can

@@ -221,6 +221,45 @@ final class NodeLookupTests: XCTestCase {
             "https://stats.allstarlink.org/api/stats/")
     }
 
+    // MARK: - The node's own page
+
+    /// The counterpart to an M17 reflector's dashboard link. Pinned for the
+    /// same reason the endpoint above is: no offline test can tell that the URL
+    /// shape is still the one AllStarLink serves.
+    func testANodeLinksToItsPageOnTheStatsSite() throws {
+        let registration = NodeRegistration(
+            node: "2000", host: "18.224.69.177", port: 4569, callsign: "WB6NIL",
+            description: nil, isActive: true)
+
+        XCTAssertEqual(
+            registration.dashboard?.absoluteString,
+            "https://stats.allstarlink.org/nodeinfo.cgi?node=2000")
+    }
+
+    /// The node number is free text the operator typed, and it goes into a URL.
+    /// Anything that is not digits gets no link at all rather than a spliced
+    /// one — the same refusal ``testAnAwkwardNodeNumberCannotRewriteTheURL``
+    /// makes on the way out to the API.
+    func testOnlyANumberGetsAPage() {
+        for awkward in ["", "  ", "20 00", "2000/../evil", "2000?x=y", "two thousand", "2000#top",
+                        "٢٠٠٠"] {
+            let registration = NodeRegistration(
+                node: awkward, host: "10.0.0.1", port: 4569, callsign: nil,
+                description: nil, isActive: true)
+            XCTAssertNil(
+                registration.dashboard,
+                "\(awkward) must not be spliced into a URL the operator can tap")
+        }
+
+        // Whitespace either side is the operator's typing, not a different node.
+        let padded = NodeRegistration(
+            node: " 2000 ", host: "10.0.0.1", port: 4569, callsign: nil,
+            description: nil, isActive: true)
+        XCTAssertEqual(
+            padded.dashboard?.absoluteString,
+            "https://stats.allstarlink.org/nodeinfo.cgi?node=2000")
+    }
+
     // MARK: - Helpers
 
     private actor Asked {
