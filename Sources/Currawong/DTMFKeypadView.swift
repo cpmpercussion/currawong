@@ -65,11 +65,27 @@ struct DTMFKeypadView: View {
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
+    /// Local to the keypad rather than lifted into `RootView`: the sheet is
+    /// reference text with no bearing on the session, and nothing outside this
+    /// view needs to know or care whether it is open.
+    @State private var isShowingCommands = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("DTMF")
                     .font(.headline)
+                // Available whether or not the link is up. Looking up what `*3`
+                // does is the thing you do *before* connecting, so gating this
+                // on `isEnabled` alongside the keys would hide it exactly when
+                // it is most wanted.
+                Button {
+                    isShowingCommands = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Node commands")
                 Spacer()
                 Text("Does not transmit")
                     .font(.caption2)
@@ -96,6 +112,9 @@ struct DTMFKeypadView: View {
             log(label: "Heard", digits: received, systemImage: "arrow.down.circle")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $isShowingCommands) {
+            DTMFCommandReferenceView()
+        }
     }
 
     private func log(label: String, digits: String, systemImage: String) -> some View {
