@@ -64,7 +64,10 @@ is otherwise a question only a stranger on the air can answer. iOS does not let
 an app change the microphone's own level (`inputGain` is not settable on the
 built-in mic), so the gain control scales the captured samples instead — 0 to
 +30 dB, hard-limited so a loud syllable flat-tops rather than wrapping to a
-click. Fixed gain rather than an AGC: a compressor would also pump the room
+click. The slider sits with the meters rather than on the connect form, because
+the gain belongs to the phone and not to any channel, and because the form locks
+its fields while a link is up — which is the only time you can tell what to set
+it to. It applies to the transmission in progress. Fixed gain rather than an AGC: a compressor would also pump the room
 noise up between words, which on a repeater is antisocial in a way you cannot
 hear from your own end.
 

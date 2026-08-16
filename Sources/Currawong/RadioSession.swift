@@ -156,9 +156,15 @@ final class RadioSession: ObservableObject {
     @Published var transmitGain: TransmitGain {
         didSet {
             guard transmitGain != oldValue else { return }
+            // The box is what the audio thread reads, so this is what makes a
+            // slider drag audible in the same breath rather than the next one.
+            gainBox.gain = transmitGain
             settingsStore.saveTransmitGain(transmitGain)
         }
     }
+
+    /// The gain as the capture tap sees it. See ``TransmitGainBox``.
+    private let gainBox = TransmitGainBox()
 
     /// Who is operating. **App-wide, not per channel** — one callsign is used on
     /// every network, so the connect form edits this rather than a field of the
@@ -287,7 +293,9 @@ final class RadioSession: ObservableObject {
         // colon and come back empty.
         let identity = settingsStore.loadIdentity() ?? .empty
         self.identity = identity
-        self.transmitGain = settingsStore.loadTransmitGain() ?? .unity
+        let storedGain = settingsStore.loadTransmitGain() ?? .unity
+        self.transmitGain = storedGain
+        self.gainBox.gain = storedGain
         self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
@@ -727,13 +735,14 @@ final class RadioSession: ObservableObject {
                 // setting the gain against the thing it changes.
                 //
                 // This closure runs on the audio thread fifty times a second.
-                // Both steps are bounded work on 160 samples with no awaits —
-                // see `TransmitGain.apply(to:)` and `AudioLevelMeter.note(_:)`.
-                let gain = transmitGain
+                // Every step is bounded work on 160 samples with no awaits —
+                // see `TransmitGainBox`, `TransmitGain.apply(to:)` and
+                // `AudioLevelMeter.note(_:)`.
+                let gainBox = self.gainBox
                 let meter = transmitMeter
                 transmitMeter.reset()
                 try audio.startCapture { frame in
-                    let amplified = gain.apply(to: frame)
+                    let amplified = gainBox.gain.apply(to: frame)
                     meter.note(amplified)
                     link.sendCapturedFrame(amplified)
                 }

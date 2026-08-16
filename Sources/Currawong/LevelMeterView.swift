@@ -144,12 +144,26 @@ struct LevelMeterView: View {
     }
 }
 
-/// The pair of them, plus the advice that makes a low reading actionable.
+/// The two meters and the gain that answers the transmit one.
 ///
 /// Shown together because they answer different halves of one question. A quiet
-/// transmit meter is something the operator can fix with the gain control; a
-/// quiet receive meter is the other station's problem, and knowing which is
-/// which saves an evening of adjusting the wrong thing.
+/// transmit meter is something the operator can fix; a quiet receive meter is
+/// the other station's problem, and knowing which is which saves an evening
+/// spent adjusting the wrong thing.
+///
+/// ## The gain belongs here, not on the connect form
+///
+/// It sat on the connect form to begin with, which was wrong twice over. That
+/// form edits *one channel*, and the microphone gain is not a property of
+/// anywhere you might connect to — it is a property of this phone, this voice
+/// and this room, the same argument that moved the callsign out of
+/// `NodeSettings`. And the form disables its fields while a link is up, so the
+/// control was unreachable during the only activity that tells you what to set
+/// it to.
+///
+/// Here, the loop closes: speak, watch the bar, drag, watch it move. The slider
+/// stays live while transmitting, which is the whole point of it being next to
+/// the thing it changes.
 struct LevelMetersView: View {
     @ObservedObject var session: RadioSession
 
@@ -160,10 +174,37 @@ struct LevelMetersView: View {
                 meter: session.transmitMeter,
                 isActive: session.isTransmitting)
 
+            gain
+
             LevelMeterView(
                 label: "Receive",
                 meter: session.receiveMeter,
                 isActive: session.connection.isConnected)
+        }
+    }
+
+    private var gain: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            Slider(
+                value: Binding(
+                    get: { session.transmitGain.decibels },
+                    set: { session.transmitGain = TransmitGain(decibels: $0) }),
+                in: TransmitGain.range,
+                step: 1)
+                .accessibilityLabel("Microphone gain")
+                .accessibilityValue("plus \(Int(session.transmitGain.decibels.rounded())) decibels")
+
+            Text(verbatim: "+\(Int(session.transmitGain.decibels.rounded())) dB")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                // Fixed width, so the row does not shuffle sideways as the
+                // number gains a digit while the operator is dragging it.
+                .frame(width: 52, alignment: .trailing)
         }
     }
 }

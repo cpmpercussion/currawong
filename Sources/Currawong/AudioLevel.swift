@@ -132,6 +132,40 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 }
 
+/// The current transmit gain, readable from the audio thread.
+///
+/// The gain is a `@Published` property of a `@MainActor` view model, and the
+/// capture tap runs on a real-time thread that cannot touch either. Snapshotting
+/// the value at key-down would avoid the problem and did, briefly — but a
+/// slider sitting directly under the meter that does nothing until the next
+/// over reads as broken, and the operator's whole workflow here is speak, watch,
+/// adjust, in that order and without letting go.
+///
+/// So the value lives in a box: written on the main actor when the slider moves,
+/// read on the audio thread once per frame behind an uncontended lock, the same
+/// arrangement `AudioLevelMeter` uses in the other direction.
+final class TransmitGainBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: TransmitGain
+
+    init(_ gain: TransmitGain = .unity) {
+        self.stored = gain
+    }
+
+    var gain: TransmitGain {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            stored = newValue
+            lock.unlock()
+        }
+    }
+}
+
 /// Software gain on the transmit path, in dB.
 ///
 /// **Why this exists at all.** `AVAudioSession.inputGain` is only writable when

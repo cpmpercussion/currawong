@@ -338,18 +338,25 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertEqual(sent?.first ?? 0, 1995, accuracy: 5, "+6 dB doubles it")
     }
 
-    /// The gain in force when the key went down is the gain used for that
-    /// over. Re-reading it per frame would let a slider drag change the level
-    /// mid-syllable, which is audible as a swell rather than as a setting.
-    func testTheGainIsTakenAtKeyDown() async {
+    /// **The gain applies to the transmission in progress.** It was snapshotted
+    /// at key-down at first, on the reasoning that a mid-over change is audible
+    /// as a swell. That reasoning lost to a simpler one once the slider moved
+    /// next to the meter: an operator watching the bar while they speak and
+    /// dragging the control directly beneath it will conclude the control is
+    /// broken, and a swell they caused deliberately is not a defect.
+    func testChangingTheGainAppliesToTheOverInProgress() async {
         let harness = SessionHarness()
         await harness.connect()
         await harness.keyDown()
 
-        harness.session.transmitGain = TransmitGain(decibels: 20)
+        harness.audio.produceFrame(Array(repeating: Int16(1000), count: 160))
+        harness.session.transmitGain = TransmitGain(decibels: 6)
         harness.audio.produceFrame(Array(repeating: Int16(1000), count: 160))
 
-        XCTAssertEqual(harness.client.sentFrames.first?.first, 1000, "unity, as it was at key-down")
+        XCTAssertEqual(harness.client.sentFrames.first?.first, 1000, "before the change")
+        XCTAssertEqual(
+            Double(harness.client.sentFrames.last?.first ?? 0), 1995, accuracy: 5,
+            "after it, without waiting for the next over")
     }
 
     /// The meter reads what left, so an operator setting a gain against it is
