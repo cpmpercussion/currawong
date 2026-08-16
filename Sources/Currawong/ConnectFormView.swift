@@ -37,6 +37,11 @@ struct ConnectFormView: View {
     /// See ``OperatorIdentity``.
     @Binding var identity: OperatorIdentity
 
+    /// Software gain on the transmit path. App-wide like the identity, and on
+    /// this form for the same reason: it is where the operator already is when
+    /// they discover they are too quiet.
+    @Binding var transmitGain: TransmitGain
+
     let isEditable: Bool
     let connectTitle: String
     let isBusy: Bool
@@ -258,10 +263,48 @@ struct ConnectFormView: View {
     /// make something work.
     @ViewBuilder
     private var safetyFields: some View {
+        Text("Audio")
+            .font(.headline)
+
+        gainField
+
+        Divider()
+
         Text("Safety")
             .font(.headline)
 
         watchdogField
+    }
+
+    /// **Why there is a gain control at all.** `AVAudioSession.inputGain` is
+    /// only writable when the hardware says so, and an iPhone's built-in
+    /// microphone says no — so the only way to make a quiet operator louder is
+    /// to scale the samples, which is what this does.
+    ///
+    /// A slider rather than a number field: the useful feedback is the transmit
+    /// meter on the session screen moving while you drag, and nobody knows what
+    /// value they want in advance.
+    @ViewBuilder
+    private var gainField: some View {
+        LabelledField(
+            label: "Microphone gain: +\(Int(transmitGain.decibels.rounded())) dB",
+            systemImage: "mic"
+        ) {
+            Slider(
+                value: Binding(
+                    get: { transmitGain.decibels },
+                    set: { transmitGain = TransmitGain(decibels: $0) }),
+                in: TransmitGain.range,
+                step: 1)
+        }
+
+        Text(
+            "iOS does not let an app change the microphone's own level, so this scales the "
+            + "audio after capture. Watch the Transmit meter on the session screen while you "
+            + "speak: peaks in the green, and off the red. Raising this raises room noise too.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Same two fields, three meanings. In EchoLink these address the **proxy**

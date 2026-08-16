@@ -135,6 +135,31 @@ final class RadioSession: ObservableObject {
     /// and `UserDefaults` never.
     @Published var secret: String
 
+    /// What the microphone is putting on the air, **after** ``transmitGain``.
+    /// Post-gain because that is the number the operator is trying to set, and
+    /// a meter reading the input while the gain changes what leaves would be
+    /// actively misleading.
+    ///
+    /// Not `@Published`: it is written fifty times a second from the audio
+    /// thread, and the views poll it instead. See ``AudioLevelMeter``.
+    let transmitMeter = AudioLevelMeter()
+
+    /// What is arriving from the far end.
+    let receiveMeter = AudioLevelMeter()
+
+    /// Software gain on captured audio (0 to +30 dB).
+    ///
+    /// App-wide rather than per channel, like the operator's identity: it
+    /// compensates for this device and this voice, not for where the audio is
+    /// going. Persisted on change, because an operator who finds their level
+    /// and then loses it on relaunch has not been helped.
+    @Published var transmitGain: TransmitGain {
+        didSet {
+            guard transmitGain != oldValue else { return }
+            settingsStore.saveTransmitGain(transmitGain)
+        }
+    }
+
     /// Who is operating. **App-wide, not per channel** — one callsign is used on
     /// every network, so the connect form edits this rather than a field of the
     /// selected channel. Persisted by ``connect()`` and ``saveDraft()`` the same
@@ -262,6 +287,7 @@ final class RadioSession: ObservableObject {
         // colon and come back empty.
         let identity = settingsStore.loadIdentity() ?? .empty
         self.identity = identity
+        self.transmitGain = settingsStore.loadTransmitGain() ?? .unity
         self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
@@ -696,7 +722,21 @@ final class RadioSession: ObservableObject {
         if transmitDesired {
             guard connection.isConnected, !isTransmitting else { return }
             do {
-                try audio.startCapture(onFrame: link.sendCapturedFrame)
+                // Gain, then meter, then the wire. The order is the point: the
+                // meter reports what actually leaves, so the operator is
+                // setting the gain against the thing it changes.
+                //
+                // This closure runs on the audio thread fifty times a second.
+                // Both steps are bounded work on 160 samples with no awaits —
+                // see `TransmitGain.apply(to:)` and `AudioLevelMeter.note(_:)`.
+                let gain = transmitGain
+                let meter = transmitMeter
+                transmitMeter.reset()
+                try audio.startCapture { frame in
+                    let amplified = gain.apply(to: frame)
+                    meter.note(amplified)
+                    link.sendCapturedFrame(amplified)
+                }
                 try await link.startTransmit()
             } catch {
                 // Fail closed: microphone shut, client unkeyed, button
@@ -867,6 +907,8 @@ final class RadioSession: ObservableObject {
         let stream = link.receivedAudio
         let audio = self.audio
         let window = Self.receiveActivityWindow
+        let meter = self.receiveMeter
+        meter.reset()
 
         // Detached: playback enqueue takes a lock and allocates, fifty times a
         // second, and none of that belongs on the main actor. Only the
@@ -875,6 +917,7 @@ final class RadioSession: ObservableObject {
             var lastNoted = Date.distantPast
             for await pcm in stream {
                 audio.enqueuePlayback(pcm)
+                meter.note(pcm)
                 let arrival = Date()
                 if arrival.timeIntervalSince(lastNoted) >= window / 2 {
                     lastNoted = arrival

@@ -395,6 +395,7 @@ struct RootView: View {
             settings: $session.settings,
             secret: $session.secret,
             identity: $session.identity,
+            transmitGain: $session.transmitGain,
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,
             isBusy: session.connection.isBusy,

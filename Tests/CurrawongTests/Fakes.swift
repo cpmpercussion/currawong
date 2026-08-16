@@ -373,6 +373,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var storedChannels: [NodeSettings]?
     private var storedSelectedID: UUID?
     private var storedIdentity: OperatorIdentity?
+    private var storedGain: TransmitGain?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
 
@@ -380,12 +381,14 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         initial: NodeSettings? = nil,
         channels: [NodeSettings]? = nil,
         selectedID: UUID? = nil,
-        identity: OperatorIdentity? = nil
+        identity: OperatorIdentity? = nil,
+        gain: TransmitGain? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
         self.storedSelectedID = selectedID
         self.storedIdentity = identity
+        self.storedGain = gain
     }
 
     func loadIdentity() -> OperatorIdentity? {
@@ -398,6 +401,25 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.lock()
         storedIdentity = identity
         lock.unlock()
+    }
+
+    func loadTransmitGain() -> TransmitGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedGain
+    }
+
+    func saveTransmitGain(_ gain: TransmitGain) {
+        lock.lock()
+        storedGain = gain
+        lock.unlock()
+    }
+
+    /// What ``saveTransmitGain(_:)`` last wrote.
+    var savedTransmitGain: TransmitGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedGain
     }
 
     /// What ``saveIdentity(_:)`` last wrote, for the tests about when the
@@ -604,10 +626,12 @@ final class SessionHarness {
         selectedID: UUID? = nil,
         secrets: [String: String] = [:],
         resolver: any HostResolver = FakeHostResolver(),
-        identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ")
+        identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ"),
+        gain: TransmitGain? = nil
     ) {
         self.settingsStore = InMemorySettingsStore(
-            initial: settings, channels: channels, selectedID: selectedID, identity: identity)
+            initial: settings, channels: channels, selectedID: selectedID, identity: identity,
+            gain: gain)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks

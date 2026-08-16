@@ -39,6 +39,12 @@ protocol SettingsStore: AnyObject, Sendable {
     /// ``UserDefaultsSettingsStore/loadIdentity()``.
     func loadIdentity() -> OperatorIdentity?
     func saveIdentity(_ identity: OperatorIdentity)
+
+    /// Software gain on the transmit path. App-wide: it compensates for this
+    /// device and this voice, not for where the audio is going. `nil` if the
+    /// operator has never set one.
+    func loadTransmitGain() -> TransmitGain?
+    func saveTransmitGain(_ gain: TransmitGain)
 }
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
@@ -61,6 +67,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let channelsKey = "au.charlesmartin.currawong.channels"
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
     private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
+    private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
 
     private let defaults: UserDefaults
 
@@ -142,6 +149,18 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     func saveIdentity(_ identity: OperatorIdentity) {
         guard let data = try? JSONEncoder().encode(identity) else { return }
         defaults.set(data, forKey: Self.identityKey)
+    }
+
+    /// Stored as a bare number rather than as JSON: it is one scalar, and
+    /// `object(forKey:)` distinguishes "never set" from "set to zero", which
+    /// `double(forKey:)` alone would not — and zero is a meaningful setting.
+    func loadTransmitGain() -> TransmitGain? {
+        guard defaults.object(forKey: Self.transmitGainKey) != nil else { return nil }
+        return TransmitGain(decibels: defaults.double(forKey: Self.transmitGainKey))
+    }
+
+    func saveTransmitGain(_ gain: TransmitGain) {
+        defaults.set(gain.decibels, forKey: Self.transmitGainKey)
     }
 
     /// The first non-empty value of `key` across the stored blobs.
