@@ -284,6 +284,50 @@ final class RadioSessionConnectionTests: XCTestCase {
         XCTAssertEqual(harness.session.alert?.title, "Could not save the secret")
     }
 
+    /// One attempt can raise two alerts, and the second must survive the first.
+    ///
+    /// This is the macOS bug that made it worth fixing: without the Keychain
+    /// entitlement the secret write failed, `connect()` warned and carried on
+    /// as designed, and then the connection failed for its own reasons — and
+    /// the operator was shown only the harmless warning. "It says the secret
+    /// wasn't stored, and then doesn't connect", with nothing on screen saying
+    /// why.
+    func testASecondAlertWaitsBehindTheFirstRatherThanBeingLost() async {
+        let harness = SessionHarness()
+        harness.secretStore.failWrites = true
+        harness.client.connectError = SessionHarness.ConnectFailed()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.session.alert?.title, "Could not save the secret")
+
+        harness.session.dismissAlert()
+
+        XCTAssertEqual(
+            harness.session.alert?.title, "Could not connect",
+            "the reason the call failed must not be swallowed by the warning before it")
+        XCTAssertTrue(harness.session.alert?.message.contains("rejected") == true)
+
+        harness.session.dismissAlert()
+        XCTAssertNil(harness.session.alert, "and the queue drains")
+    }
+
+    /// Retrying something that fails the same way must not build a stack of
+    /// identical alerts to dismiss one at a time.
+    func testTheSameAlertRaisedTwiceIsOnlyShownOnce() async {
+        let harness = SessionHarness()
+        harness.client.connectError = SessionHarness.ConnectFailed()
+
+        await harness.connect()
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.alert?.title, "Could not connect")
+
+        harness.session.dismissAlert()
+        XCTAssertNil(harness.session.alert)
+    }
+
     func testSettingsAreTrimmedAndTheCallsignIsUppercasedBeforeUse() async {
         let harness = SessionHarness(settings: nil, identity: nil)
         harness.session.settings = NodeSettings(

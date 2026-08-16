@@ -209,6 +209,11 @@ final class RadioSession: ObservableObject {
 
     @Published private(set) var alert: OperatorAlert?
 
+    /// Alerts raised while another was already on screen, oldest first. Drained
+    /// by ``dismissAlert()``; see ``present(title:message:)`` for why this has
+    /// to exist rather than the newest simply winning.
+    private var pendingAlerts: [OperatorAlert] = []
+
     /// SF-1 / SF-3. Why the operator was unkeyed by something other than
     /// themselves.
     @Published private(set) var safetyNotice: SafetyNotice?
@@ -1006,16 +1011,41 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Alerts
 
+    /// Dismisses the alert on screen and shows the next one waiting, if any.
     func dismissAlert() {
-        alert = nil
+        alert = pendingAlerts.isEmpty ? nil : pendingAlerts.removeFirst()
     }
 
     func dismissSafetyNotice() {
         safetyNotice = nil
     }
 
+    /// Says something to the operator, behind whatever is already being said.
+    ///
+    /// **Queued rather than assigned, because one attempt can raise two.** The
+    /// view presents a single alert bound to ``alert``, and SwiftUI does not
+    /// re-present when the value behind a showing alert is replaced — so the
+    /// second message was dropped, and dismissing the first cleared it.
+    ///
+    /// That was not theoretical. `connect()` warns when the secret could not be
+    /// saved and then carries on, so a macOS build without the Keychain
+    /// entitlement showed "the secret was not stored" and swallowed whatever
+    /// the connection itself then failed with: the operator was told about the
+    /// harmless problem and left to guess at the real one.
+    ///
+    /// Duplicates are dropped. Retrying a connection that fails the same way
+    /// twice should not build a stack of identical alerts to dismiss one by
+    /// one — `OperatorAlert` compares on its words, not its id, for this.
     private func present(title: String, message: String) {
-        alert = OperatorAlert(title: title, message: message)
+        let next = OperatorAlert(title: title, message: message)
+
+        guard let showing = alert else {
+            alert = next
+            return
+        }
+
+        guard showing != next, !pendingAlerts.contains(next) else { return }
+        pendingAlerts.append(next)
     }
 
     // MARK: - Teardown
