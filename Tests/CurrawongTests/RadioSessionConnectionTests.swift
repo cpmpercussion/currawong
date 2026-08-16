@@ -12,16 +12,19 @@ import XCTest
 /// no simulator interaction.
 @MainActor
 final class RadioSessionConnectionTests: XCTestCase {
+    /// The operator. App-wide now, rather than a settings field.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
+
 
     // MARK: Loading
 
     func testSettingsAndSecretAreLoadedAtInit() {
         let stored = NodeSettings(
             host: "stored.example.org", port: 4570, node: "1234",
-            username: "bob", callsign: "VK1BOB")
+            username: "bob")
         let harness = SessionHarness(
             settings: stored,
-            secrets: [stored.secretAccount: "from-the-keychain"])
+            secrets: [stored.secretAccount(for: vk1xyz): "from-the-keychain"])
 
         XCTAssertEqual(harness.session.settings, stored)
         XCTAssertEqual(harness.session.secret, "from-the-keychain")
@@ -86,22 +89,91 @@ final class RadioSessionConnectionTests: XCTestCase {
         XCTAssertEqual(harness.linksMade, 2, "a second connect needs a second link")
     }
 
+    /// The callsign is app-wide now, so a missing one is refused as a problem
+    /// with the operator rather than with the channel — and the alert says so,
+    /// because sending somebody to the channel's fields to fix a setting that is
+    /// not there is worse than saying nothing.
     func testMissingCallsignIsRefusedBeforeAnythingIsDialled() async {
-        let harness = SessionHarness(settings: nil)
+        let harness = SessionHarness(settings: nil, identity: nil)
         harness.session.settings = NodeSettings(host: "node.example.org", node: "55553")
 
         await harness.session.connect()
 
         XCTAssertEqual(harness.session.connection, .disconnected)
-        XCTAssertEqual(harness.session.alert?.title, "Check the connection details")
+        XCTAssertEqual(harness.session.alert?.title, "Check your callsign")
         XCTAssertTrue(harness.client.calls.isEmpty, "nothing should have been dialled")
         XCTAssertEqual(harness.linksMade, 0)
     }
 
+    /// The identity is checked *before* the channel, because it is wrong for
+    /// every channel rather than for this one. A form with both problems must
+    /// report the callsign, or the operator fixes the host and is refused again.
+    func testTheCallsignIsReportedBeforeAChannelProblem() async {
+        let harness = SessionHarness(settings: nil, identity: nil)
+        harness.session.settings = NodeSettings(host: "", node: "")
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.session.alert?.title, "Check your callsign")
+    }
+
+    /// The app-wide callsign is what reaches the library, in every mode. If
+    /// this regressed, an operator would transmit under a callsign from
+    /// whichever channel happened to be selected — or under none at all.
+    func testTheAppWideCallsignIsWhatReachesTheLibrary() async {
+        let harness = SessionHarness(settings: nil)
+        harness.session.settings = SessionHarness.goodSettings
+        harness.session.identity = OperatorIdentity(callsign: "VK1ABC")
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.identitiesSeen.map(\.callsign), ["VK1ABC"])
+    }
+
+    /// Persisted on connect, so it is there on the next launch.
+    func testConnectingStoresTheCallsign() async {
+        let harness = SessionHarness(settings: nil)
+        harness.session.settings = SessionHarness.goodSettings
+        harness.session.identity = OperatorIdentity(callsign: " vk1abc ")
+
+        await harness.session.connect()
+
+        XCTAssertEqual(
+            harness.settingsStore.savedIdentity, OperatorIdentity(callsign: "VK1ABC"),
+            "stored in the form that went on the air, not as typed")
+    }
+
+    /// And persisted without connecting, so a callsign typed and then left
+    /// alone is not lost. Stored as typed here — validation happens at connect.
+    func testSavingTheDraftStoresTheCallsign() {
+        let harness = SessionHarness(settings: nil)
+        harness.session.identity = OperatorIdentity(callsign: "vk1abc")
+
+        harness.session.saveDraft()
+
+        XCTAssertEqual(harness.settingsStore.savedIdentity?.callsign, "vk1abc")
+    }
+
+    /// The EchoLink secret is filed under `echolink:<callsign>`, so the
+    /// identity has to be loaded before the secret is looked up. Loading it
+    /// after would search for `echolink:` with nothing after the colon and come
+    /// back empty — an operator whose stored password had apparently vanished.
+    func testTheStoredSecretIsFoundUsingTheStoredCallsign() {
+        let echoLink = SessionHarness.echoLinkSettings
+        let identity = OperatorIdentity(callsign: "VK1XYZ")
+        let harness = SessionHarness(
+            settings: echoLink,
+            secrets: [echoLink.secretAccount(for: identity): "account-password"],
+            identity: identity)
+
+        XCTAssertEqual(harness.session.identity, identity)
+        XCTAssertEqual(harness.session.secret, "account-password")
+    }
+
     func testMissingHostAndNodeAreRefused() async {
         for settings in [
-            NodeSettings(host: "", node: "55553", callsign: "VK1XYZ"),
-            NodeSettings(host: "node.example.org", node: "", callsign: "VK1XYZ"),
+            NodeSettings(host: "", node: "55553"),
+            NodeSettings(host: "node.example.org", node: ""),
         ] {
             let harness = SessionHarness(settings: nil)
             harness.session.settings = settings
@@ -186,7 +258,8 @@ final class RadioSessionConnectionTests: XCTestCase {
 
         XCTAssertEqual(harness.settingsStore.saved, SessionHarness.goodSettings)
         XCTAssertEqual(
-            harness.secretStore.all[SessionHarness.goodSettings.secretAccount], "hunter2")
+            harness.secretStore.all[SessionHarness.goodSettings.secretAccount(for: vk1xyz)],
+            "hunter2")
     }
 
     /// The structural guarantee, not just the behavioural one: the type that
@@ -212,16 +285,20 @@ final class RadioSessionConnectionTests: XCTestCase {
     }
 
     func testSettingsAreTrimmedAndTheCallsignIsUppercasedBeforeUse() async {
-        let harness = SessionHarness(settings: nil)
+        let harness = SessionHarness(settings: nil, identity: nil)
         harness.session.settings = NodeSettings(
             host: "  node.example.org ", port: 0, node: " 55553 ",
-            username: " vk1xyz ", callsign: " vk1xyz ")
+            username: " vk1xyz ")
+        harness.session.identity = OperatorIdentity(callsign: " vk1xyz ")
 
         await harness.session.connect()
 
         XCTAssertEqual(harness.session.settings.host, "node.example.org")
-        XCTAssertEqual(harness.session.settings.callsign, "VK1XYZ")
         XCTAssertEqual(harness.session.settings.port, NodeSettings.defaultPort)
+
+        // Written back so the field shows what actually went on the air.
+        XCTAssertEqual(harness.session.identity.callsign, "VK1XYZ")
+        XCTAssertEqual(harness.identitiesSeen.map(\.callsign), ["VK1XYZ"])
     }
 
     // MARK: Disconnecting

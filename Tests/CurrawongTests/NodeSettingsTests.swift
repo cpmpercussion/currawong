@@ -9,13 +9,13 @@ import XCTest
 final class NodeSettingsTests: XCTestCase {
     private let good = NodeSettings(
         host: "node.example.org", port: 4569, node: "55553",
-        username: "vk1xyz", callsign: "VK1XYZ")
+        username: "vk1xyz")
 
     func testAGoodSetOfSettingsValidates() throws {
         XCTAssertEqual(try good.validated(), good)
     }
 
-    func testWhitespaceIsTrimmedAndTheCallsignIsUppercased() throws {
+    func testWhitespaceIsTrimmed() throws {
         // The id is carried over deliberately: a channel's identity survives
         // being edited, so two values that differ only in whitespace must
         // compare equal *after* validation, and they can only do that if they
@@ -23,7 +23,7 @@ final class NodeSettingsTests: XCTestCase {
         let messy = NodeSettings(
             id: good.id,
             host: " node.example.org\n", port: 4569, node: "\t55553 ",
-            username: " vk1xyz ", callsign: " vk1xyz ")
+            username: " vk1xyz ")
 
         XCTAssertEqual(try messy.validated(), good)
     }
@@ -48,11 +48,9 @@ final class NodeSettingsTests: XCTestCase {
             XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingNode)
         }
 
-        var noCallsign = good
-        noCallsign.callsign = ""
-        XCTAssertThrowsError(try noCallsign.validated()) {
-            XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingCallsign)
-        }
+        // The callsign is no longer among them: it is app-wide, and
+        // `OperatorIdentity.validated()` is what insists on it. See
+        // `OperatorIdentityTests`.
     }
 
     /// A node with no account configured expects no username and no secret,
@@ -87,11 +85,11 @@ final class NodeSettingsTests: XCTestCase {
     }
 
     func testTheSecretAccountIdentifiesTheNodeAndCarriesNoSecret() {
-        XCTAssertEqual(good.secretAccount, "vk1xyz@node.example.org:4569/55553")
+        XCTAssertEqual(good.secretAccount(for: vk1xyz), "vk1xyz@node.example.org:4569/55553")
 
         var other = good
         other.node = "12345"
-        XCTAssertNotEqual(good.secretAccount, other.secretAccount)
+        XCTAssertNotEqual(good.secretAccount(for: vk1xyz), other.secretAccount(for: vk1xyz))
     }
 
     /// The structural guarantee behind "the secret is never in UserDefaults":
@@ -110,8 +108,11 @@ final class NodeSettingsTests: XCTestCase {
             [
                 "id", "name", "mode", "host", "port", "node", "module",
                 "peer", "proxyPassword", "directoryServer", "operatorName", "location",
-                "username", "callsign", "transmitTimeout",
+                "username", "transmitTimeout",
             ])
+        XCTAssertFalse(
+            keys.contains("callsign"),
+            "the callsign is the operator's and is stored once, not in every channel")
     }
 
     func testRoundTripsThroughTheDefaultsStore() {
@@ -194,14 +195,17 @@ final class NodeSettingsTests: XCTestCase {
     func testTheTimeoutDoesNotAffectTheKeychainAccount() {
         var slower = good
         slower.transmitTimeout = 60
-        XCTAssertEqual(good.secretAccount, slower.secretAccount)
+        XCTAssertEqual(good.secretAccount(for: vk1xyz), slower.secretAccount(for: vk1xyz))
     }
 
     // MARK: - Radio mode (M17)
 
+    /// The operator. App-wide now, so it is a fixture here rather than a field
+    /// of each settings value.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
+
     private let m17 = NodeSettings(
-        mode: .m17, host: "ref.example.org", port: 17000, module: "A",
-        callsign: "VK1XYZ")
+        mode: .m17, host: "ref.example.org", port: 17000, module: "A")
 
     /// **The other migration test.** Settings written before this type had a
     /// mode were written when AllStarLink was all the app could do, so they are
@@ -216,6 +220,10 @@ final class NodeSettingsTests: XCTestCase {
 
         XCTAssertEqual(decoded.mode, .allStarLink)
         XCTAssertEqual(decoded.module, "")
+        // The blob still carries a `callsign`, written before the callsign was
+        // hoisted out of this type. It is ignored here rather than failing the
+        // decode — the store harvests it once, on the launch after the update.
+        // See `SettingsStoreTests`.
         // Compared with the id transplanted rather than field by field: the id
         // is the one thing that cannot match, because a blob written before
         // channels existed has none and is given a fresh one at decode.
@@ -227,7 +235,7 @@ final class NodeSettingsTests: XCTestCase {
     /// **Pinned deliberately.** Every secret an operator has already stored is
     /// filed under this exact string; editing the format orphans all of them.
     func testTheAllStarLinkKeychainAccountFormatIsFrozen() {
-        XCTAssertEqual(good.secretAccount, "vk1xyz@node.example.org:4569/55553")
+        XCTAssertEqual(good.secretAccount(for: vk1xyz), "vk1xyz@node.example.org:4569/55553")
     }
 
     /// An M17 link and an AllStarLink connection to one host are different
@@ -237,7 +245,7 @@ final class NodeSettingsTests: XCTestCase {
         asM17.mode = .m17
         asM17.module = "A"
 
-        XCTAssertNotEqual(good.secretAccount, asM17.secretAccount)
+        XCTAssertNotEqual(good.secretAccount(for: vk1xyz), asM17.secretAccount(for: vk1xyz))
     }
 
     func testTheNodeNumberIsRequiredOnlyInAllStarLinkMode() throws {
@@ -288,11 +296,6 @@ final class NodeSettingsTests: XCTestCase {
                 XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingHost)
             }
 
-            var noCallsign = settings
-            noCallsign.callsign = ""
-            XCTAssertThrowsError(try noCallsign.validated()) {
-                XCTAssertEqual($0 as? NodeSettings.ValidationError, .missingCallsign)
-            }
         }
     }
 
@@ -309,8 +312,7 @@ final class NodeSettingsTests: XCTestCase {
         peer: "13.57.14.183",
         directoryServer: "192.0.2.1",
         operatorName: "Charles",
-        location: "Canberra",
-        callsign: "VK1XYZ")
+        location: "Canberra")
 
     func testAGoodEchoLinkChannelValidates() throws {
         XCTAssertEqual(try echoLink.validated(), echoLink)
@@ -416,21 +418,21 @@ final class NodeSettingsTests: XCTestCase {
     /// therefore shares an entry, which is what makes deleting a channel unsafe
     /// to pair with deleting its Keychain item; see `RadioSessionChannelTests`.
     func testTheEchoLinkKeychainAccountIsKeyedByCallsignAlone() {
-        XCTAssertEqual(echoLink.secretAccount, "echolink:VK1XYZ")
+        XCTAssertEqual(echoLink.secretAccount(for: vk1xyz), "echolink:VK1XYZ")
 
         var elsewhere = echoLink
         elsewhere.host = "other-proxy.example.org"
         elsewhere.peer = "192.0.2.55"
         elsewhere.node = "*ECHOTEST2*"
         XCTAssertEqual(
-            echoLink.secretAccount, elsewhere.secretAccount,
+            echoLink.secretAccount(for: vk1xyz), elsewhere.secretAccount(for: vk1xyz),
             "one account password serves every EchoLink channel for a callsign")
     }
 
     /// Three modes, three account forms, and no two of them can collide — an
     /// EchoLink channel must never be able to read an AllStarLink node's secret.
     func testTheKeychainAccountDiffersAcrossAllThreeModes() {
-        let accounts = Set([good.secretAccount, m17.secretAccount, echoLink.secretAccount])
+        let accounts = Set([good.secretAccount(for: vk1xyz), m17.secretAccount(for: vk1xyz), echoLink.secretAccount(for: vk1xyz)])
         XCTAssertEqual(accounts.count, 3)
     }
 
@@ -509,6 +511,6 @@ final class NodeSettingsTests: XCTestCase {
         renamed.name = "Something else"
 
         XCTAssertEqual(renamed.id, good.id)
-        XCTAssertEqual(renamed.secretAccount, good.secretAccount)
+        XCTAssertEqual(renamed.secretAccount(for: vk1xyz), good.secretAccount(for: vk1xyz))
     }
 }

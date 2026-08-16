@@ -342,6 +342,7 @@ struct RootView: View {
         ConnectFormView(
             settings: $session.settings,
             secret: $session.secret,
+            identity: $session.identity,
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,
             isBusy: session.connection.isBusy,

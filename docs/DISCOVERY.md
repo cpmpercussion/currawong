@@ -8,7 +8,7 @@ up in search results and were not opened (LP-1/LP-2).
 
 **`https://m17-project.github.io/hostfiles/M17Hosts.json`** — the M17 Project's
 own host file, served from their GitHub Pages. Generated 2026-08-15 22:32 UTC,
-so it is live and maintained. 167 entries.
+so it is live and maintained. 125 entries — 101 native M17, 24 URF.
 
 Top level: `_refcheck_metadata` + `reflectors` array.
 
@@ -22,20 +22,40 @@ network_type`
 - `modules` for M17 entries are single letters. URF entries (multiprotocol —
   DMR/P25/NXDN/YSF as well as M17) carry a richer `modules` array with
   per-module mode and transcode info; those need filtering to the M17 modules.
-- `encrypted` is a per-reflector flag. FR-2.5 forbids an encryption UI, but
-  displaying "this reflector carries encrypted traffic" is not encryption UI.
+- `encrypted` is an array of module letters, not a boolean, and on most entries
+  it lists all twenty-six — so it reads as "encryption is permitted here" rather
+  than "this traffic is encrypted". **Not decoded.** Surfacing it would put a
+  scary word on nearly every row while saying nothing about the call being made;
+  the library's `playability == .encrypted`, which reports a stream it actually
+  cannot decode, is the truthful place. FR-2.5 forbids an encryption UI anyway.
 - `country` is a two-letter code, `sponsor` a callsign or org.
 
-**Provenance and terms.** `_refcheck_metadata.license` reads: "Reflector data
-provided by DVRef — https://dvref.com/aup/", processor "RefCheck.Radio Hostfile
-Processor; Chip Cuccio - W0CHP". So the data is DVRef's, republished by the M17
-Project. **The AUP could not be read: dvref.com returns 403 to automated
-fetches** — as did their mrefd listing guide. That 403 is itself a signal about
-automated consumption, though it may only be bot filtering rather than policy.
-Worth opening https://dvref.com/aup/ in a browser before shipping a client that
-fetches the list on a schedule. Consuming the M17 Project's copy rather than
-hitting dvref.com directly is the politer path either way, and is what the file
-appears to be published for.
+**Provenance and terms — read, and permissive.** `_refcheck_metadata.license`
+reads: "Reflector data provided by DVRef — https://dvref.com/aup/", processor
+"RefCheck.Radio Hostfile Processor; Chip Cuccio - W0CHP". So the data is
+DVRef's, republished by the M17 Project.
+
+The AUP (effective 4 August 2026) could not be fetched — dvref.com returns 403
+to automated clients — and was read from a copy the maintainer saved on
+2026-08-16. Its terms:
+
+- Public reflector data is **CC BY 4.0**. Copying, redistributing and building
+  upon it is explicitly allowed, in free, open-source, nonprofit or commercial
+  projects, with no permission needed. Applications are named as a permitted
+  use.
+- **Attribution is required** if you publish or redistribute the data. Their
+  suggested form is "Reflector data provided by DVRef — https://dvref.com/",
+  and it may live in documentation, a README, app credits or a data-sources
+  page. Currawong carries it in the Reflectors pane and in the README.
+- Automated clients should use the **published APIs, host files and downloads**
+  rather than scraping human-facing pages, should **cache rather than
+  re-download unnecessarily**, and should handle stale data and outages without
+  needing help. Consuming the M17 Project's host file, once per launch, is
+  squarely inside all three.
+- Do not imply DVRef endorses the project. We do not.
+
+Nothing here blocks the feature, and nothing requires a schedule change. If the
+app ever refreshes the list on a timer, revisit the caching clause then.
 
 ## AllStarLink — available, and richer than expected
 
@@ -109,6 +129,6 @@ API"), not a specification.
   either way, even if the answer is "not now", so it is not rediscovered. Note
   it is library work and new protocol work, with its own clean-room question:
   the only documentation found is a forum thread, not a specification.
-- **Open question for the maintainer — the DVRef AUP.** Unread, because
-  dvref.com serves 403 to automated fetches. Worth opening in a browser before
-  the app fetches the list on any kind of schedule.
+- **DVRef AUP — resolved.** CC BY 4.0 with attribution; see above. The credit
+  line is in the Reflectors pane and the README. No open question remains
+  unless the app starts refreshing on a timer.

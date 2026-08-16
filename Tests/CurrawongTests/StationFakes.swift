@@ -19,6 +19,7 @@ import Foundation
 final class FakeStationDirectory: StationDirectory, @unchecked Sendable {
     struct Fetch: Equatable {
         var settings: NodeSettings
+        var identity: OperatorIdentity
         var accountPassword: String
     }
 
@@ -34,11 +35,12 @@ final class FakeStationDirectory: StationDirectory, @unchecked Sendable {
         self.storedError = error
     }
 
-    func stations(for settings: NodeSettings, accountPassword: String) async throws
-        -> [DirectoryStation]
-    {
+    func stations(
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+    ) async throws -> [DirectoryStation] {
         lock.lock()
-        storedFetches.append(Fetch(settings: settings, accountPassword: accountPassword))
+        storedFetches.append(
+            Fetch(settings: settings, identity: identity, accountPassword: accountPassword))
         let error = storedError
         let stations = storedStations
         let holds = storedHoldUntilReleased

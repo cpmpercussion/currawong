@@ -21,7 +21,7 @@ final class ChannelSetTests: XCTestCase {
     private func channel(_ name: String) -> NodeSettings {
         NodeSettings(
             name: name, host: "\(name.lowercased()).example.org", node: "55553",
-            username: "vk1xyz", callsign: "VK1XYZ")
+            username: "vk1xyz")
     }
 
     // MARK: - Migration

@@ -18,6 +18,10 @@ import XCTest
 /// rest of the app is under.
 @MainActor
 final class CompositionRootTests: XCTestCase {
+    /// The operator. App-wide now, and passed to every factory rather than
+    /// living in the settings.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
+
     private func makeRoot() -> CompositionRoot {
         CompositionRoot(
             audio: FakeAudioIO(),
@@ -41,7 +45,8 @@ final class CompositionRootTests: XCTestCase {
         let link = CompositionRoot.makeIAX2Link(
             settings: NodeSettings(
                 host: "node.example.org", port: 4569, node: "55553",
-                username: "vk1xyz", callsign: "VK1XYZ"),
+                username: "vk1xyz"),
+            identity: vk1xyz,
             secret: "hunter2")
         defer { link.close() }
 
@@ -56,7 +61,8 @@ final class CompositionRootTests: XCTestCase {
     /// current state, so it must not trap here either.
     func testStopTransmitOnAnUnconnectedClientIsHarmless() async {
         let link = CompositionRoot.makeIAX2Link(
-            settings: NodeSettings(host: "node.example.org", node: "55553", callsign: "VK1XYZ"),
+            settings: NodeSettings(host: "node.example.org", node: "55553"),
+            identity: vk1xyz,
             secret: "")
         defer { link.close() }
 
@@ -70,7 +76,8 @@ final class CompositionRootTests: XCTestCase {
     /// documented to drop frames it is not keyed for rather than throwing.
     func testHandingFramesToAnUnkeyedLinkIsHarmless() {
         let link = CompositionRoot.makeIAX2Link(
-            settings: NodeSettings(host: "node.example.org", node: "55553", callsign: "VK1XYZ"),
+            settings: NodeSettings(host: "node.example.org", node: "55553"),
+            identity: vk1xyz,
             secret: "")
         defer { link.close() }
 
@@ -82,7 +89,8 @@ final class CompositionRootTests: XCTestCase {
     /// that can crash the app by being tapped early is not acceptable.
     func testSendingDTMFToAnUnconnectedLinkThrowsRatherThanTrapping() async {
         let link = CompositionRoot.makeIAX2Link(
-            settings: NodeSettings(host: "node.example.org", node: "55553", callsign: "VK1XYZ"),
+            settings: NodeSettings(host: "node.example.org", node: "55553"),
+            identity: vk1xyz,
             secret: "")
         defer { link.close() }
 
@@ -106,8 +114,7 @@ final class CompositionRootTests: XCTestCase {
             peer: "13.57.14.183",
             directoryServer: "192.0.2.1",
             operatorName: "Charles",
-            location: "Canberra",
-            callsign: "VK1XYZ")
+            location: "Canberra")
     }
 
     /// The third mode builds the same ``RadioLink`` as the other two, and
@@ -115,7 +122,7 @@ final class CompositionRootTests: XCTestCase {
     /// transport inside `connect(to:)`.
     func testTheEchoLinkFactoryBuildsALinkWithoutConnectingIt() throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), secret: "account-password")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password")
         defer { link.close() }
 
         XCTAssertEqual(link.mode, .echoLink)
@@ -132,7 +139,8 @@ final class CompositionRootTests: XCTestCase {
             settings.peer = bad
 
             XCTAssertThrowsError(
-                try CompositionRoot.makeEchoLinkLink(settings: settings, secret: ""), bad
+                try CompositionRoot.makeEchoLinkLink(
+                    settings: settings, identity: vk1xyz, secret: ""), bad
             ) { error in
                 XCTAssertEqual(error as? EchoLinkLinkError, .invalidPeerAddress(bad), bad)
             }
@@ -148,7 +156,7 @@ final class CompositionRootTests: XCTestCase {
         settings.host = ""
 
         XCTAssertThrowsError(
-            try CompositionRoot.makeEchoLinkLink(settings: settings, secret: "")
+            try CompositionRoot.makeEchoLinkLink(settings: settings, identity: vk1xyz, secret: "")
         ) { error in
             XCTAssertEqual(error as? EchoLinkLinkError, .missingProxyHost)
         }
@@ -160,7 +168,7 @@ final class CompositionRootTests: XCTestCase {
     /// line of defence.
     func testEchoLinkRefusesDTMFRatherThanSwallowingIt() async throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), secret: "")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "")
         defer { link.close() }
 
         do {
@@ -183,7 +191,8 @@ final class CompositionRootTests: XCTestCase {
             secretStore: InMemorySecretStore(),
             stationDirectory: directory)
 
-        root.stationBrowser.load(for: echoLinkSettings(), accountPassword: "pw")
+        root.stationBrowser.load(
+            for: echoLinkSettings(), identity: vk1xyz, accountPassword: "pw")
         await waitUntil("the injected directory answers") {
             !root.stationBrowser.stations.isEmpty
         }
@@ -210,7 +219,7 @@ final class CompositionRootTests: XCTestCase {
     /// and they do not know which mode is up either.
     func testStopTransmitOnAnUnconnectedEchoLinkClientIsHarmless() async throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), secret: "")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "")
         defer { link.close() }
 
         await link.stopTransmit()
@@ -262,7 +271,7 @@ final class CompositionRootTests: XCTestCase {
     /// seconds were asked for.
     func testTheWatchdogTimeoutComesFromTheSettings() {
         var settings = NodeSettings(
-            host: "node.example.org", node: "55553", callsign: "VK1XYZ")
+            host: "node.example.org", node: "55553")
         settings.transmitTimeout = 12
 
         XCTAssertEqual(CompositionRoot.watchdogTimeout(for: settings), .seconds(12))

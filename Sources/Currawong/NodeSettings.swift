@@ -104,9 +104,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// The account the node authenticates us as. May be empty.
     var username: String
 
-    /// The operator's callsign, sent as the calling name.
-    var callsign: String
-
     /// **SF-1.** How long one transmission may last before the library's
     /// watchdog unkeys, in seconds.
     ///
@@ -168,7 +165,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         operatorName: String = "",
         location: String = "",
         username: String = "",
-        callsign: String = "",
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
         self.id = id
@@ -184,7 +180,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.operatorName = operatorName
         self.location = location
         self.username = username
-        self.callsign = callsign
         self.transmitTimeout = transmitTimeout
     }
 
@@ -235,7 +230,11 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.operatorName = try container.decodeIfPresent(String.self, forKey: .operatorName) ?? ""
         self.location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
-        self.callsign = try container.decode(String.self, forKey: .callsign)
+        // `callsign` may be present in a blob written before the callsign
+        // became app-wide. It is deliberately not read here: the type no longer
+        // has the field, and an unknown key in a keyed container is ignored.
+        // `UserDefaultsSettingsStore.loadIdentity()` is what harvests it, once,
+        // so that an operator updating the app does not have to retype it.
         self.transmitTimeout =
             try container.decodeIfPresent(TimeInterval.self, forKey: .transmitTimeout)
             ?? Self.defaultTransmitTimeout
@@ -256,14 +255,18 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// host must not be mistaken for an authenticated AllStarLink connection to
     /// the same host. Its dialled target is a module letter rather than a node
     /// number, and the prefix makes the two unmistakable.
-    var secretAccount: String {
+    /// Takes the identity rather than reading a stored callsign, since the
+    /// callsign is the operator's and no longer the channel's — but the account
+    /// *strings* are unchanged, so every secret already in the Keychain is still
+    /// found under the same name.
+    func secretAccount(for identity: OperatorIdentity) -> String {
         switch mode {
         case .allStarLink:
             return "\(username)@\(host):\(port)/\(node)"
         case .m17:
-            return "m17:\(callsign)@\(host):\(port)/\(module)"
+            return "m17:\(identity.callsign)@\(host):\(port)/\(module)"
         case .echoLink:
-            return "echolink:\(callsign)"
+            return "echolink:\(identity.callsign)"
         }
     }
 
@@ -271,7 +274,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     enum ValidationError: Error, Equatable, CustomStringConvertible {
         case missingHost
         case missingNode
-        case missingCallsign
         case missingModule
         case invalidModule
         case missingPeerAddress
@@ -296,8 +298,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
                 return "Enter the node's host name or address."
             case .missingNode:
                 return "Enter the node number to call."
-            case .missingCallsign:
-                return "Enter your callsign. Transmitting without identifying is not legal anywhere."
             case .missingModule:
                 return "Enter the reflector module to link, a single letter A-Z."
             case .invalidModule:
@@ -310,8 +310,9 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     ///
     /// `username` and the secret are *not* required: a node with no account
     /// configured expects neither, and the library omits empty fields rather
-    /// than sending blank ones. `callsign` is required in both modes, because
-    /// unidentified transmission is not a thing this app is going to make easy.
+    /// than sending blank ones. The callsign is required, but it is no longer
+    /// here to check — see ``OperatorIdentity/validated()``, which
+    /// `RadioSession.connect()` calls alongside this.
     ///
     /// Which of ``node`` and ``module`` is insisted on is the mode's business,
     /// per `RadioMode.usesNodeNumber` and `RadioMode.usesModule` — demanding
@@ -333,11 +334,9 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             operatorName: operatorName.trimmed,
             location: location.trimmed,
             username: username.trimmed,
-            callsign: callsign.trimmed.uppercased(),
             transmitTimeout: transmitTimeout)
 
         guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
-        guard !trimmed.callsign.isEmpty else { throw ValidationError.missingCallsign }
 
         if mode.usesNodeNumber {
             guard !trimmed.node.isEmpty else { throw ValidationError.missingNode }

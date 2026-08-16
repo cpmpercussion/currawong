@@ -94,9 +94,15 @@ final class RadioSession: ObservableObject {
         var id: Kind { kind }
     }
 
-    /// How the composition root turns settings plus a secret into a link.
-    /// Throws, because building a destination can reject what was typed.
-    typealias LinkFactory = @MainActor (NodeSettings, String) throws -> RadioLink
+    /// How the composition root turns a destination, an operator and a secret
+    /// into a link. Throws, because building a destination can reject what was
+    /// typed.
+    ///
+    /// The identity is its own type rather than a third `String` so that it
+    /// cannot be swapped with the secret at a call site — see
+    /// ``OperatorIdentity``.
+    typealias LinkFactory =
+        @MainActor (NodeSettings, OperatorIdentity, String) throws -> RadioLink
 
     /// How long after the last inbound frame the receive indicator stays lit.
     /// Two and a half frames — long enough not to flicker on the 20 ms grid,
@@ -128,6 +134,12 @@ final class RadioSession: ObservableObject {
     /// The secret, in memory only. It reaches the Keychain in ``connect()``
     /// and `UserDefaults` never.
     @Published var secret: String
+
+    /// Who is operating. **App-wide, not per channel** — one callsign is used on
+    /// every network, so the connect form edits this rather than a field of the
+    /// selected channel. Persisted by ``connect()`` and ``saveDraft()`` the same
+    /// way the channel list is.
+    @Published var identity: OperatorIdentity
 
     @Published private(set) var connection: ConnectionStatus = .disconnected
 
@@ -243,7 +255,14 @@ final class RadioSession: ObservableObject {
         // which is the same thing the app did before it had a channel list.
         let current = loaded.selected ?? NodeSettings()
         self.settings = current
-        self.secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+
+        // Before the secret is fetched: for two of the three modes the Keychain
+        // account is derived from the callsign, so an identity loaded after this
+        // would look the secret up under `echolink:` with nothing after the
+        // colon and come back empty.
+        let identity = settingsStore.loadIdentity() ?? .empty
+        self.identity = identity
+        self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
     // MARK: - Channels (APP-4)
@@ -276,6 +295,12 @@ final class RadioSession: ObservableObject {
     func saveDraft() {
         channels.update(settings)
         persistChannels()
+
+        // The identity travels with the draft rather than only with a
+        // connection, so a callsign typed and then never connected with is
+        // still there on the next launch. Stored as typed — validation, and
+        // therefore uppercasing, happens at `connect()`.
+        settingsStore.saveIdentity(identity)
     }
 
     /// Adds a channel, selects it, and points the draft at it.
@@ -325,7 +350,7 @@ final class RadioSession: ObservableObject {
     private func loadSelectedIntoDraft() {
         let current = channels.selected ?? NodeSettings()
         settings = current
-        secret = (try? secretStore.secret(for: current.secretAccount)) ?? ""
+        secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
     }
 
     private func persistChannels() {
@@ -370,6 +395,27 @@ final class RadioSession: ObservableObject {
     func connect() async {
         guard connection == .disconnected else { return }
 
+        // Two validations, because there are now two things being validated:
+        // where we are going, and who we are. The identity goes first — it is
+        // app-wide, so a missing callsign is wrong for every channel rather
+        // than for this one, and reporting a channel problem first would send
+        // the operator to the wrong field.
+        let validatedIdentity: OperatorIdentity
+        do {
+            validatedIdentity = try identity.validated()
+        } catch let error as OperatorIdentity.ValidationError {
+            present(title: "Check your callsign", message: error.description)
+            return
+        } catch {
+            present(title: "Check your callsign", message: "\(error)")
+            return
+        }
+
+        // Written back so the field shows what was actually used — the
+        // uppercased, trimmed form that went on the air.
+        identity = validatedIdentity
+        settingsStore.saveIdentity(validatedIdentity)
+
         let validated: NodeSettings
         do {
             validated = try settings.validated()
@@ -398,7 +444,7 @@ final class RadioSession: ObservableObject {
         settingsStore.save(validated)
 
         do {
-            try secretStore.setSecret(secret, for: validated.secretAccount)
+            try secretStore.setSecret(secret, for: validated.secretAccount(for: validatedIdentity))
         } catch {
             // Not fatal: the connection can proceed with the secret held in
             // memory. Saying so is better than silently forgetting it.
@@ -462,7 +508,7 @@ final class RadioSession: ObservableObject {
 
         let newLink: RadioLink
         do {
-            newLink = try makeLink(resolved, secret)
+            newLink = try makeLink(resolved, validatedIdentity, secret)
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")

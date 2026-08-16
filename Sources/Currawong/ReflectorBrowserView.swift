@@ -42,6 +42,8 @@ struct ReflectorBrowserView: View {
             } else {
                 list
             }
+
+            attribution
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Unlike the station browser, which must never fetch by itself. See
@@ -128,6 +130,20 @@ struct ReflectorBrowserView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// **Required, not decorative.** DVRef publishes the reflector data under
+    /// CC BY 4.0, and attribution is the condition: "If you publish or
+    /// redistribute DVRef data, provide reasonable credit to DVRef." Their
+    /// policy accepts it in documentation, a README, app credits or a
+    /// data-sources page — it is here as well as in the README because this is
+    /// the screen the data is actually on, and it is the honest answer to an
+    /// operator wondering where the list came from.
+    private var attribution: some View {
+        Text("Reflector data provided by DVRef (dvref.com), CC BY 4.0, via the M17 Project.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var list: some View {

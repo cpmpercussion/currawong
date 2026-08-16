@@ -23,9 +23,11 @@ final class StationBrowserTests: XCTestCase {
             host: "proxy.example.org",
             port: 8100,
             peer: "13.57.14.183",
-            directoryServer: "192.0.2.1",
-            callsign: "VK1XYZ")
+            directoryServer: "192.0.2.1")
     }
+
+    /// The operator, which is app-wide now rather than a field of the channel.
+    private let identity = OperatorIdentity(callsign: "VK1XYZ")
 
     // MARK: - What is missing
 
@@ -34,29 +36,29 @@ final class StationBrowserTests: XCTestCase {
     /// protocol error that names none of them.
     func testWhatIsMissingNamesTheFieldTheOperatorHasToFill() {
         let good = echoLinkSettings()
-        XCTAssertNil(StationBrowser.whatIsMissing(in: good, accountPassword: "pw"))
+        XCTAssertNil(StationBrowser.whatIsMissing(in: good, identity: identity, accountPassword: "pw"))
 
         var notEchoLink = good
         notEchoLink.mode = .allStarLink
         XCTAssertEqual(
-            StationBrowser.whatIsMissing(in: notEchoLink, accountPassword: "pw"), .notEchoLink)
+            StationBrowser.whatIsMissing(in: notEchoLink, identity: identity, accountPassword: "pw"), .notEchoLink)
 
         var noProxy = good
         noProxy.host = "   "
         XCTAssertEqual(
-            StationBrowser.whatIsMissing(in: noProxy, accountPassword: "pw"), .missingProxy)
+            StationBrowser.whatIsMissing(in: noProxy, identity: identity, accountPassword: "pw"), .missingProxy)
 
         var noDirectory = good
         noDirectory.directoryServer = " "
         XCTAssertEqual(
-            StationBrowser.whatIsMissing(in: noDirectory, accountPassword: "pw"),
+            StationBrowser.whatIsMissing(in: noDirectory, identity: identity, accountPassword: "pw"),
             .missingDirectoryServer)
 
         // The account password is the one that is genuinely secret, and the
         // directory server will not list stations for an account it has not
         // authenticated — so an anonymous browse is not a thing that exists.
         XCTAssertEqual(
-            StationBrowser.whatIsMissing(in: good, accountPassword: ""),
+            StationBrowser.whatIsMissing(in: good, identity: identity, accountPassword: ""),
             .missingAccountPassword)
     }
 
@@ -68,7 +70,7 @@ final class StationBrowserTests: XCTestCase {
         empty.host = ""
         empty.directoryServer = ""
 
-        XCTAssertEqual(StationBrowser.whatIsMissing(in: empty, accountPassword: ""), .missingProxy)
+        XCTAssertEqual(StationBrowser.whatIsMissing(in: empty, identity: identity, accountPassword: ""), .missingProxy)
     }
 
     func testEveryComplaintHasWordsForTheOperator() {
@@ -89,7 +91,7 @@ final class StationBrowserTests: XCTestCase {
         var settings = echoLinkSettings()
         settings.directoryServer = ""
 
-        browser.load(for: settings, accountPassword: "pw")
+        browser.load(for: settings, identity: identity, accountPassword: "pw")
 
         XCTAssertTrue(directory.fetches.isEmpty, "nothing should have been fetched")
         XCTAssertFalse(browser.isLoading)
@@ -107,7 +109,7 @@ final class StationBrowserTests: XCTestCase {
         ])
         let browser = StationBrowser(directory: directory, now: { fetchedAt })
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the listing arrives") { !browser.stations.isEmpty }
 
         XCTAssertEqual(browser.stations.map(\.callsign), ["VK1ABC", "VK2DEF"])
@@ -133,7 +135,7 @@ final class StationBrowserTests: XCTestCase {
             error: FakeStationDirectory.DirectoryUnreachable())
         let browser = StationBrowser(directory: directory)
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the failure is reported") { browser.failure != nil }
 
         XCTAssertEqual(browser.failure, "the directory server did not answer")
@@ -148,7 +150,7 @@ final class StationBrowserTests: XCTestCase {
     func testAnEmptyListingIsReportedRatherThanShownAsNothing() async {
         let browser = StationBrowser(directory: FakeStationDirectory(stations: []))
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the empty listing is reported") { browser.failure != nil }
 
         XCTAssertEqual(browser.failure, "The directory server listed no stations.")
@@ -162,11 +164,11 @@ final class StationBrowserTests: XCTestCase {
             error: FakeStationDirectory.DirectoryUnreachable())
         let browser = StationBrowser(directory: directory)
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the first fetch fails") { browser.failure != nil }
 
         directory.error = nil
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the second fetch succeeds") { !browser.stations.isEmpty }
 
         XCTAssertNil(browser.failure)
@@ -175,7 +177,7 @@ final class StationBrowserTests: XCTestCase {
     func testCancellingStopsTheSpinner() async {
         let browser = StationBrowser(directory: FakeStationDirectory(stations: []))
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         browser.cancel()
 
         XCTAssertFalse(browser.isLoading)
@@ -194,8 +196,8 @@ final class StationBrowserTests: XCTestCase {
         directory.holdUntilReleased = true
         let browser = StationBrowser(directory: directory)
 
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
 
         // Let the cancelled first task run to its exit.
         for _ in 0..<10 { await Task.yield() }
@@ -219,7 +221,7 @@ final class StationBrowserTests: XCTestCase {
             .fake(callsign: "ZL1GHI", location: "Auckland", nodeNumber: 34512),
         ])
         let browser = StationBrowser(directory: directory)
-        browser.load(for: echoLinkSettings(), accountPassword: "pw")
+        browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw")
         await waitUntil("the listing arrives") { !browser.stations.isEmpty }
         return browser
     }
@@ -315,7 +317,6 @@ final class StationBrowserTests: XCTestCase {
         XCTAssertEqual(channel.peer, "13.57.14.183")
         XCTAssertEqual(channel.host, template.host, "the proxy is the operator's")
         XCTAssertEqual(channel.directoryServer, template.directoryServer)
-        XCTAssertEqual(channel.callsign, template.callsign)
         // A new channel, not the template edited — otherwise picking a station
         // from the browser would silently re-point the channel it was launched
         // from.

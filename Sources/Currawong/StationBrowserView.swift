@@ -73,7 +73,9 @@ struct StationBrowserView: View {
             }
 
             Button {
-                browser.load(for: session.settings, accountPassword: session.secret)
+                browser.load(
+                    for: session.settings, identity: session.identity,
+                    accountPassword: session.secret)
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }

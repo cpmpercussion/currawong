@@ -12,6 +12,8 @@ import XCTest
 /// type. That property is what `RadioLink` gave up its generic parameter for,
 /// and it is what these tests pin.
 final class RadioModeTests: XCTestCase {
+    /// The operator. App-wide now, rather than a settings field.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
 
     // MARK: - The mode itself
 
@@ -109,12 +111,12 @@ final class RadioModeTests: XCTestCase {
     private func allStarSettings() -> NodeSettings {
         NodeSettings(
             host: "node.example.org", port: 4569, node: "55553",
-            username: "vk1xyz", callsign: "VK1XYZ")
+            username: "vk1xyz")
     }
 
     private func m17Settings() -> NodeSettings {
         var settings = NodeSettings(
-            host: "reflector.example.org", port: 17000, callsign: "VK1XYZ")
+            host: "reflector.example.org", port: 17000)
         settings.mode = .m17
         settings.module = "C"
         return settings
@@ -127,22 +129,20 @@ final class RadioModeTests: XCTestCase {
             port: 8100,
             node: "*ECHOTEST*",
             peer: "13.57.14.183",
-            directoryServer: "192.0.2.1",
-            callsign: "VK1XYZ")
+            directoryServer: "192.0.2.1")
     }
 
     @MainActor
     func testTheFactoryDispatchesOnTheModeInTheSettings() throws {
-        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2")
+        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2")
         defer { allStar.close() }
         XCTAssertEqual(allStar.mode, .allStarLink)
 
-        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), secret: "")
+        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: "")
         defer { m17.close() }
         XCTAssertEqual(m17.mode, .m17)
 
-        let echoLink = try CompositionRoot.makeLink(
-            settings: echoLinkSettings(), secret: "account-password")
+        let echoLink = try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password")
         defer { echoLink.close() }
         XCTAssertEqual(echoLink.mode, .echoLink)
     }
@@ -154,9 +154,9 @@ final class RadioModeTests: XCTestCase {
     @MainActor
     func testAllThreeModesProduceTheSameKindOfLink() throws {
         let links: [RadioLink] = [
-            try CompositionRoot.makeLink(settings: allStarSettings(), secret: "hunter2"),
-            try CompositionRoot.makeLink(settings: m17Settings(), secret: ""),
-            try CompositionRoot.makeLink(settings: echoLinkSettings(), secret: ""),
+            try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2"),
+            try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: ""),
+            try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: ""),
         ]
         defer { links.forEach { $0.close() } }
 
@@ -170,7 +170,7 @@ final class RadioModeTests: XCTestCase {
     /// lazily inside connect (AU-5).
     @MainActor
     func testBuildingAnM17LinkConnectsNothing() async throws {
-        let link = try CompositionRoot.makeM17Link(settings: m17Settings())
+        let link = try CompositionRoot.makeM17Link(settings: m17Settings(), identity: vk1xyz)
         defer { link.close() }
 
         XCTAssertEqual(link.transmitState(), .idle)
@@ -185,7 +185,7 @@ final class RadioModeTests: XCTestCase {
     /// backstop rather than the first line of defence.
     @MainActor
     func testM17RefusesDTMFRatherThanSwallowingIt() async throws {
-        let link = try CompositionRoot.makeM17Link(settings: m17Settings())
+        let link = try CompositionRoot.makeM17Link(settings: m17Settings(), identity: vk1xyz)
         defer { link.close() }
 
         do {
@@ -203,7 +203,7 @@ final class RadioModeTests: XCTestCase {
         var settings = m17Settings()
         settings.module = "CC"
 
-        XCTAssertThrowsError(try CompositionRoot.makeM17Link(settings: settings)) { error in
+        XCTAssertThrowsError(try CompositionRoot.makeM17Link(settings: settings, identity: vk1xyz)) { error in
             XCTAssertEqual(error as? M17LinkError, .invalidModule("CC"))
         }
     }

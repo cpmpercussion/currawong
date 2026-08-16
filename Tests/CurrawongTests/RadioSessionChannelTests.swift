@@ -15,6 +15,9 @@ import XCTest
 /// Every one of these runs against ``FakeNetworkClient``. No socket, no node.
 @MainActor
 final class RadioSessionChannelTests: XCTestCase {
+    /// The operator. App-wide now, rather than a settings field.
+    private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
+
 
     // Computed rather than stored, so they are read on the main actor alongside
     // the harness that defines them. The values themselves are constants, so
@@ -60,8 +63,8 @@ final class RadioSessionChannelTests: XCTestCase {
             channels: [allStar, echo],
             selectedID: allStar.id,
             secrets: [
-                allStar.secretAccount: "hunter2",
-                echo.secretAccount: "account-password",
+                allStar.secretAccount(for: vk1xyz): "hunter2",
+                echo.secretAccount(for: vk1xyz): "account-password",
             ])
         XCTAssertEqual(harness.session.secret, "hunter2")
 
@@ -80,7 +83,7 @@ final class RadioSessionChannelTests: XCTestCase {
             settings: nil,
             channels: [allStar, other],
             selectedID: allStar.id,
-            secrets: [allStar.secretAccount: "hunter2"])
+            secrets: [allStar.secretAccount(for: vk1xyz): "hunter2"])
 
         harness.session.select(other.id)
 
@@ -213,7 +216,7 @@ final class RadioSessionChannelTests: XCTestCase {
             settings: nil,
             channels: [allStar, other],
             selectedID: allStar.id,
-            secrets: [other.secretAccount: "other-secret"])
+            secrets: [other.secretAccount(for: vk1xyz): "other-secret"])
 
         harness.session.deleteChannel(allStar.id)
 
@@ -251,7 +254,7 @@ final class RadioSessionChannelTests: XCTestCase {
     /// **The Keychain secret is deliberately left behind, and that is not an
     /// oversight.**
     ///
-    /// A secret is filed under `NodeSettings.secretAccount`, which other
+    /// A secret is filed under `NodeSettings.secretAccount(for: vk1xyz)`, which other
     /// channels can share — every EchoLink channel for one callsign does, by
     /// construction, because the EchoLink account form is `echolink:<callsign>`
     /// and names no node. Deleting the Keychain item along with the channel
@@ -265,19 +268,19 @@ final class RadioSessionChannelTests: XCTestCase {
         otherEcho.name = "Another EchoLink node"
         otherEcho.peer = "192.0.2.55"
         XCTAssertEqual(
-            otherEcho.secretAccount, echo.secretAccount,
+            otherEcho.secretAccount(for: vk1xyz), echo.secretAccount(for: vk1xyz),
             "the premise: two EchoLink channels, one account password")
 
         let harness = SessionHarness(
             settings: nil,
             channels: [echo, otherEcho],
             selectedID: echo.id,
-            secrets: [echo.secretAccount: "account-password"])
+            secrets: [echo.secretAccount(for: vk1xyz): "account-password"])
 
         harness.session.deleteChannel(echo.id)
 
         XCTAssertEqual(
-            harness.secretStore.all[echo.secretAccount], "account-password",
+            harness.secretStore.all[echo.secretAccount(for: vk1xyz)], "account-password",
             "the surviving channel still needs the password it shares")
         XCTAssertEqual(harness.session.settings.id, otherEcho.id)
         XCTAssertEqual(harness.session.secret, "account-password")
@@ -303,12 +306,10 @@ final class RadioSessionChannelTests: XCTestCase {
     func testSavingTheDraftKeepsHalfTypedFields() {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
         harness.session.settings.host = "half-ty"
-        harness.session.settings.callsign = ""
 
         harness.session.saveDraft()
 
         XCTAssertEqual(harness.settingsStore.savedChannels?.first?.host, "half-ty")
-        XCTAssertEqual(harness.settingsStore.savedChannels?.first?.callsign, "")
         XCTAssertNil(harness.session.alert, "saving a draft is not a validation gate")
     }
 

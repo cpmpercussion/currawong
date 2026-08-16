@@ -193,7 +193,7 @@ final class ReflectorBrowserTests: XCTestCase {
         let reflector = M17Reflector.fake(
             designator: "M17-AUS", host: "m17-aus.example.org", port: 17001)
 
-        var template = NodeSettings(mode: .echoLink, callsign: "VK1XYZ")
+        var template = NodeSettings(mode: .echoLink)
         template.transmitTimeout = 42
 
         let channel = reflector.channel(module: "C", basedOn: template)
@@ -204,9 +204,10 @@ final class ReflectorBrowserTests: XCTestCase {
         XCTAssertEqual(channel.module, "C")
         XCTAssertEqual(channel.name, "M17-AUS C")
 
-        // The parts the reflector cannot supply come from the template — these
-        // are what the operator has already configured and must not retype.
-        XCTAssertEqual(channel.callsign, "VK1XYZ")
+        // The part the reflector cannot supply comes from the template — what
+        // the operator has already configured and must not retype. The callsign
+        // is no longer among these: it is app-wide now, and not a channel field
+        // at all.
         XCTAssertEqual(channel.transmitTimeout, 42)
 
         // A new channel, not an edit of the one it was based on.
@@ -217,7 +218,7 @@ final class ReflectorBrowserTests: XCTestCase {
     /// must give two channels rather than one that overwrites the other.
     func testTwoModulesOnOneReflectorAreTwoChannels() {
         let reflector = M17Reflector.fake(designator: "M17-AUS")
-        let template = NodeSettings(mode: .m17, callsign: "VK1XYZ")
+        let template = NodeSettings(mode: .m17)
 
         let a = reflector.channel(module: "A", basedOn: template)
         let b = reflector.channel(module: "B", basedOn: template)

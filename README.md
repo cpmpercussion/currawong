@@ -43,8 +43,9 @@ are stable and can be typed, but a hundred and twenty-five reflectors across
 twenty countries is not something to remember. The list is the host file the
 M17 Project publishes at
 [`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json) — the
-underlying data is DVRef's — and the module is what you actually pick, since a
-reflector without one is nowhere. Multiprotocol URF reflectors are included but
+underlying data is DVRef's, used under CC BY 4.0 and credited in the pane — and
+the module is what you actually pick, since a reflector without one is
+nowhere. Multiprotocol URF reflectors are included but
 marked, and only their M17 and transcoding modules are offered; linking a DMR
 module from here would be a connection that fails or, worse, succeeds into
 silence. Unlike the station browser it fetches on first appearance, because a

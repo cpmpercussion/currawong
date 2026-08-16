@@ -32,6 +32,11 @@ struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
+    /// The operator's callsign. **Not part of ``settings``** — it is app-wide,
+    /// so editing it here changes it for every channel, which is the intent.
+    /// See ``OperatorIdentity``.
+    @Binding var identity: OperatorIdentity
+
     let isEditable: Bool
     let connectTitle: String
     let isBusy: Bool
@@ -352,15 +357,24 @@ struct ConnectFormView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    @ViewBuilder
     private var callsignField: some View {
         LabelledField(label: "Callsign", systemImage: "person.wave.2") {
-            TextField("VK1XYZ", text: $settings.callsign)
+            TextField("VK1XYZ", text: $identity.callsign)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .textInputAutocapitalization(.characters)
                 #endif
                 .autocorrectionDisabled()
         }
+
+        // The one field on this form that is not about the channel. Said
+        // plainly, because an operator who changed it expecting to affect only
+        // the channel in front of them would be wrong in a way that matters:
+        // this is what identifies them on the air, everywhere.
+        Text("Your callsign, used on every channel and in every mode.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

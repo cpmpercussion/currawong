@@ -29,6 +29,15 @@ protocol SettingsStore: AnyObject, Sendable {
     /// if the one that was has since been deleted.
     func loadSelectedChannelID() -> UUID?
     func saveSelectedChannelID(_ id: UUID?)
+
+    /// The operator's callsign, which is app-wide rather than per channel.
+    ///
+    /// `nil` means none has ever been saved *under its own key* — which is the
+    /// signal to go looking for one in the channels written before the callsign
+    /// was hoisted out of them. See
+    /// ``UserDefaultsSettingsStore/loadIdentity()``.
+    func loadIdentity() -> OperatorIdentity?
+    func saveIdentity(_ identity: OperatorIdentity)
 }
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
@@ -50,6 +59,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let key = "au.charlesmartin.currawong.nodeSettings"
     private static let channelsKey = "au.charlesmartin.currawong.channels"
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
+    private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
 
     private let defaults: UserDefaults
 
@@ -88,6 +98,56 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
             return
         }
         defaults.set(id.uuidString, forKey: Self.selectedKey)
+    }
+
+    /// The app-wide callsign, harvesting one from older per-channel settings if
+    /// this is the first launch since the callsign was hoisted out of them.
+    ///
+    /// **Why this reads raw JSON.** `NodeSettings` no longer has a `callsign`
+    /// property, so decoding a stored channel throws the old value away — which
+    /// is the correct behaviour for that type and the wrong behaviour exactly
+    /// once, on the launch after the update. Rather than keep a vestigial field
+    /// on `NodeSettings` for the benefit of a one-off, the migration reads the
+    /// stored blobs as dictionaries and takes the first non-empty callsign it
+    /// finds. The alternative is an operator who has to work out why the app
+    /// suddenly will not let them transmit.
+    ///
+    /// Channels first, then the pre-APP-4 single node, which is the order they
+    /// were written in. Nothing is written back here: saving is
+    /// ``saveIdentity(_:)``'s job and the session does it once the value has
+    /// been through `OperatorIdentity.validated()`.
+    func loadIdentity() -> OperatorIdentity? {
+        if let data = defaults.data(forKey: Self.identityKey),
+            let identity = try? JSONDecoder().decode(OperatorIdentity.self, from: data)
+        {
+            return identity
+        }
+
+        let harvested =
+            Self.firstCallsign(inArrayAt: Self.channelsKey, defaults: defaults)
+            ?? Self.firstCallsign(inObjectAt: Self.key, defaults: defaults)
+
+        return harvested.map { OperatorIdentity(callsign: $0) }
+    }
+
+    func saveIdentity(_ identity: OperatorIdentity) {
+        guard let data = try? JSONEncoder().encode(identity) else { return }
+        defaults.set(data, forKey: Self.identityKey)
+    }
+
+    private static func firstCallsign(inArrayAt key: String, defaults: UserDefaults) -> String? {
+        guard let data = defaults.data(forKey: key),
+            let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+        return array.lazy.compactMap { $0["callsign"] as? String }.first { !$0.isEmpty }
+    }
+
+    private static func firstCallsign(inObjectAt key: String, defaults: UserDefaults) -> String? {
+        guard let data = defaults.data(forKey: key),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let callsign = object["callsign"] as? String, !callsign.isEmpty
+        else { return nil }
+        return callsign
     }
 }
 
