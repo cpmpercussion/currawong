@@ -167,7 +167,8 @@ struct RootView: View {
 
             if session.settings.mode == .echoLink {
                 StationBrowserView(
-                    session: session, browser: browser, onChosen: { selectedTab = .channels }
+                    session: session, browser: browser, proxyPicker: proxyPicker,
+                    onChosen: { selectedTab = .channels }
                 )
                 .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(Tab.directory)
@@ -357,7 +358,8 @@ struct RootView: View {
             }
         case .stations:
             StationBrowserView(
-                session: session, browser: browser, onChosen: { detailPane = .connect })
+                session: session, browser: browser, proxyPicker: proxyPicker,
+                onChosen: { detailPane = .connect })
         case .reflectors:
             ReflectorBrowserView(
                 session: session, browser: reflectorBrowser,
@@ -437,10 +439,36 @@ struct RootView: View {
             identity: $session.identity,
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,
-            isBusy: session.connection.isBusy,
-            connectAction: { Task { await session.toggleConnection() } },
+            isBusy: session.connection.isBusy || proxyPicker.isSearching,
+            connectAction: { Task { await connectOrDisconnect() } },
             proxyPicker: proxyPicker,
             nodeLocator: nodeLocator)
+    }
+
+    /// The Connect button's action: find a proxy first if this channel needs
+    /// one, then place or drop the call.
+    ///
+    /// Only on the way *out*. `toggleConnection` is one button for two verbs,
+    /// and hanging up does not need a proxy — sourcing one there would be a
+    /// second or two of probing strangers' machines in front of the one action
+    /// an operator may be in a hurry to complete.
+    ///
+    /// A search that finds nothing stops here rather than falling through to
+    /// `connect()`. Without the guard the call would go on to fail validation
+    /// with "enter the proxy's host name", which is both wrong — the app was
+    /// looking for one and every public proxy was busy — and the opposite of
+    /// useful, since it names a field the operator was never meant to fill in.
+    private func connectOrDisconnect() async {
+        if session.connection == .disconnected {
+            guard
+                await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
+                    session.settings.host = candidate.host
+                    session.settings.port = candidate.port
+                })
+            else { return }
+        }
+
+        await session.toggleConnection()
     }
 
     private var keypadPane: some View {

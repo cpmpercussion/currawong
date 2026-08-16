@@ -167,6 +167,122 @@ final class ProxyPickerTests: XCTestCase {
                 + "new one is about to pick")
     }
 
+    // MARK: - Sourcing one at the moment it is needed
+
+    /// The point of `sourceProxyIfNeeded`: an operator who has just made an
+    /// EchoLink channel and pressed Refresh or Connect gets a proxy, rather
+    /// than a message naming a field they have no way to fill in well.
+    func testAnEmptyProxyIsFilledInBeforeTheCallerProceeds() async {
+        let finder = FakeProxyFinder(
+            candidate: .fake(name: "Sydney", host: "203.0.113.7", port: 8100))
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "")
+
+        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { candidate in
+            settings.host = candidate.host
+            settings.port = candidate.port
+        }
+
+        XCTAssertTrue(mayProceed)
+        XCTAssertEqual(settings.host, "203.0.113.7")
+        XCTAssertEqual(settings.port, 8100)
+    }
+
+    /// A proxy the operator typed, or one the app already found, is theirs.
+    /// Repointing it under a channel they had working would be the worse
+    /// surprise, so a set field is left alone and nothing is probed at all.
+    func testAProxyThatIsAlreadySetIsLeftAlone() async {
+        let finder = FakeProxyFinder()
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "proxy.example.org")
+
+        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { candidate in
+            settings.host = candidate.host
+        }
+
+        XCTAssertTrue(mayProceed)
+        XCTAssertEqual(settings.host, "proxy.example.org")
+        XCTAssertEqual(finder.callCount, 0, "nothing was needed, so nobody's machine was probed")
+    }
+
+    /// Whitespace is an empty field with a space in it, not a host name.
+    func testAProxyFieldOfWhitespaceCountsAsEmpty() async {
+        let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "   ")
+
+        _ = await picker.sourceProxyIfNeeded(for: settings) { settings.host = $0.host }
+
+        XCTAssertEqual(settings.host, "203.0.113.7")
+    }
+
+    /// The other two modes reach their destination directly. A proxy search
+    /// before an M17 connect would be a second or two of probing strangers'
+    /// machines for a field that mode does not have.
+    func testAModeWithoutAProxyNeverSearches() async {
+        let finder = FakeProxyFinder()
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "")
+        settings.mode = .m17
+
+        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { _ in
+            XCTFail("an M17 channel has no proxy to fill in")
+        }
+
+        XCTAssertTrue(mayProceed)
+        XCTAssertEqual(finder.callCount, 0)
+    }
+
+    /// Every public proxy being busy has to stop the caller. Falling through
+    /// would put the operator in front of "enter the proxy's host name" — a
+    /// field they were never meant to fill in — instead of the contention that
+    /// actually happened.
+    func testTheCallerIsStoppedWhenNoProxyCouldBeFound() async {
+        let finder = FakeProxyFinder(error: ProxyFinderError.noneAvailable)
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "")
+
+        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { _ in
+            XCTFail("nothing answered, so there is nothing to fill the field with")
+        }
+
+        XCTAssertFalse(mayProceed)
+        XCTAssertEqual(settings.host, "")
+        XCTAssertNotNil(picker.failure, "the reason has to be on the picker for the view to show")
+    }
+
+    /// The awaited path shares the button's search rather than starting a
+    /// second one — same spinner, same probe count, and one set of probes.
+    func testTheAwaitedSearchIsTheSameSearchTheSpinnerShows() async {
+        let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
+        finder.holdUntilReleased()
+        let picker = ProxyPicker(finder: finder)
+        var settings = echoLinkSettings(host: "")
+
+        let sourcing = Task { @MainActor in
+            await picker.sourceProxyIfNeeded(for: settings) { settings.host = $0.host }
+        }
+
+        await waitUntil("the search starts") { picker.isSearching }
+        finder.release()
+
+        let mayProceed = await sourcing.value
+        XCTAssertTrue(mayProceed)
+        XCTAssertFalse(picker.isSearching, "the spinner comes down with the search it belongs to")
+        XCTAssertEqual(settings.host, "203.0.113.7")
+        XCTAssertEqual(picker.chosen?.host, "203.0.113.7")
+        XCTAssertEqual(finder.callCount, 1)
+    }
+
+    private func echoLinkSettings(host: String) -> NodeSettings {
+        NodeSettings(
+            mode: .echoLink,
+            host: host,
+            port: 8100,
+            peer: "13.57.14.183",
+            directoryServer: "192.0.2.1")
+    }
+
     // MARK: - What the operator reads
 
     func testTheSummaryNamesWhoHowFarAndHowQuick() {

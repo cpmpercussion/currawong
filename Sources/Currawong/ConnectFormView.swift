@@ -66,6 +66,8 @@ struct ConnectFormView: View {
             fields
                 .disabled(!isEditable)
 
+            proxySourcingStatus
+
             Button(action: connectAction) {
                 HStack {
                     if isBusy { ProgressView().controlSize(.small) }
@@ -91,6 +93,51 @@ struct ConnectFormView: View {
         .onChange(of: timeoutText) { newValue in
             if let timeout = NodeSettings.parseTransmitTimeout(newValue) {
                 settings.transmitTimeout = timeout
+            }
+        }
+        // The port can now change without this form touching it: Connect and
+        // the Stations pane both source a proxy when the channel has none, and
+        // that writes a port. `portText` is only seeded in `onAppear`, so
+        // without this the field would go on showing the old number while the
+        // connection used the new one — and the *next* keystroke in it would
+        // write the stale value back over the proxy's.
+        //
+        // The guard is what stops the loop: `portText`'s own `onChange` writes
+        // `settings.port`, which lands back here.
+        .onChange(of: settings.port) { newPort in
+            if portText != String(newPort) { portText = String(newPort) }
+        }
+    }
+
+    /// What the Connect button is doing before it connects.
+    ///
+    /// The same two lines live in ``proxyFinderRow``, which is inside a
+    /// disclosure group that is collapsed on the common path — so on the path
+    /// that matters, pressing Connect with no proxy set, neither of them would
+    /// be seen. This is the copy that is always visible, and it is only drawn
+    /// while there is something to say.
+    @ViewBuilder
+    private var proxySourcingStatus: some View {
+        if settings.mode.usesProxy {
+            if proxyPicker.isSearching {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(
+                        proxyPicker.probedCount > 0
+                            ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                            : "Finding a public proxy…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("Stop") { proxyPicker.cancel() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            } else if let failure = proxyPicker.failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -30,6 +30,13 @@ struct StationBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: StationBrowser
 
+    /// The public-proxy finder. Here because a listing is read *through* a
+    /// proxy, so Refresh is one of the two moments a proxy is needed — see
+    /// ``ProxyPicker/sourceProxyIfNeeded(for:apply:)``. Its state is shown in
+    /// ``status`` as well, because from this pane the search is a step of the
+    /// refresh rather than something happening on another screen.
+    @ObservedObject var proxyPicker: ProxyPicker
+
     /// Called after a station is chosen, so the container can show the connect
     /// screen.
     var onChosen: () -> Void = {}
@@ -79,14 +86,33 @@ struct StationBrowserView: View {
             }
 
             Button {
-                browser.load(
-                    for: session.settings, identity: session.identity,
-                    accountPassword: session.secret)
+                Task { await refresh() }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .disabled(browser.isLoading)
+            .disabled(browser.isLoading || proxyPicker.isSearching)
         }
+    }
+
+    /// Source a proxy if the channel has not got one, then read the directory.
+    ///
+    /// The two steps are one button because they are one intention. A listing
+    /// travels through a proxy, so an operator who has just added an EchoLink
+    /// channel and pressed Refresh needs one — and being told to go to another
+    /// pane, open a drawer and press a different button first is a detour
+    /// through information they cannot act on. `settings` is read again after
+    /// the await: the proxy was written into it while we were waiting.
+    private func refresh() async {
+        guard
+            await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
+                session.settings.host = candidate.host
+                session.settings.port = candidate.port
+            })
+        else { return }
+
+        browser.load(
+            for: session.settings, identity: session.identity,
+            accountPassword: session.secret)
     }
 
     private var searchField: some View {
@@ -108,6 +134,34 @@ struct StationBrowserView: View {
     /// operator needs to know the rows they are looking at are the old ones.
     @ViewBuilder
     private var status: some View {
+        // Ahead of the fetch's own spinner, because it happens first and the
+        // two are steps of one press. Without this the pane sits still for the
+        // second or two the probing takes and Refresh looks like it missed.
+        if proxyPicker.isSearching {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(
+                    proxyPicker.probedCount > 0
+                        ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                        : "Finding a public proxy…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Cancel") { proxyPicker.cancel() }
+                    .buttonStyle(.bordered)
+            }
+        }
+
+        // The picker's failure, not the browser's: when no proxy could be
+        // found there was never a fetch to fail, and "they were all busy" is
+        // the thing to say rather than "enter the proxy's host name".
+        if let failure = proxyPicker.failure, !proxyPicker.isSearching {
+            Label(failure, systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
         if browser.isLoading {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -145,9 +199,9 @@ struct StationBrowserView: View {
 
             if browser.search.isEmpty {
                 Text(
-                    "Refresh reads the EchoLink directory using the current channel's proxy, "
-                    + "directory server and account password. All three have to be filled in on "
-                    + "the connect form first, and the channel has to be an EchoLink one.")
+                    "Refresh reads the EchoLink directory. It needs your callsign and account "
+                    + "password from the connect form, and the channel has to be an EchoLink "
+                    + "one; if the channel has no proxy yet, Refresh finds a public one first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
