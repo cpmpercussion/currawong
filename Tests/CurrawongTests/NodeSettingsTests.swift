@@ -84,6 +84,29 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(NodeSettings.parsePort("", for: .echoLink), 8100)
     }
 
+    /// The identity is stored as typed and only uppercased at `connect()`, so
+    /// the account name has to normalise or the two paths disagree: written
+    /// under `VK1XYZ`, read back under `vk1xyz`, password apparently forgotten
+    /// on every relaunch.
+    func testTheSecretAccountIsTheSameWhateverCaseTheCallsignWasTypedIn() {
+        var echoLink = good
+        echoLink.mode = .echoLink
+
+        let typed = OperatorIdentity(callsign: " vk1xyz ")
+        let validated = try? OperatorIdentity(callsign: "vk1xyz").validated()
+
+        XCTAssertEqual(echoLink.secretAccount(for: typed), "echolink:VK1XYZ")
+        XCTAssertEqual(
+            echoLink.secretAccount(for: typed),
+            echoLink.secretAccount(for: validated ?? .empty),
+            "the read must land on what the write stored")
+
+        var m17 = good
+        m17.mode = .m17
+        XCTAssertEqual(
+            m17.secretAccount(for: typed), m17.secretAccount(for: validated ?? .empty))
+    }
+
     func testTheSecretAccountIdentifiesTheNodeAndCarriesNoSecret() {
         XCTAssertEqual(good.secretAccount(for: vk1xyz), "vk1xyz@node.example.org:4569/55553")
 

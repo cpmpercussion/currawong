@@ -68,6 +68,24 @@ struct OperatorIdentity: Equatable, Sendable, Codable {
         }
     }
 
+    /// The callsign in the one form anything durable may be keyed by.
+    ///
+    /// The same normalisation ``validated()`` applies, without the throw. It
+    /// exists because the identity is deliberately **stored as typed** — a
+    /// callsign entered and never connected with survives the next launch, and
+    /// uppercasing the field under the operator's cursor would be rude — while
+    /// `connect()` files the secret under the *validated* form. Two spellings
+    /// of one callsign, and a Keychain account name built from the wrong one
+    /// looks up an entry that is not there.
+    ///
+    /// A password saved as `VK1XYZ` and then looked up as `vk1xyz` presents as
+    /// the password having been forgotten, which is indistinguishable from the
+    /// app losing it. See ``NodeSettings/secretAccount(for:)``, the only place
+    /// this is for.
+    var normalisedCallsign: String {
+        callsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
     /// The identity, trimmed and uppercased, or a complaint about it.
     ///
     /// Required in every mode. Two of the three protocols carry the callsign in

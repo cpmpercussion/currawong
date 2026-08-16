@@ -246,14 +246,23 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// callsign is the operator's and no longer the channel's — but the account
     /// *strings* are unchanged, so every secret already in the Keychain is still
     /// found under the same name.
+    ///
+    /// **``OperatorIdentity/normalisedCallsign``, not `callsign`.** The identity
+    /// is stored as typed and only uppercased at `connect()`, so the two paths
+    /// disagreed: the secret was *written* under the validated `VK1XYZ` and, on
+    /// the next launch, *read* back under whatever had been typed. A callsign
+    /// entered in lower case therefore lost its password every relaunch — the
+    /// field came up empty, which reads as the app having forgotten it.
+    /// Normalising here fixes the read without moving anything: what is already
+    /// in the Keychain was written in this form.
     func secretAccount(for identity: OperatorIdentity) -> String {
         switch mode {
         case .allStarLink:
             return "\(username)@\(host):\(port)/\(node)"
         case .m17:
-            return "m17:\(identity.callsign)@\(host):\(port)/\(module)"
+            return "m17:\(identity.normalisedCallsign)@\(host):\(port)/\(module)"
         case .echoLink:
-            return "echolink:\(identity.callsign)"
+            return "echolink:\(identity.normalisedCallsign)"
         }
     }
 
