@@ -32,6 +32,12 @@ struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
+    /// Whether an EchoLink account password is stored (APP-12). The form no
+    /// longer edits it — the settings screen does — but it still says whether one
+    /// is set, because an EchoLink connection without it succeeds at every step
+    /// and is then unreachable.
+    let isEchoLinkAccountConfigured: Bool
+
     /// The Web Transceiver token (APP-11). **Not part of ``settings``** and not
     /// per channel: the portal issues one per operator, and it works on every
     /// WT-enabled node — so, like the callsign, editing it here changes it
@@ -821,37 +827,23 @@ struct ConnectFormView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
         case .echoLink:
-            LabelledField(label: "Account password", systemImage: "key") {
-                SecureField("stored in the Keychain", text: $secret)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            // Two passwords on one screen is a trap, so it is named rather than
-            // left to position: this is the one EchoLink issued with the
-            // callsign, and it is the one the directory server checks.
-            //
-            // The consequence is spelled out because it is the failure where
-            // every step reports success and no call ever arrives: registering
-            // is what makes the station reachable at all. That sentence used to
-            // sit further up the form, orphaned from any field it described.
-            Text(
-                "This is your EchoLink account password — the one issued with your callsign — "
-                + "and not the proxy password. Without it the directory server will not list "
-                + "stations or register you, and nobody can call you.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Said out loud because the storage has always worked this way and
-            // the form never admitted it: an EchoLink secret is filed under
-            // `echolink:<callsign>`, so it is shared by every EchoLink channel
-            // with that callsign. An operator who thought it was per-channel
-            // would be surprised twice — once when a new channel already knew
-            // their password, and once when changing it here changed it
-            // everywhere.
-            Text("Entered once: every EchoLink channel with this callsign uses the same account.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // The password moved to the settings screen (APP-12). It was never a
+            // property of a channel — the Keychain has always filed it under
+            // `echolink:<callsign>`, shared by every EchoLink channel with that
+            // callsign — and a form that asked for it per channel implied
+            // otherwise. What is left here is whether it is set, because that is
+            // the thing an operator needs to know from *this* screen: an
+            // EchoLink connection with no account password succeeds at every
+            // step and is then unreachable.
+            Label(
+                isEchoLinkAccountConfigured
+                    ? "Account password stored. Change it in Settings."
+                    : "No account password yet — set one in Settings, or the directory server "
+                        + "will not register you.",
+                systemImage: isEchoLinkAccountConfigured
+                    ? "checkmark.circle" : "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(isEchoLinkAccountConfigured ? Color.secondary : Color.orange)
                 .fixedSize(horizontal: false, vertical: true)
 
             LabelledField(label: "Operator name", systemImage: "person") {
@@ -886,21 +878,4 @@ struct ConnectFormView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// A label above its field. A `Form` would give this for free on iOS and
-    /// something quite different on macOS; laying it out by hand is the
-    /// cheapest way to have one screen rather than two.
-    private struct LabelledField<Content: View>: View {
-        let label: String
-        let systemImage: String
-        @ViewBuilder let content: Content
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(label, systemImage: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                content
-            }
-        }
-    }
 }

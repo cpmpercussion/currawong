@@ -40,6 +40,29 @@ into CALLING NUMBER) live in `CompositionRoot.swift` with the evidence for each,
 and are pinned by tests. Getting a token is a paste for now; APP-12's settings
 screen is where logging in to the portal will fetch one.
 
+**Settings (APP-12).** One app-level screen — the *Settings* tab, and the
+*Settings* pane in the split layout — for the things that are yours rather than a
+channel's: your callsign, the AllStarLink portal token, the EchoLink account
+password, and PTT accessory setup, which used to be reachable only from a row on
+the session screen. That was accessory setup as something you find mid-session,
+which is a poor moment to be pairing a fob.
+
+The EchoLink account password moved here from the connect form. It was never a
+property of a channel — the Keychain has always filed it under
+`echolink:<callsign>`, shared by every EchoLink channel with that callsign — so
+the form was the wrong shape for what it was editing. What is left on the form is
+whether one is set, because an EchoLink connection with no account password
+succeeds at every step and is then unreachable.
+
+**Logging in to the portal is not switched on yet.** The token fetch is the
+library's (IAX-13) and no released `swift-hamvoip` tag carries it, so
+`CompositionRoot` supplies no `PortalLogin` and the pane offers the paste field
+alone — `hamvoip-cli wt-token` prints a token. The screen, the controller, the
+error wording and their tests are all here; turning it on is a version bump and a
+ten-line adapter, both spelled out in `CompositionRoot.swift`. The portal password
+is used once and discarded either way: only the token is stored, and since a token
+is stable across calls there is nothing a retained password would buy.
+
 **Saved channels (APP-4).** A channel is one place worth going back to: a name,
 a mode, and the fields that mode needs. They are listed, reorderable and
 deletable, the selected one is remembered between launches, and connecting is

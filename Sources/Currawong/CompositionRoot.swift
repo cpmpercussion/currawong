@@ -126,6 +126,36 @@ final class CompositionRoot {
     /// from, like the other three network-backed helpers.
     let nodeLocator: NodeLocator
 
+    /// **APP-12.** The settings screen's portal-login state.
+    ///
+    /// Owned here for ``stationBrowser``'s two reasons — a network round trip
+    /// that must survive the pane being scrolled away from, and a library type
+    /// only this file may name.
+    ///
+    /// **Its `PortalLogin` is `nil` in the shipping wiring, deliberately.** The
+    /// fetch is IAX-13, which is not in a released `swift-hamvoip` tag yet, and
+    /// this app depends on the library by version. `PortalLoginController` then
+    /// reports `isAvailable == false` and the settings screen offers only the
+    /// paste field, which is the honest presentation of "no login yet" — rather
+    /// than a button that cannot work. When a release carrying IAX-13 lands, this
+    /// is the whole of the change: bump `project.yml`, add
+    ///
+    /// ```swift
+    /// struct AllStarLinkPortalLogin: PortalLogin {
+    ///     private let source: any WebTransceiverTokenSource = AllStarLinkPortalTokenFetcher()
+    ///     func token(callsign: String, password: String) async throws -> String {
+    ///         do { return try await source.token(username: callsign, password: password).value }
+    ///         catch let error as WebTransceiverTokenError { throw PortalLoginFailure(error) }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// below (beside ``EchoLinkPublicProxyFinder``, which is the same shape of
+    /// adapter), and default the `portalLogin` parameter to it. ``PortalLoginFailure``
+    /// documents which of the library's error cases becomes which of its own, so
+    /// the mapping is a decision already made rather than one left to that day.
+    let portalLogin: PortalLoginController
+
     /// - Parameters:
     ///   - configuration: media grid, jitter buffer and leveller. Injectable so
     ///     a test can build a root without waiting for anything. Note that the
@@ -148,7 +178,8 @@ final class CompositionRoot {
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
-        nodeLookup: any NodeLookup = AllStarLinkNodeLookup()
+        nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
+        portalLogin: (any PortalLogin)? = nil
     ) {
         let session = RadioSession(
             audio: audio,
@@ -182,6 +213,7 @@ final class CompositionRoot {
         self.proxyPicker = ProxyPicker(finder: proxyFinder)
         self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
         self.nodeLocator = NodeLocator(lookup: nodeLookup)
+        self.portalLogin = PortalLoginController(login: portalLogin)
 
         // The wire SF-2 depends on. Weak on the controllers' side, so this does
         // not make the three of them immortal.

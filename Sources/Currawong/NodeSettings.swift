@@ -250,7 +250,24 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     ///
     /// Filled in by APP-12's portal login; typed or pasted until then.
     func webTransceiverAccount(for identity: OperatorIdentity) -> String {
+        NodeSettings.webTransceiverAccount(for: identity)
+    }
+
+    /// The same slot, reachable without a channel: APP-12's settings screen
+    /// stores a token before any channel has been chosen to use it on.
+    static func webTransceiverAccount(for identity: OperatorIdentity) -> String {
         "wt-token:\(identity.normalisedCallsign)"
+    }
+
+    /// The Keychain account an EchoLink account password is filed under.
+    ///
+    /// Per callsign, and always has been: EchoLink issues one account password
+    /// with the callsign, so every EchoLink channel for that callsign shares it.
+    /// A `static` because APP-12's settings screen edits the account with no
+    /// channel in hand — and two spellings of one Keychain key is how a stored
+    /// password becomes unreadable.
+    static func echoLinkAccount(for identity: OperatorIdentity) -> String {
+        "echolink:\(identity.normalisedCallsign)"
     }
 
     /// What the operator sees in the channel list: their own name for the
@@ -350,7 +367,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         case .m17:
             return "m17:\(identity.normalisedCallsign)@\(host):\(port)/\(module)"
         case .echoLink:
-            return "echolink:\(identity.normalisedCallsign)"
+            return Self.echoLinkAccount(for: identity)
         }
     }
 
