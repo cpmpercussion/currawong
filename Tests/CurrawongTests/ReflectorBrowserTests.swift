@@ -194,7 +194,7 @@ final class ReflectorBrowserTests: XCTestCase {
             designator: "M17-AUS", host: "m17-aus.example.org", port: 17001)
 
         var template = NodeSettings(mode: .echoLink)
-        template.transmitTimeout = 42
+        template.username = "vk1xyz"
 
         let channel = reflector.channel(module: "C", basedOn: template)
 
@@ -206,9 +206,9 @@ final class ReflectorBrowserTests: XCTestCase {
 
         // The part the reflector cannot supply comes from the template — what
         // the operator has already configured and must not retype. The callsign
-        // is no longer among these: it is app-wide now, and not a channel field
-        // at all.
-        XCTAssertEqual(channel.transmitTimeout, 42)
+        // and the watchdog are no longer among these: both are app-wide now, and
+        // not channel fields at all.
+        XCTAssertEqual(channel.username, "vk1xyz")
 
         // A new channel, not an edit of the one it was based on.
         XCTAssertNotEqual(channel.id, template.id)

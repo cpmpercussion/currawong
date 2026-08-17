@@ -41,7 +41,7 @@ struct StatusPanel: View {
                 detailLine("Codec: \(codec)")
             }
 
-            detailLine("Transmit watchdog: \(Int(session.settings.transmitTimeout)) s")
+            detailLine("Transmit watchdog: \(session.transmitTimeout.wholeSeconds) s")
 
             if let reason = session.lastStopReason, reason.isUnexpected, session.safetyNotice == nil {
                 detailLine("Last transmission ended: \(reason.rawValue).")

@@ -63,7 +63,6 @@ struct ConnectFormView: View {
     @ObservedObject var nodeLocator: NodeLocator
 
     @State private var portText = ""
-    @State private var timeoutText = ""
 
     /// EchoLink's own echo-test service, offered as the node-callsign
     /// placeholder because it is the right first contact: it plays your audio
@@ -93,18 +92,12 @@ struct ConnectFormView: View {
         }
         .onAppear {
             portText = String(settings.port)
-            timeoutText = String(Int(settings.transmitTimeout))
         }
         .onChange(of: portText) { newValue in
             // The mode matters: a cleared field means "this mode's own port",
             // and the three modes do not share one.
             if let port = NodeSettings.parsePort(newValue, for: settings.mode) {
                 settings.port = port
-            }
-        }
-        .onChange(of: timeoutText) { newValue in
-            if let timeout = NodeSettings.parseTransmitTimeout(newValue) {
-                settings.transmitTimeout = timeout
             }
         }
         // The port can now change without this form touching it: Connect and
@@ -204,10 +197,6 @@ struct ConnectFormView: View {
             } else {
                 directFields
             }
-
-            Divider()
-
-            safetyFields
         }
     }
 
@@ -305,17 +294,6 @@ struct ConnectFormView: View {
         .font(.headline)
     }
 
-    /// SF-1. Its own section in every mode, because the watchdog is the one
-    /// setting on this screen that exists to stop something bad rather than to
-    /// make something work.
-    @ViewBuilder
-    private var safetyFields: some View {
-        Text("Safety")
-            .font(.headline)
-
-        watchdogField
-    }
-
     @ViewBuilder
     private var hostAndPortFields: some View {
         LabelledField(
@@ -395,17 +373,23 @@ struct ConnectFormView: View {
     /// **The field stays editable.** A private node is not in the directory at
     /// all and its owner gives you the address directly, so the lookup is an
     /// offer rather than a gate.
+    ///
+    /// It fills in the channel name too, from the node's callsign, when the
+    /// operator has not named the channel themselves — see the closure below.
     @ViewBuilder
     private var nodeLookupRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button {
                     nodeLocator.find(node: settings.node) { registration in
-                        settings.host = registration.host
-                        // Through `portText`, not `settings.port`: the port
+                        // Host, port and — if the operator has not named the
+                        // channel — its name. The rules are the registration's;
+                        // see `NodeRegistration.applied(to:)`.
+                        settings = registration.applied(to: settings)
+                        // The port additionally goes through `portText`: the
                         // field is bound to the text and its `onChange` writes
-                        // the number back, so setting the number directly would
-                        // be overwritten by the stale text. Same trap the proxy
+                        // the number back, so the assignment above would be
+                        // overwritten by the stale text. Same trap the proxy
                         // finder documents.
                         portText = String(registration.port)
                     }
@@ -461,8 +445,9 @@ struct ConnectFormView: View {
 
             Text(
                 "AllStarLink publishes where each node last registered, so the host above can be "
-                + "filled in from the number. A private node is not listed — type its address by "
-                + "hand.")
+                + "filled in from the number — and the node's callsign becomes the channel name if "
+                + "you have not named it yourself. A private node is not listed — type its address "
+                + "by hand.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -593,29 +578,6 @@ struct ConnectFormView: View {
         Text("Your callsign, used on every channel and in every mode.")
             .font(.caption)
             .foregroundStyle(.secondary)
-    }
-
-    @ViewBuilder
-    private var watchdogField: some View {
-        LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
-            TextField(String(Int(NodeSettings.defaultTransmitTimeout)), text: $timeoutText)
-                .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                    .keyboardType(.numberPad)
-                #endif
-        }
-
-        // SF-1 is enforced in the library, not here, and it is not optional —
-        // the field sets the number, it cannot switch the watchdog off. Worth
-        // saying, so nobody goes looking for the switch.
-        Text(
-            "The longest a single transmission may last before Currawong unkeys for you. "
-            + "Between \(Int(NodeSettings.transmitTimeoutRange.lowerBound)) and "
-            + "\(Int(NodeSettings.transmitTimeoutRange.upperBound)) seconds; it cannot be "
-            + "turned off. A short value is the quickest way to prove the watchdog works.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// What the first block of fields is addressing. Three words for three

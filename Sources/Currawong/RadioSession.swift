@@ -101,8 +101,12 @@ final class RadioSession: ObservableObject {
     /// The identity is its own type rather than a third `String` so that it
     /// cannot be swapped with the secret at a call site — see
     /// ``OperatorIdentity``.
+    /// The watchdog timeout is passed separately rather than travelling in the
+    /// settings, because it is no longer a field of them: it is the operator's
+    /// one app-wide limit (SF-1), and the factory is where it meets the library.
     typealias LinkFactory =
-        @MainActor (NodeSettings, OperatorIdentity, LinkCredentials) throws -> RadioLink
+        @MainActor (NodeSettings, OperatorIdentity, LinkCredentials, TransmitTimeout) throws ->
+            RadioLink
 
     /// What a link is built with, beyond the settings and the identity.
     ///
@@ -205,6 +209,21 @@ final class RadioSession: ObservableObject {
 
     /// The gain as the capture tap sees it. See ``TransmitGainBox``.
     private let gainBox = TransmitGainBox()
+
+    /// **SF-1.** How long one transmission may last before the library unkeys.
+    ///
+    /// App-wide rather than per channel — see ``TransmitTimeout`` for why that
+    /// changed — and persisted on change like the gain, because a safety limit
+    /// that quietly reverts to three minutes on relaunch is worse than no setting
+    /// at all. It reaches the library through `CompositionRoot` when a link is
+    /// built, so changing it mid-connection applies to the *next* connection; the
+    /// settings screen says so.
+    @Published var transmitTimeout: TransmitTimeout {
+        didSet {
+            guard transmitTimeout != oldValue else { return }
+            settingsStore.saveTransmitTimeout(transmitTimeout)
+        }
+    }
 
     /// Who is operating. **App-wide, not per channel** — one callsign is used on
     /// every network, so the connect form edits this rather than a field of the
@@ -362,6 +381,7 @@ final class RadioSession: ObservableObject {
         let storedGain = settingsStore.loadTransmitGain() ?? .unity
         self.transmitGain = storedGain
         self.gainBox.gain = storedGain
+        self.transmitTimeout = settingsStore.loadTransmitTimeout() ?? .default
         self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
         // Loaded regardless of the selected channel's mode: the token belongs to
         // the operator rather than to a channel, so it is there for whichever
@@ -749,7 +769,8 @@ final class RadioSession: ObservableObject {
         do {
             newLink = try makeLink(
                 resolved, validatedIdentity,
-                LinkCredentials(secret: secret, webTransceiverToken: trimmedToken))
+                LinkCredentials(secret: secret, webTransceiverToken: trimmedToken),
+                transmitTimeout)
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")

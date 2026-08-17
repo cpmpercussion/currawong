@@ -131,7 +131,6 @@ final class NodeSettingsTests: XCTestCase {
             [
                 "id", "name", "mode", "host", "port", "node", "module",
                 "peer", "proxyPassword", "directoryServer", "username", "allStarAccess",
-                "transmitTimeout",
             ])
         XCTAssertFalse(
             keys.contains("callsign") || keys.contains("operatorName")
@@ -148,78 +147,32 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(store.load(), good)
     }
 
-    // MARK: - Transmit watchdog (SF-1, APP-4)
+    // MARK: - Transmit watchdog (SF-1)
 
-    func testTheWatchdogTimeoutDefaultsToThreeMinutes() {
-        XCTAssertEqual(NodeSettings().transmitTimeout, 180)
-        XCTAssertEqual(NodeSettings.defaultTransmitTimeout, 180)
-    }
-
-    /// **The migration test.** Settings written before this type had a watchdog
-    /// timeout must still decode — otherwise `load()` returns nil and the
-    /// operator finds their node details wiped by an app update.
-    func testSettingsWrittenWithoutATimeoutStillDecode() throws {
+    /// **The migration test.** A blob written while the watchdog was still a field
+    /// of this type carries a `transmitTimeout` key that the type no longer has.
+    /// It must decode as an unknown key rather than as a failure — otherwise
+    /// `load()` returns nil and the operator finds their node details wiped by an
+    /// app update. What happens to the *value* is
+    /// `SettingsStoreTimeoutTests`' business.
+    func testATimeoutLeftInAStoredBlobIsIgnoredRatherThanFatal() throws {
         let json = """
             {"host":"node.example.org","port":4569,"node":"55553",\
-            "username":"vk1xyz","callsign":"VK1XYZ"}
+            "username":"vk1xyz","callsign":"VK1XYZ","transmitTimeout":42}
             """
 
         let decoded = try JSONDecoder().decode(NodeSettings.self, from: Data(json.utf8))
 
         XCTAssertEqual(decoded.host, "node.example.org")
-        XCTAssertEqual(decoded.transmitTimeout, NodeSettings.defaultTransmitTimeout)
+        XCTAssertEqual(decoded.node, "55553")
     }
 
-    /// Clamped rather than rejected: an out-of-range timeout is not worth
-    /// refusing to connect over, and refusing would be a safety feature that
-    /// prevents transmitting at all.
-    func testAnOutOfRangeTimeoutIsClamped() throws {
-        var tooLong = good
-        tooLong.transmitTimeout = 99_999
-        XCTAssertEqual(
-            try tooLong.validated().transmitTimeout,
-            NodeSettings.transmitTimeoutRange.upperBound)
-
-        var tooShort = good
-        tooShort.transmitTimeout = 0
-        XCTAssertEqual(
-            try tooShort.validated().transmitTimeout,
-            NodeSettings.transmitTimeoutRange.lowerBound)
-    }
-
-    /// A short timeout is the quickest way to prove SF-1 works against a real
-    /// node, so the range has to permit one.
-    func testAShortTimeoutIsAllowedForTesting() throws {
-        var settings = good
-        settings.transmitTimeout = 10
-        XCTAssertEqual(try settings.validated().transmitTimeout, 10)
-    }
-
-    func testANonFiniteTimeoutFallsBackToTheDefault() throws {
-        var settings = good
-        settings.transmitTimeout = .nan
-        XCTAssertEqual(
-            try settings.validated().transmitTimeout, NodeSettings.defaultTransmitTimeout)
-    }
-
-    func testParsingATimeoutTheOperatorTyped() {
-        XCTAssertEqual(NodeSettings.parseTransmitTimeout("30"), 30)
-        XCTAssertEqual(NodeSettings.parseTransmitTimeout(" 45 "), 45)
-        // Empty means the default, as with the port — a cleared field should not
-        // fail, it should mean "whatever you would have used anyway".
-        XCTAssertEqual(
-            NodeSettings.parseTransmitTimeout(""), NodeSettings.defaultTransmitTimeout)
-        XCTAssertNil(NodeSettings.parseTransmitTimeout("soon"))
-        XCTAssertNil(NodeSettings.parseTransmitTimeout("-5"))
-        XCTAssertNil(NodeSettings.parseTransmitTimeout("0"))
-    }
-
-    /// The timeout is not part of the node's identity, so changing it must not
-    /// orphan the secret in the Keychain.
-    func testTheTimeoutDoesNotAffectTheKeychainAccount() {
-        var slower = good
-        slower.transmitTimeout = 60
-        XCTAssertEqual(good.secretAccount(for: vk1xyz), slower.secretAccount(for: vk1xyz))
+    /// The channel's own name is not part of the node's identity, so renaming it
+    /// must not orphan the secret in the Keychain.
+    func testRenamingAChannelDoesNotAffectTheKeychainAccount() {
+        var renamed = good
+        renamed.name = "Sunday net"
+        XCTAssertEqual(good.secretAccount(for: vk1xyz), renamed.secretAccount(for: vk1xyz))
     }
 
     // MARK: - Radio mode (M17)

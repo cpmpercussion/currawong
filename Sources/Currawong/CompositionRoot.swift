@@ -169,22 +169,25 @@ final class CompositionRoot {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { settings, identity, credentials in
+            makeLink: { settings, identity, credentials, transmitTimeout in
                 // Dispatches on the mode in the settings; see `makeLink`.
                 // `configuration` is the IAX2 one, so it only applies there.
                 switch settings.mode {
                 case .allStarLink:
                     return CompositionRoot.makeIAX2Link(
                         settings: settings, identity: identity, credentials: credentials,
+                        transmitTimeout: transmitTimeout,
                         configuration: configuration)
                 case .m17:
                     return try CompositionRoot.makeM17Link(
-                        settings: settings, identity: identity)
+                        settings: settings, identity: identity,
+                        transmitTimeout: transmitTimeout)
                 case .echoLink:
                     // The secret is the operator's EchoLink *account* password
                     // here, not a node password — see `makeEchoLinkLink`.
                     return try CompositionRoot.makeEchoLinkLink(
-                        settings: settings, identity: identity, secret: credentials.secret)
+                        settings: settings, identity: identity, secret: credentials.secret,
+                        transmitTimeout: transmitTimeout)
                 }
             })
         let accessory = accessory ?? BLEPTTController()
@@ -228,8 +231,8 @@ final class CompositionRoot {
     /// transmission ran for three minutes when the operator asked for ten
     /// seconds. Returning a `Duration` rather than a `Configuration` also keeps
     /// the test from having to import `IAX2Kit`.
-    static func watchdogTimeout(for settings: NodeSettings) -> Duration {
-        .seconds(settings.transmitTimeout)
+    static func watchdogTimeout(for timeout: TransmitTimeout) -> Duration {
+        .seconds(timeout.seconds)
     }
 
     // MARK: - Web Transceiver (APP-11)
@@ -339,19 +342,19 @@ final class CompositionRoot {
     /// `connect(to:)`, so an unused link costs two suspended tasks and is
     /// released by `close()`.
     ///
-    /// **`settings.transmitTimeout` overrides `configuration.transmitTimeout`.**
-    /// SF-1 is enforced by the library, but the number is the operator's, and
-    /// this is where the two meet. `NodeSettings.validated()` has already
-    /// clamped it to something sane, and the settings the session hands over are
-    /// always validated ones.
+    /// **`transmitTimeout` overrides `configuration.transmitTimeout`.** SF-1 is
+    /// enforced by the library, but the number is the operator's, and this is
+    /// where the two meet. `TransmitTimeout` clamps itself on the way in, so
+    /// there is no unreasonable value to defend against here.
     static func makeIAX2Link(
         settings: NodeSettings,
         identity: OperatorIdentity,
         credentials: RadioSession.LinkCredentials,
+        transmitTimeout: TransmitTimeout = .default,
         configuration: IAX2Client.Configuration = IAX2Client.Configuration()
     ) -> RadioLink {
         var configuration = configuration
-        configuration.transmitTimeout = watchdogTimeout(for: settings)
+        configuration.transmitTimeout = watchdogTimeout(for: transmitTimeout)
 
         let client = IAX2Client(configuration: configuration)
         let destination = webTransceiverDestination(settings, identity, credentials)
@@ -431,10 +434,11 @@ final class CompositionRoot {
     static func makeM17Link(
         settings: NodeSettings,
         identity: OperatorIdentity,
+        transmitTimeout: TransmitTimeout = .default,
         configuration: M17Client.Configuration = M17Client.Configuration()
     ) throws -> RadioLink {
         var configuration = configuration
-        configuration.transmitTimeout = watchdogTimeout(for: settings)
+        configuration.transmitTimeout = watchdogTimeout(for: transmitTimeout)
 
         guard settings.module.count == 1, let module = settings.module.first else {
             throw M17LinkError.invalidModule(settings.module)
@@ -530,13 +534,15 @@ final class CompositionRoot {
     ///     directory login", which is a supported way to run.
     ///   - configuration: injectable for tests. The fields that belong to the
     ///     operator — callsign, name, location, watchdog, and the directory
-    ///     pair — are overwritten from `settings` regardless, so what a caller
+    ///     pair — are overwritten from `identity`, `transmitTimeout` and
+    ///     `settings` regardless, so what a caller
     ///     can usefully supply here is the rest: the jitter buffer, the
     ///     leveller, the tool string, the node-answer timings.
     static func makeEchoLinkLink(
         settings: NodeSettings,
         identity: OperatorIdentity,
         secret: String,
+        transmitTimeout: TransmitTimeout = .default,
         configuration: EchoLinkClient.Configuration? = nil
     ) throws -> RadioLink {
         guard let peer = EchoLinkPeerAddress(settings.peer) else {
@@ -565,7 +571,7 @@ final class CompositionRoot {
         configuration.callsign = identity.callsign
         configuration.operatorName = identity.operatorName
         configuration.location = identity.location
-        configuration.transmitTimeout = watchdogTimeout(for: settings)
+        configuration.transmitTimeout = watchdogTimeout(for: transmitTimeout)
         configuration.accountPassword = accountPassword
         configuration.directoryServer = directoryServer
 
@@ -654,17 +660,21 @@ final class CompositionRoot {
     static func makeLink(
         settings: NodeSettings,
         identity: OperatorIdentity,
-        credentials: RadioSession.LinkCredentials
+        credentials: RadioSession.LinkCredentials,
+        transmitTimeout: TransmitTimeout = .default
     ) throws -> RadioLink {
         switch settings.mode {
         case .allStarLink:
             return makeIAX2Link(
-                settings: settings, identity: identity, credentials: credentials)
+                settings: settings, identity: identity, credentials: credentials,
+                transmitTimeout: transmitTimeout)
         case .m17:
-            return try makeM17Link(settings: settings, identity: identity)
+            return try makeM17Link(
+                settings: settings, identity: identity, transmitTimeout: transmitTimeout)
         case .echoLink:
             return try makeEchoLinkLink(
-                settings: settings, identity: identity, secret: credentials.secret)
+                settings: settings, identity: identity, secret: credentials.secret,
+                transmitTimeout: transmitTimeout)
         }
     }
 }

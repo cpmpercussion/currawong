@@ -45,6 +45,13 @@ protocol SettingsStore: AnyObject, Sendable {
     /// operator has never set one.
     func loadTransmitGain() -> TransmitGain?
     func saveTransmitGain(_ gain: TransmitGain)
+
+    /// **SF-1.** The transmit watchdog timeout, app-wide. `nil` means none has
+    /// ever been saved *under its own key*, which — as with ``loadIdentity()`` —
+    /// is the signal to go looking for one in the channels written before the
+    /// watchdog was hoisted out of them.
+    func loadTransmitTimeout() -> TransmitTimeout?
+    func saveTransmitTimeout(_ timeout: TransmitTimeout)
 }
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
@@ -68,6 +75,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
     private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
     private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
+    private static let transmitTimeoutKey = "au.charlesmartin.currawong.transmitTimeoutSeconds"
 
     private let defaults: UserDefaults
 
@@ -161,6 +169,42 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
 
     func saveTransmitGain(_ gain: TransmitGain) {
         defaults.set(gain.decibels, forKey: Self.transmitGainKey)
+    }
+
+    /// **SF-1.** The app-wide watchdog timeout, harvesting one from older
+    /// per-channel settings if this is the first launch since it was hoisted out
+    /// of them.
+    ///
+    /// Raw JSON for the same reason ``loadIdentity()`` reads it: `NodeSettings`
+    /// no longer has a `transmitTimeout`, so decoding a stored channel throws the
+    /// old value away, and an operator who had deliberately set a short leash
+    /// should not silently be given three minutes by an app update.
+    ///
+    /// **The shortest stored value wins**, which is the one rule here that is not
+    /// simply "the newest answer". Unlike the callsign there is no single right
+    /// answer to migrate — the operator had several — and of the choices
+    /// available this is the only one that cannot *lengthen* a limit they had
+    /// chosen. Raising a safety ceiling is not a migration's decision to make;
+    /// shortening one is visible on the settings screen and costs a keystroke to
+    /// undo.
+    func loadTransmitTimeout() -> TransmitTimeout? {
+        if defaults.object(forKey: Self.transmitTimeoutKey) != nil {
+            return TransmitTimeout(seconds: defaults.double(forKey: Self.transmitTimeoutKey))
+        }
+
+        let blobs =
+            Self.storedChannelBlobs(defaults: defaults)
+            + [Self.storedNodeBlob(defaults: defaults)].compactMap { $0 }
+
+        let stored = blobs.compactMap { ($0["transmitTimeout"] as? NSNumber)?.doubleValue }
+            .filter { $0.isFinite }
+        guard let shortest = stored.min() else { return nil }
+        return TransmitTimeout(seconds: shortest)
+    }
+
+    /// Stored as a bare number, on the same reasoning as ``saveTransmitGain(_:)``.
+    func saveTransmitTimeout(_ timeout: TransmitTimeout) {
+        defaults.set(timeout.seconds, forKey: Self.transmitTimeoutKey)
     }
 
     /// The first non-empty value of `key` across the stored blobs.

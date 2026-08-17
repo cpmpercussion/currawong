@@ -50,6 +50,36 @@ struct NodeRegistration: Equatable, Sendable {
         return URL(string: "https://stats.allstarlink.org/nodeinfo.cgi?node=\(trimmed)")
     }
 
+    /// `settings` with what the directory answered filled in.
+    ///
+    /// Here rather than in the connect form's closure so it can be tested: the
+    /// rule about *not* overwriting a channel name is the kind of thing that
+    /// looks obviously right in a view and is impossible to prove there.
+    ///
+    /// - The **host** and the **port** are the answer to the question the lookup
+    ///   was asked, and always win — pressing it again is how an operator
+    ///   refreshes a node that re-registered on a new address.
+    /// - The **channel name** is filled in from the node's callsign **only when
+    ///   the operator has not named the channel themselves**. A node number is a
+    ///   number, and `55553` in a channel list says nothing about which node it
+    ///   is; the callsign is what gets quoted on the air alongside it, so it is
+    ///   the useful default. But a name the operator typed is theirs, and a
+    ///   lookup pressed to refresh an address must not rename their channel as a
+    ///   side effect.
+    func applied(to settings: NodeSettings) -> NodeSettings {
+        var settings = settings
+        settings.host = host
+        settings.port = port
+
+        if let callsign, !callsign.isEmpty,
+            settings.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            settings.name = callsign
+        }
+
+        return settings
+    }
+
     /// "WB6NIL · ASL Public Hub · 18.224.69.177", skipping whatever is missing.
     ///
     /// One line rather than a row of fields: the operator is confirming that

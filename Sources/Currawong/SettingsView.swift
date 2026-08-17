@@ -2,8 +2,9 @@
 
 import SwiftUI
 
-/// **APP-12.** The app-level settings screen: who you are, the two accounts that
-/// are yours rather than a channel's, and the PTT accessory.
+/// **APP-12.** The app-level settings screen: who you are, how long you may
+/// transmit, the two accounts that are yours rather than a channel's, and the PTT
+/// accessory.
 ///
 /// ## Why these things are together
 ///
@@ -19,6 +20,10 @@ import SwiftUI
 /// * **The Web Transceiver token** is issued by allstarlink.org to an operator
 ///   and works on every WT-enabled node, so it belongs beside the callsign it
 ///   stands for and not with any one node.
+/// * **The transmit watchdog** (SF-1) was a field of every connect form, so the
+///   answer to "how long will it let me talk?" depended on which channel was
+///   selected — for the one setting in the app whose whole job is to stop a stuck
+///   microphone. See ``TransmitTimeout``.
 /// * **The PTT accessory** was reachable only from a row on the session pane,
 ///   which meant accessory setup was something found mid-session — a poor moment
 ///   to be pairing a fob.
@@ -50,10 +55,18 @@ struct SettingsView: View {
     /// Likewise the EchoLink password.
     @State private var echoLinkPasswordText = ""
 
+    /// The watchdog timeout as typed. Committed on every keystroke that parses,
+    /// unlike the two credentials above: it is one number rather than a pasted
+    /// string, there is nothing to half-type, and a safety limit that only takes
+    /// effect if you remember to press something is not one.
+    @State private var timeoutText = ""
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 operatorSection
+                Divider()
+                safetySection
                 Divider()
                 portalSection
                 Divider()
@@ -68,6 +81,15 @@ struct SettingsView: View {
         .onAppear {
             tokenText = session.webTransceiverToken
             echoLinkPasswordText = session.echoLinkAccountPassword
+            timeoutText = String(session.transmitTimeout.wholeSeconds)
+        }
+        .onChange(of: timeoutText) { newValue in
+            // An unparseable value is left alone rather than reset, so a field
+            // being cleared to retype it does not flick back to 180 under the
+            // operator's fingers. `TransmitTimeout.parse` clamps what it accepts.
+            if let timeout = TransmitTimeout.parse(newValue) {
+                session.transmitTimeout = timeout
+            }
         }
         // The portal login writes the token through the session, so the field
         // has to follow it rather than only being read once.
@@ -96,6 +118,51 @@ struct SettingsView: View {
             Text(
                 "Used on every channel and in every mode, and it is what both accounts below are "
                 + "filed under.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Safety
+
+    /// **SF-1.** The transmit watchdog, which used to be a field of every connect
+    /// form.
+    ///
+    /// It is here for the same reason the callsign is: it was on a per-channel
+    /// screen while being the operator's own setting. The watchdog is the one
+    /// control in the app that exists to stop something bad rather than to make
+    /// something work, and an operator who cannot answer "how long will it let me
+    /// talk?" without opening a particular channel does not really have the
+    /// setting at all. See ``TransmitTimeout``.
+    private var safetySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Safety")
+                .font(.title3.weight(.semibold))
+
+            LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
+                TextField(String(TransmitTimeout.default.wholeSeconds), text: $timeoutText)
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                        .keyboardType(.numberPad)
+                    #endif
+            }
+
+            // SF-1 is enforced in the library, not here, and it is not optional —
+            // the field sets the number, it cannot switch the watchdog off. Worth
+            // saying, so nobody goes looking for the switch.
+            Text(
+                "The longest a single transmission may last before Currawong unkeys for you, on "
+                + "every channel. Between \(Int(TransmitTimeout.range.lowerBound)) and "
+                + "\(Int(TransmitTimeout.range.upperBound)) seconds; it cannot be turned off. A "
+                + "short value is the quickest way to prove the watchdog works.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // The number is read when a link is built, so this is the honest
+            // description of a change made mid-call rather than a hedge.
+            Text("A change applies to the next connection, not the one that is up.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

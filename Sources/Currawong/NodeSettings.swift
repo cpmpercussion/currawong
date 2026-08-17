@@ -151,36 +151,11 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// may only have WT switched on.
     var allStarAccess: AllStarLinkAccess
 
-    /// **SF-1.** How long one transmission may last before the library's
-    /// watchdog unkeys, in seconds.
-    ///
-    /// Per node rather than per app, because the right answer depends on what
-    /// is on the other end: a parrot or echo-test extension wants a short leash
-    /// while you are proving the path works, and a repeater wants something
-    /// near its own timeout. The library owns the enforcement; this is only the
-    /// number handed to it, and the composition root is what hands it over.
-    var transmitTimeout: TimeInterval
-
     /// The registered IAX2 port. Duplicated rather than imported from
     /// `IAX2Kit`, because this type is not allowed to know which protocol is
     /// underneath it; the composition root is what reconciles the two, and
     /// `IAX2Destination`'s own default is the authority on the wire.
     static let defaultPort: UInt16 = 4569
-
-    /// 180 s, matching `RadioCore.TransmitWatchdog.defaultTimeout`. Duplicated
-    /// for the same reason ``defaultPort`` is: this type does not import the
-    /// library. The library's own default is the authority if they ever differ,
-    /// and it is the value used when nothing has been stored.
-    static let defaultTransmitTimeout: TimeInterval = 180
-
-    /// What the operator is allowed to ask for.
-    ///
-    /// The floor is not arbitrary: below a few seconds the watchdog fires
-    /// inside a normal call-and-response and the app becomes unusable rather
-    /// than safe. The ceiling is ten minutes, which is longer than any
-    /// legitimate single transmission and well inside what a repeater's own
-    /// timer will tolerate.
-    static let transmitTimeoutRange: ClosedRange<TimeInterval> = 5...600
 
     /// The literal string a public EchoLink proxy expects, and the only proxy
     /// password ever seen on the wire. Not a secret; see ``proxyPassword``.
@@ -210,8 +185,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         proxyPassword: String = NodeSettings.defaultProxyPassword,
         directoryServer: String = "",
         username: String = "",
-        allStarAccess: AllStarLinkAccess = .nodeSecret,
-        transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
+        allStarAccess: AllStarLinkAccess = .nodeSecret
     ) {
         self.allStarAccess = allStarAccess
         self.id = id
@@ -225,7 +199,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.proxyPassword = proxyPassword
         self.directoryServer = directoryServer
         self.username = username
-        self.transmitTimeout = transmitTimeout
     }
 
     /// Whether this channel is a Web Transceiver guest call.
@@ -287,13 +260,13 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     }
 
     /// Decodes settings, **including settings written before this type had a
-    /// watchdog timeout, a mode, or a module.**
+    /// mode or a module.**
     ///
     /// Hand-written for exactly one reason: the synthesised initialiser treats
     /// a missing key as a failure, so adding a non-optional field would make
     /// every stored settings blob undecodable, `SettingsStore.load()` would
     /// return `nil`, and the operator would find their node details wiped by an
-    /// app update. A missing timeout is not corruption, it is an older file.
+    /// app update. A missing module is not corruption, it is an older file.
     ///
     /// The same holds for the mode: a blob written before modes existed was
     /// written when AllStarLink was the only thing this app could do, so it *is*
@@ -321,15 +294,13 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.allStarAccess =
             try container.decodeIfPresent(AllStarLinkAccess.self, forKey: .allStarAccess)
             ?? .nodeSecret
-        // `callsign`, `operatorName` and `location` may be present in a blob
-        // written before they became app-wide. They are deliberately not read
-        // here: the type no longer has those fields, and an unknown key in a
-        // keyed container is ignored. `UserDefaultsSettingsStore.loadIdentity()`
-        // is what harvests them, once, so that an operator updating the app
-        // does not have to retype them.
-        self.transmitTimeout =
-            try container.decodeIfPresent(TimeInterval.self, forKey: .transmitTimeout)
-            ?? Self.defaultTransmitTimeout
+        // `callsign`, `operatorName`, `location` and `transmitTimeout` may all be
+        // present in a blob written before they became app-wide. They are
+        // deliberately not read here: the type no longer has those fields, and an
+        // unknown key in a keyed container is ignored.
+        // `UserDefaultsSettingsStore.loadIdentity()` and
+        // `loadTransmitTimeout()` are what harvest them, once, so that an
+        // operator updating the app does not have to set them again.
     }
 
     /// The Keychain account the secret for this node is filed under.
@@ -469,8 +440,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
                 ? Self.defaultProxyPassword : proxyPassword.trimmed,
             directoryServer: directoryServer.trimmed,
             username: username.trimmed,
-            allStarAccess: allStarAccess,
-            transmitTimeout: transmitTimeout)
+            allStarAccess: allStarAccess)
 
         guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
 
@@ -511,18 +481,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
 
         if trimmed.port == 0 { trimmed.port = mode.defaultPort }
-
-        // Clamped rather than rejected. An out-of-range timeout is not a typo
-        // the operator needs to be stopped over — and refusing to connect over
-        // it would be a safety feature that prevents transmitting altogether,
-        // which is the wrong shape of failure. A value that is not a number at
-        // all never gets this far; see ``parseTransmitTimeout(_:)``.
-        if !trimmed.transmitTimeout.isFinite {
-            trimmed.transmitTimeout = Self.defaultTransmitTimeout
-        }
-        trimmed.transmitTimeout = min(
-            max(trimmed.transmitTimeout, Self.transmitTimeoutRange.lowerBound),
-            Self.transmitTimeoutRange.upperBound)
 
         return trimmed
     }
@@ -603,16 +561,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         if trimmed.isEmpty { return mode.defaultPort }
         guard let value = UInt16(trimmed), value > 0 else { return nil }
         return value
-    }
-
-    /// Parses a watchdog timeout in whole seconds. Empty means the default, as
-    /// with the port; anything unparseable is rejected so the field can refuse
-    /// the keystroke rather than silently storing something else.
-    static func parseTransmitTimeout(_ text: String) -> TimeInterval? {
-        let trimmed = text.trimmed
-        if trimmed.isEmpty { return defaultTransmitTimeout }
-        guard let value = Int(trimmed), value > 0 else { return nil }
-        return TimeInterval(value)
     }
 }
 

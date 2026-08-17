@@ -260,6 +260,68 @@ final class NodeLookupTests: XCTestCase {
             "https://stats.allstarlink.org/nodeinfo.cgi?node=2000")
     }
 
+    // MARK: - Filling in the form
+
+    /// The node-2000 answer, as ``testAnAddressIsReadOutOfARealResponse`` reads it
+    /// out of the real payload.
+    private static let node2000Registration = NodeRegistration(
+        node: "2000", host: "18.224.69.177", port: 4569, callsign: "WB6NIL",
+        description: "ASL Public Hub", isActive: true)
+
+    /// The answer to the question that was asked. Always wins, because pressing
+    /// the button again is how a node that re-registered elsewhere is refreshed.
+    func testTheHostAndPortComeFromTheDirectory() {
+        var settings = NodeSettings(host: "stale.example.org", port: 4569, node: "2000")
+
+        settings = Self.node2000Registration.applied(to: settings)
+
+        XCTAssertEqual(settings.host, "18.224.69.177")
+        XCTAssertEqual(settings.port, 4569)
+    }
+
+    /// A node number is a number. `55553` in a channel list says nothing about
+    /// which node it is, and the directory knows the callsign that gets quoted on
+    /// the air beside it.
+    func testTheNodeCallsignBecomesTheChannelName() {
+        let settings = Self.node2000Registration.applied(to: NodeSettings(node: "2000"))
+
+        XCTAssertEqual(settings.name, "WB6NIL")
+    }
+
+    /// The name the operator typed is theirs. A lookup pressed to refresh a
+    /// dynamic address must not rename their channel as a side effect.
+    func testAnOperatorsOwnChannelNameSurvivesALookup() {
+        var settings = NodeSettings(name: "Sunday net", node: "2000")
+
+        settings = Self.node2000Registration.applied(to: settings)
+
+        XCTAssertEqual(settings.name, "Sunday net")
+        XCTAssertEqual(settings.host, "18.224.69.177", "the address is still refreshed")
+    }
+
+    /// Whitespace is not a name — an operator who cleared the field left it
+    /// empty, whatever the string contains.
+    func testAWhitespaceChannelNameCountsAsUnnamed() {
+        let settings = Self.node2000Registration.applied(to: NodeSettings(name: "   ", node: "2000"))
+
+        XCTAssertEqual(settings.name, "WB6NIL")
+    }
+
+    /// Not every listed node has a callsign on file. Nothing to name it with
+    /// leaves the field alone rather than writing an empty name over it.
+    func testANodeWithNoCallsignLeavesTheNameAlone() {
+        let anonymous = NodeRegistration(
+            node: "2000", host: "10.0.0.1", port: 4569, callsign: nil,
+            description: nil, isActive: true)
+
+        let settings = anonymous.applied(to: NodeSettings(node: "2000"))
+
+        XCTAssertEqual(settings.name, "")
+        XCTAssertEqual(
+            settings.displayName, "2000 at 10.0.0.1",
+            "and the list still has something to show")
+    }
+
     // MARK: - Helpers
 
     private actor Asked {

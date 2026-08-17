@@ -99,13 +99,13 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
         return parts.joined(separator: " · ")
     }
 
-    /// A channel pointed at this reflector's `module`, filled in from an
-    /// existing channel's callsign and watchdog.
+    /// A channel pointed at this reflector's `module`, based on an existing one.
     ///
-    /// Takes a template for the same reason `DirectoryStation` does: who *we*
-    /// are and how long we may transmit are things the operator has already
-    /// configured, and a chooser that dropped them would be handing back a
-    /// channel that cannot connect.
+    /// Takes a template for the same reason `DirectoryStation` does: the fields
+    /// this does not set are things the operator has already configured, and a
+    /// chooser that dropped them would be handing back a channel that cannot
+    /// connect. (The callsign and the watchdog are no longer among them — both
+    /// are app-wide now — but the rest still travels.)
     func channel(module: String, basedOn template: NodeSettings) -> NodeSettings {
         var channel = template
         channel.id = UUID()
