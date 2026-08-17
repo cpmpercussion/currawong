@@ -14,7 +14,7 @@ RFC 5456. The one place a concrete client is named is
 ## Status
 
 **Three modes.** AllStarLink over IAX2, M17 over a reflector, and EchoLink
-through a proxy, all against `swift-hamvoip` (pinned `from: 0.4.0`) and all
+through a proxy, all against `swift-hamvoip` (pinned `from: 0.5.2`) and all
 reached through one `RadioCore.NetworkClient`. `CompositionRoot.swift` is still the only file that
 names a concrete client. What each mode asks the operator for differs enough
 that the connect form changes shape with the mode — a node number and a secret,
