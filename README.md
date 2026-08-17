@@ -54,14 +54,21 @@ the form was the wrong shape for what it was editing. What is left on the form i
 whether one is set, because an EchoLink connection with no account password
 succeeds at every step and is then unreachable.
 
-**Logging in to the portal is not switched on yet.** The token fetch is the
-library's (IAX-13) and no released `swift-hamvoip` tag carries it, so
-`CompositionRoot` supplies no `PortalLogin` and the pane offers the paste field
-alone — `hamvoip-cli wt-token` prints a token. The screen, the controller, the
-error wording and their tests are all here; turning it on is a version bump and a
-ten-line adapter, both spelled out in `CompositionRoot.swift`. The portal password
-is used once and discarded either way: only the token is stored, and since a token
-is stable across calls there is nothing a retained password would buy.
+**Logging in to the portal works from the app.** Type your callsign and
+allstarlink.org password, press *Log in and fetch token*, and the token lands in
+the Keychain. The request itself is the library's (IAX-13, released in `v0.5.2`);
+`AllStarLinkPortalLogin` in `CompositionRoot.swift` is the adapter, and the only
+thing in the app that knows the fetch exists. The paste field stays, because it is
+what still works if allstarlink.org replaces its login service — which it has a
+project open to do.
+
+The portal password is **used once and discarded**: only the token is stored. A
+retained password would buy a silent re-fetch, and a token is stable across calls,
+so there is nothing to re-fetch — a token that stopped working is one the portal
+has changed its mind about, and asking again is then the honest thing to do. The
+failures read differently on purpose: a wrong password re-prompts, a changed login
+service says the paste field still works, and anything else is reported as not
+reached.
 
 **Saved channels (APP-4).** A channel is one place worth going back to: a name,
 a mode, and the fields that mode needs. They are listed, reorderable and
