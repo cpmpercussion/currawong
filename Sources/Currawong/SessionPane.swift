@@ -45,6 +45,16 @@ struct SessionPane: View {
     /// sheet and this view should not have to know which.
     let openAccessories: () -> Void
 
+    /// Hangs up, cancels a connect in progress, or reconnects to the last
+    /// channel — whichever ``SessionLinkControl`` says the button means.
+    ///
+    /// Passed in rather than calling `session.disconnect()` here, because
+    /// connecting is not only `connect()`: an EchoLink channel may need a proxy
+    /// sourced first, and ``RootView`` is the one place that knows the whole
+    /// sequence. Two call sites for one sequence is how the form and this button
+    /// would come to disagree about it.
+    let linkAction: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if showsHeader { header }
@@ -73,6 +83,16 @@ struct SessionPane: View {
                 // would push them off the bottom.
                 .frame(maxHeight: 240)
 
+            // Directly under the PTT button, which is where the operator's hand
+            // already is, and above the accessory row so that the two things
+            // that end a transmission and end a call sit together.
+            if let control = SessionLinkControl(
+                connection: session.connection,
+                lastConnectedName: session.lastConnectedChannel?.displayName)
+            {
+                SessionLinkButton(control: control, action: linkAction)
+            }
+
             AccessoryStatusRow(
                 accessory: accessory,
                 remoteCommand: remoteCommand,
@@ -89,6 +109,38 @@ struct SessionPane: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// The link control under the PTT button: Disconnect, Cancel, or Reconnect.
+///
+/// Deliberately much plainer than ``PushToTalkButton``. That button is the one
+/// the operator must be able to hit without looking, and a second full-width
+/// coloured slab under it would compete with it for exactly the glance SF-3
+/// wants spent on the transmit state. This is a normal button that says what it
+/// does.
+struct SessionLinkButton: View {
+    let control: SessionLinkControl
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: control.systemImage)
+                Text(control.title)
+                    // A channel name can be long, and truncating the label is
+                    // better than a button that reflows the pane around it.
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.subheadline.weight(.medium))
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .tint(control.isDestructive ? .red : .accentColor)
+        .disabled(!control.isEnabled)
+        .accessibilityLabel(control.title)
     }
 }
 

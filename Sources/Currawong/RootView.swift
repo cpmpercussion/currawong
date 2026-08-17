@@ -429,7 +429,31 @@ struct RootView: View {
             accessory: accessory,
             remoteCommand: remoteCommand,
             showsHeader: showsHeader,
-            openAccessories: { isShowingAccessorySheet = true })
+            openAccessories: { isShowingAccessorySheet = true },
+            linkAction: { Task { await sessionLinkAction() } })
+    }
+
+    /// What the session pane's link button does, per state.
+    ///
+    /// The reconnect path goes back through ``connectOrDisconnect()`` rather
+    /// than calling `session.connect()`, so that a channel needing a proxy gets
+    /// one sourced the same way the form's button would. What it adds is the
+    /// line before it: the draft is pointed back at the channel the last call
+    /// was placed to, because the operator may have selected a different one
+    /// while disconnected and "Reconnect to VK1RGI" must call VK1RGI.
+    private func sessionLinkAction() async {
+        switch session.connection {
+        case .connected, .connecting:
+            // Not `toggleConnection()`: that treats `.connecting` as "busy, do
+            // nothing", and cancelling a connect that is going nowhere is half
+            // of why this button exists.
+            await session.disconnect()
+        case .disconnecting:
+            break
+        case .disconnected:
+            guard session.restoreLastConnectedChannel() else { return }
+            await connectOrDisconnect()
+        }
     }
 
     private var connectForm: some View {
