@@ -126,6 +126,16 @@ press-and-hold PTT button (PT-1). Audio is wired both ways: the microphone into
 the client while transmitting, received audio into playback. Node secrets and
 EchoLink account passwords are stored in the Keychain.
 
+Hanging up is also on the session screen, directly under the PTT button: one
+control that says **Disconnect** while a link is up, **Cancel** while a connect
+is still going (which the connect form's button cannot offer — it is inert while
+busy), and **Reconnect to _channel_** once there is somewhere to go back to. It
+names the channel because it returns to the one the last call was placed to, not
+to whatever is selected now — you may pick another channel while disconnected,
+and the button still means the place you were just talking to. Before the first
+call of a run it is not there at all: a first call starts on the connect form,
+where the fields being dialled are visible.
+
 **DTMF (FR-1.5).** A keypad, and a log of digits sent and digits heard back.
 Sending a digit deliberately does **not** key the transmitter — DTMF travels as
 its own reliable frame — which is the property the tests pin. Commanding an

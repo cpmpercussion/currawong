@@ -271,6 +271,27 @@ final class RadioSession: ObservableObject {
     /// Inbound media the client is discarding, if any.
     @Published private(set) var mediaWarning: String?
 
+    /// The channel the last call this run was actually placed to, or `nil`
+    /// before the first one.
+    ///
+    /// What the session pane's Reconnect button goes back to
+    /// (``SessionLinkControl``). Set on a **successful** connect only, so the
+    /// button never offers to return to somewhere that refused us; the draft is
+    /// not good enough for the purpose, because an operator may pick a different
+    /// channel after hanging up and the button would then quietly mean somewhere
+    /// else.
+    ///
+    /// It holds the channel as the operator typed it — the pre-resolution copy —
+    /// so a name stays a name; see ``resolveDirectoryServer(in:)``.
+    ///
+    /// Deliberately in memory only. `SettingsStore` already remembers the last
+    /// connected node across launches and the draft loads from it, so persisting
+    /// this too would put a Reconnect button in front of an operator who has not
+    /// connected to anything yet this run — offering to place a call they have
+    /// not asked for, which is not a button an app that keys transmitters should
+    /// grow on its own.
+    @Published private(set) var lastConnectedChannel: NodeSettings?
+
     /// The station currently transmitting on a shared channel, when one is.
     ///
     /// **M17 only** — a reflector module is shared and an AllStarLink call is
@@ -750,6 +771,38 @@ final class RadioSession: ObservableObject {
 
         connection = .connected
         transmitState = newLink.transmitState()
+        // Recorded here, not earlier: this is the first line at which a call is
+        // known to have been answered, and Reconnect must mean "back to where I
+        // just was" rather than "retry the thing that failed".
+        lastConnectedChannel = validated
+    }
+
+    /// Points the draft back at the last channel a call was placed to, so
+    /// ``connect()`` reconnects there rather than to whatever is now selected.
+    ///
+    /// - Returns: whether the draft now points at that channel. `false` means
+    ///   there is nowhere to go back to, or a link is already up.
+    @discardableResult
+    func restoreLastConnectedChannel() -> Bool {
+        guard connection == .disconnected, let last = lastConnectedChannel else { return false }
+        guard settings.id != last.id else { return true }
+
+        // Still in the list — the normal case, since `connect()` puts it there.
+        // Going through `select(_:)` keeps the channel list's selection and the
+        // draft in step, which setting `settings` alone would not.
+        if channels.channels.contains(where: { $0.id == last.id }) {
+            select(last.id)
+            return channels.selectedID == last.id
+        }
+
+        // Deleted since. The draft can still describe it — an unsaved draft is a
+        // supported state (see `chooseChannel(_:)`) — and refusing to reconnect
+        // because a list entry went away would be a worse answer than calling
+        // the place the operator was just talking to.
+        saveDraft()
+        settings = last
+        secret = (try? secretStore.secret(for: last.secretAccount(for: identity))) ?? ""
+        return true
     }
 
     /// A copy of `settings` whose directory server is an address rather than a
