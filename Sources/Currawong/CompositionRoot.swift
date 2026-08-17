@@ -149,7 +149,8 @@ final class CompositionRoot {
     ///   - audio: the microphone and speaker. Injectable so a test never opens
     ///     either.
     init(
-        configuration: IAX2Client.Configuration = IAX2Client.Configuration(),
+        configuration: IAX2Client.Configuration = IAX2Client.Configuration(
+            leveller: CompositionRoot.receiveLeveller),
         audio: AudioIO = AudioPipelineIO(),
         settingsStore: SettingsStore = UserDefaultsSettingsStore(),
         secretStore: SecretStore = KeychainSecretStore(),
@@ -222,6 +223,22 @@ final class CompositionRoot {
         accessory.activateIfConfigured()
         remoteCommand.activateIfEnabled()
     }
+
+    /// **AU-4.** The received-audio leveller every mode is built with.
+    ///
+    /// The library's own default targets −18 dBFS RMS, which is a sensible
+    /// headroom figure for a mixing stage and is too quiet coming out of a phone:
+    /// a signal normalised there peaks around −3 dB, and with iOS's
+    /// voice-processing output path on top of it the speaker at full volume
+    /// sounds mid-scale. −12 dBFS is 6 dB louder while still leaving room for the
+    /// peaks the leveller does not touch.
+    ///
+    /// The rest of the leveller's shape — attack, release, the +18 dB ceiling
+    /// that stops a near-silent node being amplified into hiss — is the library's
+    /// and is deliberately not second-guessed here. This is the app choosing an
+    /// output level for a handheld device, which is the one part of it that is a
+    /// property of the device rather than of the protocol.
+    static let receiveLeveller = AudioLeveller(targetRMSdBFS: -12)
 
     /// **SF-1.** The operator's watchdog timeout, as the library wants it.
     ///
@@ -351,7 +368,8 @@ final class CompositionRoot {
         identity: OperatorIdentity,
         credentials: RadioSession.LinkCredentials,
         transmitTimeout: TransmitTimeout = .default,
-        configuration: IAX2Client.Configuration = IAX2Client.Configuration()
+        configuration: IAX2Client.Configuration = IAX2Client.Configuration(
+            leveller: CompositionRoot.receiveLeveller)
     ) -> RadioLink {
         var configuration = configuration
         configuration.transmitTimeout = watchdogTimeout(for: transmitTimeout)
@@ -435,7 +453,8 @@ final class CompositionRoot {
         settings: NodeSettings,
         identity: OperatorIdentity,
         transmitTimeout: TransmitTimeout = .default,
-        configuration: M17Client.Configuration = M17Client.Configuration()
+        configuration: M17Client.Configuration = M17Client.Configuration(
+            leveller: CompositionRoot.receiveLeveller)
     ) throws -> RadioLink {
         var configuration = configuration
         configuration.transmitTimeout = watchdogTimeout(for: transmitTimeout)
@@ -567,7 +586,7 @@ final class CompositionRoot {
         }
 
         var configuration = configuration ?? EchoLinkClient.Configuration(
-            callsign: identity.callsign)
+            callsign: identity.callsign, leveller: Self.receiveLeveller)
         configuration.callsign = identity.callsign
         configuration.operatorName = identity.operatorName
         configuration.location = identity.location

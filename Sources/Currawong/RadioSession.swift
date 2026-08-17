@@ -207,8 +207,27 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// The gain as the capture tap sees it. See ``TransmitGainBox``.
-    private let gainBox = TransmitGainBox()
+    /// The gain as the capture tap sees it. See ``GainBox``.
+    private let gainBox = GainBox<TransmitGain>(.unity)
+
+    /// Software gain on received audio (0 to +20 dB).
+    ///
+    /// App-wide and persisted like ``transmitGain``, and for the same kind of
+    /// reason: it compensates for how loud this device gets in the room the
+    /// operator is standing in, not for where the audio came from. What it is
+    /// making up for is documented on ``ReceiveGain``.
+    @Published var receiveGain: ReceiveGain {
+        didSet {
+            guard receiveGain != oldValue else { return }
+            // The box is what the receive pump reads, so this is what makes a
+            // slider drag audible in the same breath rather than the next one.
+            receiveGainBox.gain = receiveGain
+            settingsStore.saveReceiveGain(receiveGain)
+        }
+    }
+
+    /// The receive gain as the playback pump sees it. See ``GainBox``.
+    private let receiveGainBox = GainBox<ReceiveGain>(.unity)
 
     /// **SF-1.** How long one transmission may last before the library unkeys.
     ///
@@ -382,6 +401,9 @@ final class RadioSession: ObservableObject {
         self.transmitGain = storedGain
         self.gainBox.gain = storedGain
         self.transmitTimeout = settingsStore.loadTransmitTimeout() ?? .default
+        let storedReceiveGain = settingsStore.loadReceiveGain() ?? .unity
+        self.receiveGain = storedReceiveGain
+        self.receiveGainBox.gain = storedReceiveGain
         self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
         // Loaded regardless of the selected channel's mode: the token belongs to
         // the operator rather than to a channel, so it is there for whichever
@@ -1135,6 +1157,7 @@ final class RadioSession: ObservableObject {
         let audio = self.audio
         let window = Self.receiveActivityWindow
         let meter = self.receiveMeter
+        let gainBox = self.receiveGainBox
         meter.reset()
 
         // Detached: playback enqueue takes a lock and allocates, fifty times a
@@ -1143,6 +1166,11 @@ final class RadioSession: ObservableObject {
         receiveTask = Task.detached(priority: .userInitiated) { [weak self] in
             var lastNoted = Date.distantPast
             for await pcm in stream {
+                // Read per frame rather than snapshotted here, so dragging the
+                // slider is audible on the next 20 ms of audio instead of on the
+                // next connection. The meter reads the amplified frame, because
+                // what the operator is judging is what they can hear.
+                let pcm = gainBox.gain.apply(to: pcm)
                 audio.enqueuePlayback(pcm)
                 meter.note(pcm)
                 let arrival = Date()

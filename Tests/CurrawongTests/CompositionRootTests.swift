@@ -263,6 +263,14 @@ final class CompositionRootTests: XCTestCase {
         XCTAssertFalse(root.remoteCommand.isEnabled)
     }
 
+    /// **AU-4.** The library's leveller targets −18 dBFS RMS, which is 6 dB
+    /// quieter than a phone speaker wants. Pinned because the symptom of losing
+    /// this — audio that is merely a bit quiet — is one nobody files a bug about
+    /// for months.
+    func testReceivedAudioIsLevelledForAPhoneSpeakerRatherThanAMixingDesk() {
+        XCTAssertEqual(CompositionRoot.receiveLeveller.targetRMSdBFS, -12)
+    }
+
     /// SF-1's number is the operator's, and it is app-wide rather than a field of
     /// the channel. This is the seam where it becomes the library's watchdog
     /// timeout — a mistake here would be invisible until a transmission ran for

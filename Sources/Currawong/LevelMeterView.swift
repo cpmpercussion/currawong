@@ -151,6 +151,10 @@ struct LevelMeterView: View {
 /// the other station's problem, and knowing which is which saves an evening
 /// spent adjusting the wrong thing.
 ///
+/// Each meter has its gain slider directly under it: the microphone's, and the
+/// receive side's (`ReceiveGain`, which is what makes up the difference when a
+/// phone at full volume is still not loud enough for the room).
+///
 /// ## The gain belongs here, not on the connect form
 ///
 /// It sat on the connect form to begin with, which was wrong twice over. That
@@ -180,6 +184,8 @@ struct LevelMetersView: View {
                 label: "Receive",
                 meter: session.receiveMeter,
                 isActive: session.connection.isConnected)
+
+            receiveGain
         }
     }
 
@@ -204,6 +210,36 @@ struct LevelMetersView: View {
                 .foregroundStyle(.secondary)
                 // Fixed width, so the row does not shuffle sideways as the
                 // number gains a digit while the operator is dragging it.
+                .frame(width: 52, alignment: .trailing)
+        }
+    }
+
+    /// The receive side's counterpart, under its own meter and for the same
+    /// reason: listen, watch the bar, drag, watch it move — and the meter reads
+    /// after the gain, so the bar is what is actually coming out.
+    ///
+    /// It is here rather than on the settings screen because the only moment an
+    /// operator can set it is while somebody is talking to them, and it stays
+    /// live while a link is up.
+    private var receiveGain: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speaker.wave.2")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            Slider(
+                value: Binding(
+                    get: { session.receiveGain.decibels },
+                    set: { session.receiveGain = ReceiveGain(decibels: $0) }),
+                in: ReceiveGain.range,
+                step: 1)
+                .accessibilityLabel("Receive gain")
+                .accessibilityValue("plus \(Int(session.receiveGain.decibels.rounded())) decibels")
+
+            Text(verbatim: "+\(Int(session.receiveGain.decibels.rounded())) dB")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing)
         }
     }
