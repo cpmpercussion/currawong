@@ -11,7 +11,7 @@ import SwiftUI
 /// It used to *be* the app — one scrolling column with everything in it. It is
 /// now a shell around panes (``SessionPane``, ``ChannelListView``,
 /// ``ConnectFormView``, ``DTMFKeypadView``, ``StationBrowserView``,
-/// ``AccessoryPane``), and what is left here is the part that cannot be moved
+/// ``SettingsView``), and what is left here is the part that cannot be moved
 /// into any one of them:
 ///
 /// * **``TransmitBanner``, outside the pane container.** SF-4. It is a sibling
@@ -57,6 +57,7 @@ struct RootView: View {
     @ObservedObject var reflectorBrowser: ReflectorBrowser
     @ObservedObject var proxyPicker: ProxyPicker
     @ObservedObject var nodeLocator: NodeLocator
+    @ObservedObject var portalLogin: PortalLoginController
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -185,11 +186,8 @@ struct RootView: View {
                 .tag(Tab.directory)
             }
 
-            AccessoryPane(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                isTransmitting: false)
-                .tabItem { Label("Setup", systemImage: "gearshape") }
+            settingsPane
+                .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.setup)
         }
     }
@@ -365,10 +363,7 @@ struct RootView: View {
                 session: session, browser: reflectorBrowser,
                 onChosen: { detailPane = .connect })
         case .setup:
-            AccessoryPane(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                isTransmitting: false)
+            settingsPane
         }
     }
 
@@ -388,7 +383,7 @@ struct RootView: View {
             case .keypad: return "Keypad"
             case .stations: return "Stations"
             case .reflectors: return "Reflectors"
-            case .setup: return "Setup"
+            case .setup: return "Settings"
             }
         }
     }
@@ -436,6 +431,7 @@ struct RootView: View {
         ConnectFormView(
             settings: $session.settings,
             secret: $session.secret,
+            isEchoLinkAccountConfigured: !session.echoLinkAccountPassword.isEmpty,
             webTransceiverToken: $session.webTransceiverToken,
             identity: $session.identity,
             isEditable: session.connection == .disconnected,
@@ -470,6 +466,21 @@ struct RootView: View {
         }
 
         await session.toggleConnection()
+    }
+
+    /// **APP-12.** The settings screen — the operator, the two stored accounts,
+    /// and the PTT accessory, which used to be the whole of this destination.
+    ///
+    /// `isTransmitting: false` for the same reason the pane always passed it: the
+    /// root's ``TransmitBanner`` is above this view and still on screen, so a
+    /// second copy inside it would be two banners saying the same thing.
+    private var settingsPane: some View {
+        SettingsView(
+            session: session,
+            accessory: accessory,
+            remoteCommand: remoteCommand,
+            portalLogin: portalLogin,
+            isTransmitting: false)
     }
 
     private var keypadPane: some View {
@@ -515,5 +526,6 @@ private extension View {
         browser: root.stationBrowser,
         reflectorBrowser: root.reflectorBrowser,
         proxyPicker: root.proxyPicker,
-        nodeLocator: root.nodeLocator)
+        nodeLocator: root.nodeLocator,
+        portalLogin: root.portalLogin)
 }

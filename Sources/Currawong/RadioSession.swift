@@ -165,6 +165,16 @@ final class RadioSession: ObservableObject {
     /// portal login is what will fill it in.
     @Published var webTransceiverToken: String
 
+    /// **EchoLink.** The account password issued with the operator's callsign
+    /// (APP-12), in memory only and app-wide.
+    ///
+    /// EchoLink has always filed this under `echolink:<callsign>`, shared by
+    /// every EchoLink channel with that callsign — so it was never a per-channel
+    /// credential, and the settings screen is where it is now edited rather than
+    /// mid-connect. ``secret`` still carries it into a connection, and
+    /// ``setEchoLinkAccountPassword(_:)`` keeps the two in step.
+    @Published private(set) var echoLinkAccountPassword: String
+
     /// What the microphone is putting on the air, **after** ``transmitGain``.
     /// Post-gain because that is the number the operator is trying to set, and
     /// a meter reading the input while the gain changes what leaves would be
@@ -337,6 +347,65 @@ final class RadioSession: ObservableObject {
         // channel they switch to next.
         self.webTransceiverToken =
             (try? secretStore.secret(for: current.webTransceiverAccount(for: identity))) ?? ""
+        self.echoLinkAccountPassword =
+            (try? secretStore.secret(for: NodeSettings.echoLinkAccount(for: identity))) ?? ""
+    }
+
+    // MARK: - The stored accounts (APP-12)
+
+    /// Stores the Web Transceiver token now, rather than at the next connect.
+    ///
+    /// The settings screen is not a connect form: an operator who has just
+    /// fetched a token and switched away expects it to still be there, and
+    /// waiting for a connection to persist it would lose it. Trimmed, because a
+    /// pasted token arrives with whatever the clipboard had around it.
+    ///
+    /// Failing to write is reported and not fatal, exactly as in ``connect()``:
+    /// the token is still usable from memory for this run.
+    ///
+    /// - Returns: whether it reached the Keychain.
+    @discardableResult
+    func saveWebTransceiverToken(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        webTransceiverToken = trimmed
+        do {
+            try secretStore.setSecret(
+                trimmed, for: NodeSettings.webTransceiverAccount(for: identity))
+            return true
+        } catch {
+            present(
+                title: "Could not save the token",
+                message:
+                    "\(error) The token will work for this run, but was not stored — you will have "
+                    + "to fetch or paste it again next time.")
+            return false
+        }
+    }
+
+    /// Stores the EchoLink account password, and keeps a selected EchoLink
+    /// channel's in-memory secret in step with it.
+    ///
+    /// The mirroring is the part that matters: ``connect()`` sends ``secret``,
+    /// and an operator who changed their password in settings while an EchoLink
+    /// channel was selected would otherwise connect with the old one and be told
+    /// by the directory server that their password was wrong.
+    ///
+    /// - Returns: whether it reached the Keychain.
+    @discardableResult
+    func setEchoLinkAccountPassword(_ password: String) -> Bool {
+        echoLinkAccountPassword = password
+        if settings.mode == .echoLink { secret = password }
+        do {
+            try secretStore.setSecret(password, for: NodeSettings.echoLinkAccount(for: identity))
+            return true
+        } catch {
+            present(
+                title: "Could not save the password",
+                message:
+                    "\(error) It will work for this run, but was not stored — you will have to "
+                    + "type it again next time.")
+            return false
+        }
     }
 
     // MARK: - Channels (APP-4)

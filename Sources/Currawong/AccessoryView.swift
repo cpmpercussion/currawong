@@ -74,23 +74,45 @@ struct AccessoryPane: View {
     /// copy there would just be two banners saying the same thing.
     let isTransmitting: Bool
 
+    /// Whether this is a section of a larger screen (APP-12's settings screen)
+    /// rather than the whole of one.
+    ///
+    /// It drops this view's own `ScrollView` and padding. Two nested scroll views
+    /// is not a layout nicety: the inner one takes the drag, so the outer screen
+    /// cannot be scrolled by starting the gesture anywhere over this content —
+    /// which, on a settings screen, is most of it.
+    var isEmbedded = false
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if isTransmitting { transmittingBanner }
-                bluetoothSection
-                Divider()
-                remoteCommandSection
+        content
+            // Scanning holds the radio awake and is foreground-only by design, so
+            // it stops when this screen goes away — whether that is the sheet
+            // being dismissed mid-scan, or the pane being switched away from,
+            // which are the same thing as far as the scan is concerned.
+            .onDisappear { accessory.stopScanning() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isEmbedded {
+            sections
+        } else {
+            ScrollView {
+                sections
+                    .padding(20)
+                    .frame(maxWidth: 520)
+                    .frame(maxWidth: .infinity)
             }
-            .padding(20)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
         }
-        // Scanning holds the radio awake and is foreground-only by design, so it
-        // stops when this screen goes away — whether that is the sheet being
-        // dismissed mid-scan, or the pane being switched away from, which are
-        // the same thing as far as the scan is concerned.
-        .onDisappear { accessory.stopScanning() }
+    }
+
+    private var sections: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if isTransmitting { transmittingBanner }
+            bluetoothSection
+            Divider()
+            remoteCommandSection
+        }
     }
 
     // MARK: - On air
