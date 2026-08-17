@@ -374,6 +374,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var storedSelectedID: UUID?
     private var storedIdentity: OperatorIdentity?
     private var storedGain: TransmitGain?
+    private var storedReceiveGain: ReceiveGain?
     private var storedTimeout: TransmitTimeout?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
@@ -384,7 +385,8 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         selectedID: UUID? = nil,
         identity: OperatorIdentity? = nil,
         gain: TransmitGain? = nil,
-        timeout: TransmitTimeout? = nil
+        timeout: TransmitTimeout? = nil,
+        receiveGain: ReceiveGain? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
@@ -392,6 +394,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         self.storedIdentity = identity
         self.storedGain = gain
         self.storedTimeout = timeout
+        self.storedReceiveGain = receiveGain
     }
 
     func loadIdentity() -> OperatorIdentity? {
@@ -423,6 +426,25 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storedGain
+    }
+
+    func loadReceiveGain() -> ReceiveGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedReceiveGain
+    }
+
+    func saveReceiveGain(_ gain: ReceiveGain) {
+        lock.lock()
+        storedReceiveGain = gain
+        lock.unlock()
+    }
+
+    /// What ``saveReceiveGain(_:)`` last wrote.
+    var savedReceiveGain: ReceiveGain? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedReceiveGain
     }
 
     func loadTransmitTimeout() -> TransmitTimeout? {
@@ -660,11 +682,12 @@ final class SessionHarness {
         resolver: any HostResolver = FakeHostResolver(),
         identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ"),
         gain: TransmitGain? = nil,
-        timeout: TransmitTimeout? = nil
+        timeout: TransmitTimeout? = nil,
+        receiveGain: ReceiveGain? = nil
     ) {
         self.settingsStore = InMemorySettingsStore(
             initial: settings, channels: channels, selectedID: selectedID, identity: identity,
-            gain: gain, timeout: timeout)
+            gain: gain, timeout: timeout, receiveGain: receiveGain)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks

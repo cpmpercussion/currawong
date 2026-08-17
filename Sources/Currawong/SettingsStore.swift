@@ -46,6 +46,11 @@ protocol SettingsStore: AnyObject, Sendable {
     func loadTransmitGain() -> TransmitGain?
     func saveTransmitGain(_ gain: TransmitGain)
 
+    /// Software gain on the receive path, app-wide for the same reason: it is
+    /// about how loud this device is in this room. `nil` if never set.
+    func loadReceiveGain() -> ReceiveGain?
+    func saveReceiveGain(_ gain: ReceiveGain)
+
     /// **SF-1.** The transmit watchdog timeout, app-wide. `nil` means none has
     /// ever been saved *under its own key*, which — as with ``loadIdentity()`` —
     /// is the signal to go looking for one in the channels written before the
@@ -76,6 +81,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
     private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
     private static let transmitTimeoutKey = "au.charlesmartin.currawong.transmitTimeoutSeconds"
+    private static let receiveGainKey = "au.charlesmartin.currawong.receiveGainDB"
 
     private let defaults: UserDefaults
 
@@ -169,6 +175,18 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
 
     func saveTransmitGain(_ gain: TransmitGain) {
         defaults.set(gain.decibels, forKey: Self.transmitGainKey)
+    }
+
+    /// As ``loadTransmitGain()``: a bare number, and `object(forKey:)` so that
+    /// "never set" is distinguishable from "set to zero" — and zero is the
+    /// default, which makes the distinction worth keeping rather than academic.
+    func loadReceiveGain() -> ReceiveGain? {
+        guard defaults.object(forKey: Self.receiveGainKey) != nil else { return nil }
+        return ReceiveGain(decibels: defaults.double(forKey: Self.receiveGainKey))
+    }
+
+    func saveReceiveGain(_ gain: ReceiveGain) {
+        defaults.set(gain.decibels, forKey: Self.receiveGainKey)
     }
 
     /// **SF-1.** The app-wide watchdog timeout, harvesting one from older

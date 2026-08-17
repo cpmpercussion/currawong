@@ -132,7 +132,7 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 }
 
-/// The current transmit gain, readable from the audio thread.
+/// A gain setting, readable from the audio thread.
 ///
 /// The gain is a `@Published` property of a `@MainActor` view model, and the
 /// capture tap runs on a real-time thread that cannot touch either. Snapshotting
@@ -144,15 +144,19 @@ final class AudioLevelMeter: @unchecked Sendable {
 /// So the value lives in a box: written on the main actor when the slider moves,
 /// read on the audio thread once per frame behind an uncontended lock, the same
 /// arrangement `AudioLevelMeter` uses in the other direction.
-final class TransmitGainBox: @unchecked Sendable {
+///
+/// Generic over the gain, because the receive side needs exactly the same
+/// arrangement: its frames arrive on a detached task rather than a capture tap,
+/// which is no more able to read a main-actor property than the tap is.
+final class GainBox<Gain: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var stored: TransmitGain
+    private var stored: Gain
 
-    init(_ gain: TransmitGain = .unity) {
+    init(_ gain: Gain) {
         self.stored = gain
     }
 
-    var gain: TransmitGain {
+    var gain: Gain {
         get {
             lock.lock()
             defer { lock.unlock() }
@@ -205,14 +209,70 @@ struct TransmitGain: Equatable, Sendable {
     /// Applies the gain. Returns the frame unchanged at unity, so the common
     /// case allocates nothing.
     func apply(to frame: [Int16]) -> [Int16] {
-        guard decibels > 0 else { return frame }
-        let multiplier = self.multiplier
-        return frame.map { sample in
-            let amplified = (Double(sample) * multiplier).rounded()
-            // Clamped in Double before narrowing: `Int16(exactly:)` on an
-            // out-of-range value is nil and `Int16(_:)` traps, and this runs on
-            // the audio thread where a trap is a crash mid-transmission.
-            return Int16(min(max(amplified, Double(Int16.min)), Double(Int16.max)))
-        }
+        amplify(frame, by: decibels)
+    }
+}
+
+/// Software gain on the receive path, in dB.
+///
+/// **Why this exists.** The far end decides how hot it sends, the library's
+/// leveller normalises what arrives (AU-4, see
+/// ``CompositionRoot/receiveLeveller``), and iOS decides how loud the speaker
+/// goes — and on a phone at full volume the result can still be quieter than an
+/// operator wants in a noisy shack or a car. The volume buttons cannot go past
+/// 100%, so the only place left to make received audio louder is the samples
+/// themselves, between the link and playback.
+///
+/// **The counterpart of ``TransmitGain``, and the same trade.** A fixed gain, not
+/// compression: everything comes up together, including the far end's noise
+/// floor, and every sample is clamped to the `Int16` range so the worst case is a
+/// flat-topped peak rather than the click that a wrapped sample would make. The
+/// receive meter reads *after* this, so the operator can see the headroom they
+/// have left.
+///
+/// **Boost only.** Zero is "leave it alone", and turning the audio down is what
+/// the device's own volume control is for — a software attenuator here would be a
+/// second volume knob that the ring/silent switch and the lock screen know
+/// nothing about.
+struct ReceiveGain: Equatable, Sendable {
+    /// Decibels of gain. `0` passes samples through untouched.
+    var decibels: Double
+
+    /// The useful range. `+20 dB` is four times the amplitude of what the
+    /// leveller already targets, which is past the point where the far end's own
+    /// hiss becomes the loudest thing in the room — there is nothing above it
+    /// worth offering.
+    static let range: ClosedRange<Double> = 0...20
+
+    static let unity = ReceiveGain(decibels: 0)
+
+    init(decibels: Double) {
+        self.decibels = min(max(decibels, Self.range.lowerBound), Self.range.upperBound)
+    }
+
+    /// The linear multiplier this gain represents.
+    var multiplier: Double { pow(10, decibels / 20) }
+
+    /// Applies the gain. Returns the frame unchanged at unity, so the common
+    /// case — an operator who never touched the slider — allocates nothing.
+    func apply(to frame: [Int16]) -> [Int16] {
+        amplify(frame, by: decibels)
+    }
+}
+
+/// The sample arithmetic both gains share.
+///
+/// One implementation rather than two identical ones, because the clamp is the
+/// part that matters and a second copy of it is a second chance to get it wrong.
+///
+/// Clamped in `Double` before narrowing: `Int16(exactly:)` on an out-of-range
+/// value is nil and `Int16(_:)` traps, and this runs on an audio thread where a
+/// trap is a crash mid-transmission.
+private func amplify(_ frame: [Int16], by decibels: Double) -> [Int16] {
+    guard decibels > 0 else { return frame }
+    let multiplier = pow(10, decibels / 20)
+    return frame.map { sample in
+        let amplified = (Double(sample) * multiplier).rounded()
+        return Int16(min(max(amplified, Double(Int16.min)), Double(Int16.max)))
     }
 }
