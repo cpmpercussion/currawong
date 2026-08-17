@@ -128,9 +128,13 @@ struct SettingsView: View {
             if portalLogin.isAvailable {
                 loginControls
             } else {
+                // Not the shipping wiring — `CompositionRoot` supplies a live
+                // login. This is what a preview or a build with the login
+                // deliberately withheld shows, and it says what still works
+                // rather than promising anything.
                 Label(
-                    "Logging in from the app arrives with the next library release. Until then, "
-                    + "paste a token below — `hamvoip-cli wt-token` prints one.",
+                    "Logging in is not available in this build. Paste a token below instead — "
+                    + "`hamvoip-cli wt-token` prints one.",
                     systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)

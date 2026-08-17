@@ -132,28 +132,12 @@ final class CompositionRoot {
     /// that must survive the pane being scrolled away from, and a library type
     /// only this file may name.
     ///
-    /// **Its `PortalLogin` is `nil` in the shipping wiring, deliberately.** The
-    /// fetch is IAX-13, which is not in a released `swift-hamvoip` tag yet, and
-    /// this app depends on the library by version. `PortalLoginController` then
-    /// reports `isAvailable == false` and the settings screen offers only the
-    /// paste field, which is the honest presentation of "no login yet" — rather
-    /// than a button that cannot work. When a release carrying IAX-13 lands, this
-    /// is the whole of the change: bump `project.yml`, add
-    ///
-    /// ```swift
-    /// struct AllStarLinkPortalLogin: PortalLogin {
-    ///     private let source: any WebTransceiverTokenSource = AllStarLinkPortalTokenFetcher()
-    ///     func token(callsign: String, password: String) async throws -> String {
-    ///         do { return try await source.token(username: callsign, password: password).value }
-    ///         catch let error as WebTransceiverTokenError { throw PortalLoginFailure(error) }
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// below (beside ``EchoLinkPublicProxyFinder``, which is the same shape of
-    /// adapter), and default the `portalLogin` parameter to it. ``PortalLoginFailure``
-    /// documents which of the library's error cases becomes which of its own, so
-    /// the mapping is a decision already made rather than one left to that day.
+    /// It logs in through ``AllStarLinkPortalLogin``, the adapter over IAX-13's
+    /// `WebTransceiverTokenSource`. That is why the default is a live login rather
+    /// than `nil`: the app's floor is `v0.5.2`, the release that carries the
+    /// fetch. A `nil` login is still meaningful and still supported — it means
+    /// "no logging in", which is what a preview, or a test with no business
+    /// talking to allstarlink.org, should get.
     let portalLogin: PortalLoginController
 
     /// - Parameters:
@@ -179,7 +163,7 @@ final class CompositionRoot {
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
-        portalLogin: (any PortalLogin)? = nil
+        portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin()
     ) {
         let session = RadioSession(
             audio: audio,
@@ -953,6 +937,75 @@ struct EchoLinkStationDirectory: StationDirectory {
 /// the seam. That puts it here, which is the rule working rather than the rule
 /// being bent: the root picks the proxy, fills in the field, and the view never
 /// meets an `EchoLinkPublicProxy`.
+/// Wraps IAX-13's `WebTransceiverTokenSource` — the POST to allstarlink.org that
+/// exchanges a portal login for a Web Transceiver token (APP-12, pane 1).
+///
+/// The same shape of adapter as ``EchoLinkPublicProxyFinder``, and here for the
+/// same two reasons: `AllStarLinkPortalTokenFetcher` and
+/// `WebTransceiverTokenError` are library types, which only this file may name,
+/// and translating gives the app an error vocabulary of its own.
+///
+/// **The library owns the request.** Nothing here builds a URL, a body or a
+/// header. The endpoint is named `legacy` and AllStarLink has a replacement
+/// project open (OQ-10, caveat 2), so when the successor arrives it should be a
+/// second conformance to `WebTransceiverTokenSource` inside the library, injected
+/// below — and this file should not have to change at all.
+struct AllStarLinkPortalLogin: PortalLogin {
+    /// Injectable so a test can drive the translation without a network. The
+    /// default is the library's real endpoint, which is HTTPS-only and refuses
+    /// anything else before a password is sent.
+    private let source: any WebTransceiverTokenSource
+
+    init(source: any WebTransceiverTokenSource = AllStarLinkPortalTokenFetcher()) {
+        self.source = source
+    }
+
+    func token(callsign: String, password: String) async throws -> String {
+        do {
+            // `.value` rather than the token type: `WebTransceiverToken` may not
+            // travel above this file, and what the app does with it is store the
+            // string in the Keychain and hand it back as a calling name. Its
+            // `description` is redacted, so this unwrap is the one place that
+            // could leak it — and it goes straight to `SecretStore`.
+            return try await source.token(username: callsign, password: password).value
+        } catch let error as WebTransceiverTokenError {
+            throw PortalLoginFailure(error)
+        }
+        // Anything else — a `URLError` that escaped the library, a cancellation —
+        // propagates, and `PortalLoginController` reports it as `.unreachable`,
+        // which is what an unclassifiable failure to reach a web service is.
+    }
+}
+
+extension PortalLoginFailure {
+    /// The library's five cases in the app's four, as ``PortalLoginFailure``
+    /// documents.
+    ///
+    /// The merge is the app making a decision the library should not: `Invalid
+    /// JSON payload` and `Invalid JSON fields` are the same news to an operator —
+    /// the login service has changed and nothing they type will help — while a
+    /// wrong password is the one case where re-typing is the answer.
+    init(_ error: WebTransceiverTokenError) {
+        switch error {
+        case .loginFailed:
+            self = .wrongPassword
+        case .invalidJSONPayload, .invalidJSONFields:
+            self = .endpointChanged
+        case .rejected(let message):
+            self = .refused(message)
+        case .malformedResponse(let detail), .requestFailed(let detail):
+            self = .unreachable(detail)
+        case .insecureEndpoint:
+            // Only reachable through an injected non-HTTPS endpoint, which the
+            // shipping wiring cannot produce. Reported as a changed endpoint
+            // rather than as unreachable, because it is a configuration fault
+            // and the operator's remedy is the same one: the paste field still
+            // works.
+            self = .endpointChanged
+        }
+    }
+}
+
 struct EchoLinkPublicProxyFinder: ProxyFinder {
     /// Injectable so a test can drive the translation without a network. The
     /// default is the library's real endpoint and a `Network.framework` probe.
