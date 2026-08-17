@@ -263,18 +263,15 @@ final class CompositionRootTests: XCTestCase {
         XCTAssertFalse(root.remoteCommand.isEnabled)
     }
 
-    /// SF-1's number is the operator's, and it travels in `NodeSettings`. This is
-    /// the seam where it becomes the library's watchdog timeout — a mistake here
-    /// would be invisible until a transmission ran for three minutes when ten
-    /// seconds were asked for.
-    func testTheWatchdogTimeoutComesFromTheSettings() {
-        var settings = NodeSettings(
-            host: "node.example.org", node: "55553")
-        settings.transmitTimeout = 12
-
-        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: settings), .seconds(12))
+    /// SF-1's number is the operator's, and it is app-wide rather than a field of
+    /// the channel. This is the seam where it becomes the library's watchdog
+    /// timeout — a mistake here would be invisible until a transmission ran for
+    /// three minutes when ten seconds were asked for.
+    func testTheWatchdogTimeoutComesFromTheOperatorsSetting() {
         XCTAssertEqual(
-            CompositionRoot.watchdogTimeout(for: NodeSettings()),
-            .seconds(NodeSettings.defaultTransmitTimeout))
+            CompositionRoot.watchdogTimeout(for: TransmitTimeout(seconds: 12)), .seconds(12))
+        XCTAssertEqual(
+            CompositionRoot.watchdogTimeout(for: .default),
+            .seconds(TransmitTimeout.default.seconds))
     }
 }

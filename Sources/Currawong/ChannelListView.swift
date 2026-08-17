@@ -6,8 +6,8 @@ import SwiftUI
 ///
 /// A channel is a place the operator can go back to — a node, a reflector
 /// module, an EchoLink station — and the point of the list is that reaching one
-/// again costs a tap rather than re-typing a host, a node number and a
-/// watchdog timeout. `ConnectFormView` edits whichever of these is selected;
+/// again costs a tap rather than re-typing a host and a node number.
+/// `ConnectFormView` edits whichever of these is selected;
 /// this decides which that is.
 ///
 /// ## Everything here is refused while a link is up

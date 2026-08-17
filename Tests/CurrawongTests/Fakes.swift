@@ -374,6 +374,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var storedSelectedID: UUID?
     private var storedIdentity: OperatorIdentity?
     private var storedGain: TransmitGain?
+    private var storedTimeout: TransmitTimeout?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
 
@@ -382,13 +383,15 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         channels: [NodeSettings]? = nil,
         selectedID: UUID? = nil,
         identity: OperatorIdentity? = nil,
-        gain: TransmitGain? = nil
+        gain: TransmitGain? = nil,
+        timeout: TransmitTimeout? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
         self.storedSelectedID = selectedID
         self.storedIdentity = identity
         self.storedGain = gain
+        self.storedTimeout = timeout
     }
 
     func loadIdentity() -> OperatorIdentity? {
@@ -420,6 +423,25 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storedGain
+    }
+
+    func loadTransmitTimeout() -> TransmitTimeout? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedTimeout
+    }
+
+    func saveTransmitTimeout(_ timeout: TransmitTimeout) {
+        lock.lock()
+        storedTimeout = timeout
+        lock.unlock()
+    }
+
+    /// What ``saveTransmitTimeout(_:)`` last wrote.
+    var savedTransmitTimeout: TransmitTimeout? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedTimeout
     }
 
     /// What ``saveIdentity(_:)`` last wrote, for the tests about when the
@@ -560,6 +582,11 @@ final class SessionHarness {
     /// Transceiver token reached the factory at all (APP-11).
     private(set) var credentialsSeen: [RadioSession.LinkCredentials] = []
 
+    /// The watchdog timeout each link was built with (SF-1). App-wide, so this is
+    /// where a test proves the operator's one number reached the factory rather
+    /// than a per-channel value that no longer exists.
+    private(set) var timeoutsSeen: [TransmitTimeout] = []
+
     /// Bumped by the link's `close` callback, which is `@Sendable` and may run
     /// off the main actor, so it counts through a lock rather than a property.
     let closedLinks = Counter()
@@ -632,11 +659,12 @@ final class SessionHarness {
         secrets: [String: String] = [:],
         resolver: any HostResolver = FakeHostResolver(),
         identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ"),
-        gain: TransmitGain? = nil
+        gain: TransmitGain? = nil,
+        timeout: TransmitTimeout? = nil
     ) {
         self.settingsStore = InMemorySettingsStore(
             initial: settings, channels: channels, selectedID: selectedID, identity: identity,
-            gain: gain)
+            gain: gain, timeout: timeout)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks
@@ -644,12 +672,13 @@ final class SessionHarness {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { [unowned self] settings, identity, credentials in
+            makeLink: { [unowned self] settings, identity, credentials, timeout in
                 if let error = self.makeLinkError { throw error }
                 self.linksMade += 1
                 self.settingsSeen.append(settings)
                 self.identitiesSeen.append(identity)
                 self.credentialsSeen.append(credentials)
+                self.timeoutsSeen.append(timeout)
 
                 var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
                 let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }

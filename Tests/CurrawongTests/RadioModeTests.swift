@@ -186,17 +186,14 @@ final class RadioModeTests: XCTestCase {
     /// until a transmission ran for three minutes when ten seconds was asked
     /// for, which is precisely the failure the watchdog exists to prevent.
     @MainActor
-    func testTheWatchdogTimeoutIsTakenFromTheOperatorsSettingsInEveryMode() {
-        var settings = m17Settings()
-        settings.transmitTimeout = 10
-        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: settings), .seconds(10))
-
-        var allStar = allStarSettings()
-        allStar.transmitTimeout = 42
-        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: allStar), .seconds(42))
-
-        var echoLink = echoLinkSettings()
-        echoLink.transmitTimeout = 15
-        XCTAssertEqual(CompositionRoot.watchdogTimeout(for: echoLink), .seconds(15))
+    func testTheWatchdogTimeoutIsTakenFromTheOperatorsSettingInEveryMode() {
+        // One number for all three modes now — the timeout is the operator's, not
+        // the channel's — so what is worth asserting is that each builder takes
+        // it, rather than that three settings values arrive separately.
+        for seconds in [10.0, 42.0, 15.0] {
+            XCTAssertEqual(
+                CompositionRoot.watchdogTimeout(for: TransmitTimeout(seconds: seconds)),
+                .seconds(seconds))
+        }
     }
 }
