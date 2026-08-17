@@ -55,9 +55,22 @@ final class SettingsAccountsTests: XCTestCase {
         }
     }
 
+    /// Waits until the login has actually reached the stub.
+    ///
+    /// The counterpart to ``settleLogin(_:)``, for the gated stub that never
+    /// returns: what needs waiting for there is the *entry*, not the result.
+    private func settleFirstCall(to login: StubLogin) async {
+        for _ in 0 ..< 100 where login.calls.isEmpty {
+            await Task.yield()
+        }
+    }
+
     private func settleLogin(_ controller: PortalLoginController) async {
-        // The controller runs its fetch in a `Task`; yielding lets it finish.
-        for _ in 0 ..< 50 where controller.isWorking {
+        // The controller runs its fetch in a `Task`; yielding lets it finish. The
+        // bound is generous rather than tight — a machine under load needs more
+        // yields, and the cost of a spare iteration is nothing while the cost of
+        // too few is a test that fails for no reason.
+        for _ in 0 ..< 100 where controller.isWorking {
             await Task.yield()
         }
     }
@@ -151,8 +164,14 @@ final class SettingsAccountsTests: XCTestCase {
         controller.password = "portal-password"
 
         controller.logIn(callsign: "VK1XYZ") { _ in }
-        await Task.yield()
-        XCTAssertTrue(controller.isWorking)
+        XCTAssertTrue(controller.isWorking, "set synchronously, before the fetch task runs")
+
+        // Waited for rather than assumed. `logIn` marks itself working and *then*
+        // starts a task, so a single `Task.yield()` is not enough to guarantee the
+        // stub has been entered — asserting the call count on that assumption made
+        // this test fail about one run in three.
+        await settleFirstCall(to: login)
+        XCTAssertEqual(login.calls.count, 1)
 
         controller.logIn(callsign: "VK1XYZ") { _ in }
         XCTAssertEqual(login.calls.count, 1, "one login at a time")
