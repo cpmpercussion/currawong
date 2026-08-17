@@ -4,10 +4,11 @@ Passing tests is not the same as keying a radio. This file tracks the gap: the
 work of making Currawong connect to a live node from an iPhone, key it, be
 heard, and hear the channel back.
 
-**Where that stands, 2026-08-16.** AllStarLink and EchoLink have both carried a
-QSO from this app, and M17 receive works against a live net. The gap has
-narrowed to one claim — that somebody can hear our M17 transmit — plus the four
-unrun `BU-2` checks below.
+**Where that stands, 2026-08-17.** AllStarLink and EchoLink have both carried a
+QSO from this app, M17 receive works against a live net, and M17 transmit was
+heard at the far end on 2026-08-17. The gap has narrowed to the four unrun
+`BU-2` checks below, plus the clean-teardown and watchdog checks still open on
+the M17 side (`BU-4`).
 
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
 `../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
@@ -48,7 +49,7 @@ the live node:
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | Open — check 2 (keying) confirmed |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
-| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Half closed 2026-08-16** — receive proven through this app; transmit sent, nobody has confirmed hearing it |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client; clean-teardown and watchdog checks (5, 6) still open |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 
 ---
@@ -102,7 +103,7 @@ Checks, in the order they can be answered:
 
 ---
 
-### BU-4 — the M17 session — half closed 2026-08-16
+### BU-4 — the M17 session — transmit confirmed 2026-08-17
 
 ✅ **Receive is proven, from this app.** A net on **M17-434** was listened to at
 length: audio intelligible throughout, and the transmitting stations' callsigns
@@ -112,23 +113,20 @@ handling, stream receive and the base-40 reading, all against many senders none
 of whom are us. M17-434 appears to be the more active VK1 net and is worth
 observing over more sessions.
 
-⛔ **Transmit is sent and unconfirmed.** Transmissions to **M17-432** and other
-reflectors were accepted, and **nobody has reported hearing one**. Check 4 is
-exactly as open as it was: the encoder, the LSF fields and the SID are unproven
-at the far end, and "the reflector took it" is not evidence that anyone could
-decode it. Checks 5 and 6 follow from it and are also open.
+✅ **Transmit is confirmed heard.** On 2026-08-17, a transmission from this app
+to **M17-434 module B** was heard readable at the far end via **Mseven**, an
+independent M17 client monitoring the reflector. Check 4 is settled: the
+encoder, the LSF fields and the SID all survived to a decoder that is not ours.
+The scope is still narrow — one reflector, one receiving implementation, one
+operator at both ends — but "the reflector took it" and "somebody found it
+readable" are no longer different claims. Checks 5 and 6 (clean release, the
+watchdog unkeying a held button) were not exercised in that session and remain
+open.
 
-**The cheapest way to close it is a parrot, not a second operator** — see
-**M17-6** in the library's development plan. A destination of `#ECHO` is
-reported to make a hotspot or repeater echo the transmission back, which would
-let one operator hear their own audio. Read that row before trying it: the
-claim comes from a mailing list rather than the specification, and `#` is not
-in the M17 alphabet at all, so what actually goes on the wire is an open
-question with three candidate answers.
-
-The original write-up follows. Its warnings about reflectors `NACK`ing modules
-they do not offer, and about arranging a second receiver before transmitting on
-a shared channel, still apply.
+The original write-up follows, kept for the record of how the link was
+exercised before transmit was confirmed. Its warnings about reflectors
+`NACK`ing modules they do not offer, and about arranging a second receiver
+before transmitting on a shared channel, still apply to checks 5 and 6.
 
 M17 became selectable on 2026-08-11 (app `4bc870c`, library v0.2.0). **Nothing
 about its audio path has ever been exercised against real equipment**, by this

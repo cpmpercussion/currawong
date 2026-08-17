@@ -40,8 +40,8 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
     /// AllStarLink over IAX2 (RFC 5456). The validated path.
     case allStarLink
 
-    /// M17 over a reflector. Believed working, never confirmed on air — see
-    /// ``isValidatedOnAir``.
+    /// M17 over a reflector. Confirmed heard on air both ways as of
+    /// 2026-08-17 — see ``isValidatedOnAir``.
     case m17
 
     /// EchoLink through a proxy, GSM 06.10 audio. Validated on air.
@@ -81,11 +81,13 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
     //
     // M17 receive was proven that evening — a net on M17-434, intelligible for
     // its length, callsigns displayed — and EchoLink ran from this app the same
-    // day. What is left unproven is narrower than a mode: M17 *transmit* has
-    // been accepted by reflectors and never confirmed heard by anybody. A
+    // day. M17 *transmit* was the one direction left: on 2026-08-17, sent from
+    // this app to M17-434 module B and heard readable at the far end via
+    // Mseven, an independent M17 client — one reflector, one receiving
+    // implementation, one operator at both ends, but no longer unconfirmed. A
     // per-mode caution cannot say that without saying more than it means, and a
-    // warning on a mode whose receive path the operator can hear working is a
-    // warning they learn to dismiss.
+    // warning on a mode whose receive and transmit paths the operator can hear
+    // working is a warning they learn to dismiss.
     //
     // It also had exactly one reader, who knows the state of the project better
     // than any label could put it. Development status belongs in the plan and
