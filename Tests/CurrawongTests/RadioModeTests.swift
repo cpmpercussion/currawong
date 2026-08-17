@@ -107,15 +107,15 @@ final class RadioModeTests: XCTestCase {
 
     @MainActor
     func testTheFactoryDispatchesOnTheModeInTheSettings() throws {
-        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2")
+        let allStar = try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, credentials: .init(secret: "hunter2"))
         defer { allStar.close() }
         XCTAssertEqual(allStar.mode, .allStarLink)
 
-        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: "")
+        let m17 = try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, credentials: .init())
         defer { m17.close() }
         XCTAssertEqual(m17.mode, .m17)
 
-        let echoLink = try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password")
+        let echoLink = try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, credentials: .init(secret: "account-password"))
         defer { echoLink.close() }
         XCTAssertEqual(echoLink.mode, .echoLink)
     }
@@ -127,9 +127,9 @@ final class RadioModeTests: XCTestCase {
     @MainActor
     func testAllThreeModesProduceTheSameKindOfLink() throws {
         let links: [RadioLink] = [
-            try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, secret: "hunter2"),
-            try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, secret: ""),
-            try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, secret: ""),
+            try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, credentials: .init(secret: "hunter2")),
+            try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, credentials: .init()),
+            try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, credentials: .init()),
         ]
         defer { links.forEach { $0.close() } }
 

@@ -436,6 +436,7 @@ struct RootView: View {
         ConnectFormView(
             settings: $session.settings,
             secret: $session.secret,
+            webTransceiverToken: $session.webTransceiverToken,
             identity: $session.identity,
             isEditable: session.connection == .disconnected,
             connectTitle: connectTitle,

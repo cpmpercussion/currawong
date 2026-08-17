@@ -130,7 +130,8 @@ final class NodeSettingsTests: XCTestCase {
             keys,
             [
                 "id", "name", "mode", "host", "port", "node", "module",
-                "peer", "proxyPassword", "directoryServer", "username", "transmitTimeout",
+                "peer", "proxyPassword", "directoryServer", "username", "allStarAccess",
+                "transmitTimeout",
             ])
         XCTAssertFalse(
             keys.contains("callsign") || keys.contains("operatorName")

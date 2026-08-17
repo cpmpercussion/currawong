@@ -21,6 +21,25 @@ that the connect form changes shape with the mode — a node number and a secret
 a reflector module, or a proxy plus a node address and an account password —
 and `RadioMode` is where that fans out.
 
+**Web Transceiver (APP-11).** AllStarLink has two routes to a node and the app
+now offers both. A node secret is something the node's owner sets up for you, per
+node, in its configuration. **Web Transceiver** needs no arrangement with anyone:
+if the owner has switched it on, an allstarlink.org portal account reaches it. So
+the AllStarLink third of the form has a *How to connect* picker — node secret, or
+a portal token in place of the username and secret.
+
+It is a credentials variant rather than a fourth mode, because it is the same
+protocol to the same nodes; `RadioMode` stays three wide and
+`NodeSettings.allStarAccess` says which route a channel takes. The token is
+stored in the Keychain under your callsign rather than with the channel, because
+the portal issues one per operator and it works on every WT-enabled node — it
+stands for your callsign, which the node asks allstarlink.org to confirm. The
+four counter-intuitive values a guest call actually presents (a shared guest
+username, a static secret, Asterisk's start extension, and the node number moved
+into CALLING NUMBER) live in `CompositionRoot.swift` with the evidence for each,
+and are pinned by tests. Getting a token is a paste for now; APP-12's settings
+screen is where logging in to the portal will fetch one.
+
 **Saved channels (APP-4).** A channel is one place worth going back to: a name,
 a mode, and the fields that mode needs. They are listed, reorderable and
 deletable, the selected one is remembered between launches, and connecting is
