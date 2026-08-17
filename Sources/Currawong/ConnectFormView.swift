@@ -32,6 +32,12 @@ struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
+    /// The Web Transceiver token (APP-11). **Not part of ``settings``** and not
+    /// per channel: the portal issues one per operator, and it works on every
+    /// WT-enabled node — so, like the callsign, editing it here changes it
+    /// everywhere. Only read in AllStarLink mode with that route chosen.
+    @Binding var webTransceiverToken: String
+
     /// The operator's callsign. **Not part of ``settings``** — it is app-wide,
     /// so editing it here changes it for every channel, which is the intent.
     /// See ``OperatorIdentity``.
@@ -481,6 +487,88 @@ struct ConnectFormView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// **AllStarLink.** Which of the two routes to the node this channel takes.
+    ///
+    /// A picker rather than something inferred from which fields are filled in:
+    /// the two need different credentials, and an app that guessed would tell an
+    /// operator with an empty secret field that they had made a typo when in fact
+    /// they had chosen the wrong route.
+    ///
+    /// It sits in the "You" section rather than beside the node, because that is
+    /// what it decides — the destination is the same node either way.
+    @ViewBuilder
+    private var accessPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("How to connect", selection: $settings.allStarAccess) {
+                ForEach(AllStarLinkAccess.allCases) { access in
+                    Text(access.displayName).tag(access)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(
+                settings.usesWebTransceiver
+                    ? "Web Transceiver: reach any node whose owner has switched it on, using your "
+                        + "allstarlink.org portal account. No arrangement with the node's owner."
+                    : "Node secret: the username and secret the node's owner set up for you in "
+                        + "its configuration.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// **AllStarLink, Web Transceiver.** The token, and nothing else.
+    ///
+    /// The username, the node's secret and the extension dialled are all fixed
+    /// values for a WT call — a shared guest account, a static secret that ships
+    /// in every node's `iax.conf`, and Asterisk's start extension — so the app
+    /// fills them in rather than showing three fields whose only correct value is
+    /// the one already in them. `CompositionRoot` is where they live, with the
+    /// evidence for each.
+    @ViewBuilder
+    private var webTransceiverFields: some View {
+        LabelledField(label: "Portal token", systemImage: "key") {
+            // A plain TextField, unlike the node secret's SecureField, and it is
+            // a considered difference rather than an oversight: 12 characters of
+            // hex cannot be typed blind, the mistakes people make with it are
+            // *visible* ones (a truncated paste, an upper-cased autocorrection),
+            // and it is still stored in the Keychain exactly as the secret is.
+            TextField("1b59df18107e", text: $webTransceiverToken)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                .font(.body.monospaced())
+        }
+
+        if !webTransceiverToken.isEmpty
+            && !NodeSettings.isPlausibleWebTransceiverToken(webTransceiverToken)
+        {
+            // A warning, not a refusal. The endpoint that issues these is named
+            // `legacy` and a successor is expected, so the app must not be the
+            // thing that decides a token is invalid — the node decides.
+            Label(
+                "That does not look like a token: they are \(NodeSettings.webTransceiverTokenLength)"
+                    + " lowercase hex characters, like 1b59df18107e. Connecting anyway is fine if "
+                    + "you are sure.",
+                systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Text(
+            "Get this from your allstarlink.org account. It stands for your callsign — the node "
+            + "asks allstarlink.org who the token belongs to — so treat it like a password. Stored "
+            + "in the Keychain, under your callsign rather than this channel, because one token "
+            + "works on every node.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     @ViewBuilder
     private var callsignField: some View {
         LabelledField(label: "Callsign", systemImage: "person.wave.2") {
@@ -696,23 +784,29 @@ struct ConnectFormView: View {
 
         switch settings.mode {
         case .allStarLink:
-            LabelledField(label: "Username", systemImage: "person") {
-                TextField("optional", text: $settings.username)
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                    #endif
-                    .autocorrectionDisabled()
-            }
+            accessPicker
 
-            LabelledField(label: "Secret", systemImage: "key") {
-                // SecureField, and the value is written to the Keychain on
-                // connect — never to UserDefaults, and never to a log.
-                SecureField("stored in the Keychain", text: $secret)
-                    .textFieldStyle(.roundedBorder)
-            }
+            if settings.usesWebTransceiver {
+                webTransceiverFields
+            } else {
+                LabelledField(label: "Username", systemImage: "person") {
+                    TextField("optional", text: $settings.username)
+                        .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                        #endif
+                        .autocorrectionDisabled()
+                }
 
-            keychainNote
+                LabelledField(label: "Secret", systemImage: "key") {
+                    // SecureField, and the value is written to the Keychain on
+                    // connect — never to UserDefaults, and never to a log.
+                    SecureField("stored in the Keychain", text: $secret)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                keychainNote
+            }
 
         case .m17:
             // M17 reflectors do not authenticate — the callsign in every frame

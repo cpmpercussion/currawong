@@ -47,7 +47,7 @@ final class CompositionRootTests: XCTestCase {
                 host: "node.example.org", port: 4569, node: "55553",
                 username: "vk1xyz"),
             identity: vk1xyz,
-            secret: "hunter2")
+            credentials: .init(secret: "hunter2"))
         defer { link.close() }
 
         // The link exposes operations, not the client, so what is
@@ -63,7 +63,7 @@ final class CompositionRootTests: XCTestCase {
         let link = CompositionRoot.makeIAX2Link(
             settings: NodeSettings(host: "node.example.org", node: "55553"),
             identity: vk1xyz,
-            secret: "")
+            credentials: .init())
         defer { link.close() }
 
         await link.stopTransmit()
@@ -78,7 +78,7 @@ final class CompositionRootTests: XCTestCase {
         let link = CompositionRoot.makeIAX2Link(
             settings: NodeSettings(host: "node.example.org", node: "55553"),
             identity: vk1xyz,
-            secret: "")
+            credentials: .init())
         defer { link.close() }
 
         link.sendCapturedFrame(Array(repeating: 0, count: 160))
@@ -91,7 +91,7 @@ final class CompositionRootTests: XCTestCase {
         let link = CompositionRoot.makeIAX2Link(
             settings: NodeSettings(host: "node.example.org", node: "55553"),
             identity: vk1xyz,
-            secret: "")
+            credentials: .init())
         defer { link.close() }
 
         do {

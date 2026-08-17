@@ -102,7 +102,25 @@ final class RadioSession: ObservableObject {
     /// cannot be swapped with the secret at a call site — see
     /// ``OperatorIdentity``.
     typealias LinkFactory =
-        @MainActor (NodeSettings, OperatorIdentity, String) throws -> RadioLink
+        @MainActor (NodeSettings, OperatorIdentity, LinkCredentials) throws -> RadioLink
+
+    /// What a link is built with, beyond the settings and the identity.
+    ///
+    /// One type rather than a growing list of `String` parameters, because the
+    /// two credentials here are not interchangeable and a call site that swapped
+    /// them would compile: a node secret authenticates us *as an account*, and a
+    /// Web Transceiver token stands for our *callsign* on a guest call (APP-11).
+    /// Which one is used is the channel's business — see
+    /// ``NodeSettings/usesWebTransceiver``.
+    struct LinkCredentials: Equatable, Sendable {
+        /// The node secret, or an EchoLink account password. Empty for a mode or
+        /// a route that does not authenticate.
+        var secret: String = ""
+
+        /// The Web Transceiver token, when the channel is reached that way.
+        /// Empty otherwise, and never sent as a secret.
+        var webTransceiverToken: String = ""
+    }
 
     /// How long after the last inbound frame the receive indicator stays lit.
     /// Two and a half frames — long enough not to flicker on the 20 ms grid,
@@ -134,6 +152,18 @@ final class RadioSession: ObservableObject {
     /// The secret, in memory only. It reaches the Keychain in ``connect()``
     /// and `UserDefaults` never.
     @Published var secret: String
+
+    /// The Web Transceiver token (APP-11), in memory only, on the same terms as
+    /// ``secret``: it reaches the Keychain in ``connect()`` and `UserDefaults`
+    /// never.
+    ///
+    /// **App-wide, not per channel.** The portal issues one token per operator
+    /// and it stands for their callsign on every WT-enabled node, so it is filed
+    /// under the callsign (``NodeSettings/webTransceiverAccount(for:)``) and is
+    /// *not* reloaded when the operator selects a different channel — unlike
+    /// ``secret``, which is per channel and is. Typed or pasted for now; APP-12's
+    /// portal login is what will fill it in.
+    @Published var webTransceiverToken: String
 
     /// What the microphone is putting on the air, **after** ``transmitGain``.
     /// Post-gain because that is the number the operator is trying to set, and
@@ -302,6 +332,11 @@ final class RadioSession: ObservableObject {
         self.transmitGain = storedGain
         self.gainBox.gain = storedGain
         self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
+        // Loaded regardless of the selected channel's mode: the token belongs to
+        // the operator rather than to a channel, so it is there for whichever
+        // channel they switch to next.
+        self.webTransceiverToken =
+            (try? secretStore.secret(for: current.webTransceiverAccount(for: identity))) ?? ""
     }
 
     // MARK: - Channels (APP-4)
@@ -509,6 +544,26 @@ final class RadioSession: ObservableObject {
         }
         settings = validated
 
+        // A Web Transceiver call carries the token in place of a node secret
+        // (APP-11), so an empty one is the same class of problem as an empty
+        // host: nothing further can succeed. Checked here rather than in
+        // `NodeSettings.validated()` because the token is a credential and this
+        // type holds none — it is the same split as the secret.
+        //
+        // Only emptiness is refused. A token of an unfamiliar shape is passed on,
+        // for the reason `isPlausibleWebTransceiverToken` documents: the node is
+        // what decides, and the form has already said it looks wrong.
+        let trimmedToken = webTransceiverToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if validated.usesWebTransceiver && trimmedToken.isEmpty {
+            present(
+                title: "No Web Transceiver token",
+                message:
+                    "This channel connects as a Web Transceiver guest, which needs a token from "
+                    + "your allstarlink.org portal account. Enter one, or switch the channel to a "
+                    + "node secret.")
+            return
+        }
+
         // Connecting is what turns a draft into a saved channel. An operator who
         // typed a node into an empty app and pressed Connect has plainly said
         // "this is a place I go", so the first connection is where it joins the
@@ -525,9 +580,22 @@ final class RadioSession: ObservableObject {
         settingsStore.save(validated)
 
         do {
-            try secretStore.setSecret(secret, for: validated.secretAccount(for: validatedIdentity))
+            if validated.usesWebTransceiver {
+                // The node-secret slot is deliberately left alone. A WT channel
+                // has no secret to store, and writing an empty one would *delete*
+                // the secret of every channel sharing that account string — which
+                // for AllStarLink is any channel with the same username, host,
+                // port and node. Switching a working channel to WT and back would
+                // otherwise lose its password.
+                webTransceiverToken = trimmedToken
+                try secretStore.setSecret(
+                    trimmedToken, for: validated.webTransceiverAccount(for: validatedIdentity))
+            } else {
+                try secretStore.setSecret(
+                    secret, for: validated.secretAccount(for: validatedIdentity))
+            }
         } catch {
-            // Not fatal: the connection can proceed with the secret held in
+            // Not fatal: the connection can proceed with the credential held in
             // memory. Saying so is better than silently forgetting it.
             present(
                 title: "Could not save the secret",
@@ -589,7 +657,9 @@ final class RadioSession: ObservableObject {
 
         let newLink: RadioLink
         do {
-            newLink = try makeLink(resolved, validatedIdentity, secret)
+            newLink = try makeLink(
+                resolved, validatedIdentity,
+                LinkCredentials(secret: secret, webTransceiverToken: trimmedToken))
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")

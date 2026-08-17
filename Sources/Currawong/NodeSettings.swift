@@ -26,6 +26,48 @@ import Foundation
 /// identified by ``id``. It was a single node before APP-4, which is why the
 /// type is still called `NodeSettings` and why ``init(from:)`` has to cope with
 /// a blob that has neither of those two fields.
+/// How an AllStarLink node is reached: with credentials of our own, or as a
+/// guest presenting a portal token.
+///
+/// **Not a fourth ``RadioMode``.** Web Transceiver is the same protocol to the
+/// same nodes over the same port; what differs is which credentials the call
+/// carries. A fourth mode would have duplicated the whole AllStarLink third of
+/// the form and the store to express one substitution, and would have implied to
+/// an operator that WT reaches somewhere else.
+///
+/// The two are not interchangeable from the operator's side, which is why this
+/// is a choice they make rather than something the app infers:
+///
+/// | | Node secret | Web Transceiver |
+/// |---|---|---|
+/// | You need | an entry in that node's `iax.conf` | an allstarlink.org portal account |
+/// | Set up by | the node's owner, per node, for you | nobody — the owner enables WT once, for everyone |
+/// | You supply | a username and a secret | a token, which stands for your callsign |
+/// The raw values are what land in `UserDefaults`, and `.nodeSecret`'s is
+/// deliberately **not** `"nodeSecret"`: one of this app's cheapest safety nets is
+/// a test asserting that the persisted encoding of a channel contains no
+/// occurrence of the word "secret" anywhere in it, and a raw value carrying it
+/// would have to weaken that check into something with an exception in it.
+enum AllStarLinkAccess: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// A username and secret the node's owner configured for us. The route the
+    /// app has always taken.
+    case nodeSecret = "nodeLogin"
+
+    /// A Web Transceiver token from an allstarlink.org portal account (IAX-12,
+    /// IAX-13). Reaches any node whose owner has enabled WT, with no per-node
+    /// arrangement at all.
+    case webTransceiver
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .nodeSecret: return "Node secret"
+        case .webTransceiver: return "Web Transceiver"
+        }
+    }
+}
+
 struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// Stable identity, so a channel survives being renamed or re-pointed.
     ///
@@ -94,7 +136,20 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     var directoryServer: String
 
     /// The account the node authenticates us as. May be empty.
+    ///
+    /// **Unused when ``allStarAccess`` is `.webTransceiver`**: a WT call
+    /// authenticates as a shared guest account, which the app fills in rather
+    /// than asking for, and this field is hidden in that case. See
+    /// `CompositionRoot`, which is where the guest credentials are named.
     var username: String
+
+    /// **AllStarLink.** Whether this channel is reached with a node secret or as
+    /// a Web Transceiver guest. Ignored in the other two modes.
+    ///
+    /// Part of the channel rather than an app-wide setting, because it is a fact
+    /// about the node: one may have given us an `iax.conf` entry and the next
+    /// may only have WT switched on.
+    var allStarAccess: AllStarLinkAccess
 
     /// **SF-1.** How long one transmission may last before the library's
     /// watchdog unkeys, in seconds.
@@ -155,8 +210,10 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         proxyPassword: String = NodeSettings.defaultProxyPassword,
         directoryServer: String = "",
         username: String = "",
+        allStarAccess: AllStarLinkAccess = .nodeSecret,
         transmitTimeout: TimeInterval = NodeSettings.defaultTransmitTimeout
     ) {
+        self.allStarAccess = allStarAccess
         self.id = id
         self.name = name
         self.mode = mode
@@ -169,6 +226,31 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.directoryServer = directoryServer
         self.username = username
         self.transmitTimeout = transmitTimeout
+    }
+
+    /// Whether this channel is a Web Transceiver guest call.
+    ///
+    /// The mode is checked as well as the access, so the field cannot mean
+    /// anything in a mode that has no such route: an M17 channel carrying a
+    /// stale `.webTransceiver` from having once been an AllStar one is still
+    /// just an M17 channel.
+    var usesWebTransceiver: Bool {
+        mode == .allStarLink && allStarAccess == .webTransceiver
+    }
+
+    /// The Keychain account the Web Transceiver token is filed under.
+    ///
+    /// **Per callsign, not per channel**, and that is the whole point: the token
+    /// is issued by the portal to an operator and resolves to their callsign on
+    /// any WT-enabled node, so one token serves every WT channel. It is a
+    /// separate slot from ``secretAccount(for:)`` because a token is not a node
+    /// secret — writing it there would overwrite the secret of any channel that
+    /// happened to share the account string, and would file a portal credential
+    /// under a node's name.
+    ///
+    /// Filled in by APP-12's portal login; typed or pasted until then.
+    func webTransceiverAccount(for identity: OperatorIdentity) -> String {
+        "wt-token:\(identity.normalisedCallsign)"
     }
 
     /// What the operator sees in the channel list: their own name for the
@@ -216,6 +298,12 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.directoryServer =
             try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
+        // Absent means a channel saved before Web Transceiver existed, which is
+        // a node-secret channel rather than a corrupt one — the same reasoning
+        // as the missing `mode` above.
+        self.allStarAccess =
+            try container.decodeIfPresent(AllStarLinkAccess.self, forKey: .allStarAccess)
+            ?? .nodeSecret
         // `callsign`, `operatorName` and `location` may be present in a blob
         // written before they became app-wide. They are deliberately not read
         // here: the type no longer has those fields, and an unknown key in a
@@ -286,7 +374,13 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
 
         switch mode {
         case .allStarLink:
+            // The access route counts. The same node reached with a secret and
+            // reached as a WT guest is one place on the air but two channels
+            // here: they carry different credentials, and collapsing them would
+            // mean a directory or a browse quietly re-pointing a working
+            // node-secret channel at the guest account.
             return sameEndpoint && node.trimmed == other.node.trimmed
+                && allStarAccess == other.allStarAccess
         case .m17:
             return sameEndpoint
                 && module.trimmed.uppercased() == other.module.trimmed.uppercased()
@@ -358,6 +452,7 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
                 ? Self.defaultProxyPassword : proxyPassword.trimmed,
             directoryServer: directoryServer.trimmed,
             username: username.trimmed,
+            allStarAccess: allStarAccess,
             transmitTimeout: transmitTimeout)
 
         guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
@@ -413,6 +508,28 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             Self.transmitTimeoutRange.upperBound)
 
         return trimmed
+    }
+
+    /// The length of every Web Transceiver token observed so far: 12 lowercase
+    /// hexadecimal characters.
+    static let webTransceiverTokenLength = 12
+
+    /// Whether a token looks like the ones the portal has issued.
+    ///
+    /// **Advisory, never a gate.** The library takes the same position and for
+    /// the same reason: only the node decides whether a token works, and the
+    /// login endpoint is expected to be replaced (OQ-10), so refusing an
+    /// unfamiliar-looking token would turn a widened format into an app that
+    /// cannot connect. The form says "that does not look like a token" and lets
+    /// the operator press Connect anyway.
+    ///
+    /// Case matters: the portal issues lowercase, and an upper-cased token is the
+    /// mistake this catches — a token typed in a field with autocapitalisation on
+    /// is not the token.
+    static func isPlausibleWebTransceiverToken(_ text: String) -> Bool {
+        let trimmed = text.trimmed
+        return trimmed.count == webTransceiverTokenLength
+            && trimmed.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     /// Whether a string is four decimal octets separated by dots.

@@ -20,7 +20,7 @@ import RadioCore
 /// ## Three modes
 ///
 /// `settings.mode` chooses between an `IAX2Client`, an `M17Client` and an
-/// `EchoLinkClient`, and ``makeLink(settings:identity:secret:)`` is the switch. Nothing
+/// `EchoLinkClient`, and ``makeLink(settings:identity:credentials:)`` is the switch. Nothing
 /// above this file knows there is more than one library: all three factories
 /// return the same non-generic ``RadioLink``, which is exactly why that type
 /// stopped being generic — see its doc comment.
@@ -131,7 +131,7 @@ final class CompositionRoot {
     ///     a test can build a root without waiting for anything. Note that the
     ///     **watchdog timeout is not taken from here** — it belongs to the
     ///     operator, so it travels in `NodeSettings` and is applied per link;
-    ///     see ``makeIAX2Link(settings:identity:secret:configuration:)``.
+    ///     see ``makeIAX2Link(settings:identity:credentials:configuration:)``.
     ///   - audio: the microphone and speaker. Injectable so a test never opens
     ///     either.
     init(
@@ -154,13 +154,13 @@ final class CompositionRoot {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { settings, identity, secret in
+            makeLink: { settings, identity, credentials in
                 // Dispatches on the mode in the settings; see `makeLink`.
                 // `configuration` is the IAX2 one, so it only applies there.
                 switch settings.mode {
                 case .allStarLink:
                     return CompositionRoot.makeIAX2Link(
-                        settings: settings, identity: identity, secret: secret,
+                        settings: settings, identity: identity, credentials: credentials,
                         configuration: configuration)
                 case .m17:
                     return try CompositionRoot.makeM17Link(
@@ -169,7 +169,7 @@ final class CompositionRoot {
                     // The secret is the operator's EchoLink *account* password
                     // here, not a node password — see `makeEchoLinkLink`.
                     return try CompositionRoot.makeEchoLinkLink(
-                        settings: settings, identity: identity, secret: secret)
+                        settings: settings, identity: identity, secret: credentials.secret)
                 }
             })
         let accessory = accessory ?? BLEPTTController()
@@ -216,6 +216,107 @@ final class CompositionRoot {
         .seconds(settings.transmitTimeout)
     }
 
+    // MARK: - Web Transceiver (APP-11)
+
+    /// The guest account every Web Transceiver call authenticates as.
+    ///
+    /// A shared account, not the operator's callsign — a callsign here draws a
+    /// bare REJECT with no CAUSE and no challenge. Observed against a live node
+    /// (IAX-12); `swift-hamvoip/docs/CLI.md` §11.2 is the walkthrough.
+    static let webTransceiverUsername = "allstar-public"
+
+    /// The static secret that guest account uses.
+    ///
+    /// The same on every ASL3 node — it ships in `iax.conf` — which is why it is
+    /// a constant here rather than something to ask an operator for. It is
+    /// **not** the token and not a portal password.
+    static let webTransceiverSecret = "allstar"
+
+    /// The extension a WT call dials.
+    ///
+    /// `s`, the Asterisk start extension: WT never dials the node number, it
+    /// calls in like a telephone and the node answers. Dialling the node number
+    /// gives *No such context/extension*. Which node you end up attached to is
+    /// decided by CALLING NUMBER instead.
+    static let webTransceiverExtension = "s"
+
+    /// What a Web Transceiver guest call presents, in the app's own vocabulary.
+    ///
+    /// Exists so the mapping can be *tested*. The rest of this file hands
+    /// `IAX2Destination`s straight to a client, and neither the destination nor
+    /// the client can be asked afterwards what it was built from — so a wiring
+    /// mistake in five values, four of which are counter-intuitive, would be
+    /// invisible until a node rejected the call. The tests do not import
+    /// `IAX2Kit`, and this is what keeps that true.
+    struct WebTransceiverCall: Equatable {
+        /// The shared guest account, not the operator's callsign.
+        let username: String
+        /// The static secret that account uses. Not the token.
+        let secret: String
+        /// The extension dialled — `s`, never the node number.
+        let dialledExtension: String
+        /// CALLING NUMBER: becomes NODENUM and selects the node.
+        let callingNumber: String
+        /// CALLING NAME: the token, which the node resolves to a callsign.
+        let callingName: String
+        /// CALLING NAME's counterpart — who we say we are on the air.
+        let callsign: String
+    }
+
+    /// The guest-call parameters for a channel, or `nil` when the channel is not
+    /// a Web Transceiver one.
+    ///
+    /// Four of these are not what anyone would guess, and every one was
+    /// established by observation against a live node rather than from a
+    /// document (IAX-12; `swift-hamvoip/docs/CLI.md` §11.2).
+    ///
+    /// The identity mapping is the part worth understanding: the node passes
+    /// CALLING NAME to allstarlink.org, which resolves the token to a callsign.
+    /// That is the whole of the authentication — which is why the token is a
+    /// credential, and why it must reach the wire unaltered. `callsign` is
+    /// upper-cased on the way out and would corrupt a lowercase-hex token, so the
+    /// token travels in `callingName` and the operator's real callsign stays in
+    /// `callsign`.
+    static func webTransceiverCall(
+        settings: NodeSettings,
+        identity: OperatorIdentity,
+        credentials: RadioSession.LinkCredentials
+    ) -> WebTransceiverCall? {
+        guard settings.usesWebTransceiver else { return nil }
+
+        return WebTransceiverCall(
+            username: webTransceiverUsername,
+            secret: webTransceiverSecret,
+            dialledExtension: webTransceiverExtension,
+            callingNumber: settings.node,
+            callingName: credentials.webTransceiverToken,
+            callsign: identity.callsign)
+    }
+
+    /// The destination for a Web Transceiver guest call, or `nil` when this
+    /// channel is not one. The reasoning is in ``webTransceiverCall(settings:identity:credentials:)``;
+    /// this is only the translation into the library's vocabulary.
+    private static func webTransceiverDestination(
+        _ settings: NodeSettings,
+        _ identity: OperatorIdentity,
+        _ credentials: RadioSession.LinkCredentials
+    ) -> IAX2Destination? {
+        guard
+            let call = webTransceiverCall(
+                settings: settings, identity: identity, credentials: credentials)
+        else { return nil }
+
+        return IAX2Destination(
+            host: settings.host,
+            port: settings.port,
+            callsign: call.callsign,
+            username: call.username,
+            secret: call.secret,
+            node: call.dialledExtension,
+            callingNumber: call.callingNumber,
+            callingName: call.callingName)
+    }
+
     /// Builds one IAX2 connection's worth of plumbing.
     ///
     /// Opens nothing: `IAX2Client` builds its transport lazily inside
@@ -230,20 +331,21 @@ final class CompositionRoot {
     static func makeIAX2Link(
         settings: NodeSettings,
         identity: OperatorIdentity,
-        secret: String,
+        credentials: RadioSession.LinkCredentials,
         configuration: IAX2Client.Configuration = IAX2Client.Configuration()
     ) -> RadioLink {
         var configuration = configuration
         configuration.transmitTimeout = watchdogTimeout(for: settings)
 
         let client = IAX2Client(configuration: configuration)
-        let destination = IAX2Destination(
-            host: settings.host,
-            port: settings.port,
-            callsign: identity.callsign,
-            username: settings.username,
-            secret: secret,
-            node: settings.node)
+        let destination = webTransceiverDestination(settings, identity, credentials)
+            ?? IAX2Destination(
+                host: settings.host,
+                port: settings.port,
+                callsign: identity.callsign,
+                username: settings.username,
+                secret: credentials.secret,
+                node: settings.node)
 
         var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
         let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -533,16 +635,20 @@ final class CompositionRoot {
     ///
     /// The one place the app turns a mode into a concrete client, and the
     /// reason ``RadioLink`` stopped being generic — see its doc comment.
-    static func makeLink(settings: NodeSettings, identity: OperatorIdentity, secret: String)
-        throws -> RadioLink
-    {
+    static func makeLink(
+        settings: NodeSettings,
+        identity: OperatorIdentity,
+        credentials: RadioSession.LinkCredentials
+    ) throws -> RadioLink {
         switch settings.mode {
         case .allStarLink:
-            return makeIAX2Link(settings: settings, identity: identity, secret: secret)
+            return makeIAX2Link(
+                settings: settings, identity: identity, credentials: credentials)
         case .m17:
             return try makeM17Link(settings: settings, identity: identity)
         case .echoLink:
-            return try makeEchoLinkLink(settings: settings, identity: identity, secret: secret)
+            return try makeEchoLinkLink(
+                settings: settings, identity: identity, secret: credentials.secret)
         }
     }
 }

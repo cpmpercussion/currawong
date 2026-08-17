@@ -19,7 +19,7 @@ import Foundation
 ///
 /// ## Why a struct for one string
 ///
-/// So that `makeLink(settings, identity, secret)` cannot be called with the
+/// So that `makeLink(settings, identity, credentials)` cannot be called with the
 /// callsign and the secret the wrong way round. Two adjacent `String`
 /// parameters, one of which is a password, is a mistake waiting to be made
 /// silently — and the failure would be transmitting an operator's EchoLink

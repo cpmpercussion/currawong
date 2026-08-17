@@ -555,6 +555,11 @@ final class SessionHarness {
     /// callsign — and not a stale per-channel one — is what reached the library.
     private(set) var identitiesSeen: [OperatorIdentity] = []
 
+    /// The credentials each link was built with. The fake bypasses
+    /// `CompositionRoot`, so this is where a test sees whether the Web
+    /// Transceiver token reached the factory at all (APP-11).
+    private(set) var credentialsSeen: [RadioSession.LinkCredentials] = []
+
     /// Bumped by the link's `close` callback, which is `@Sendable` and may run
     /// off the main actor, so it counts through a lock rather than a property.
     let closedLinks = Counter()
@@ -639,11 +644,12 @@ final class SessionHarness {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { [unowned self] settings, identity, secret in
+            makeLink: { [unowned self] settings, identity, credentials in
                 if let error = self.makeLinkError { throw error }
                 self.linksMade += 1
                 self.settingsSeen.append(settings)
                 self.identitiesSeen.append(identity)
+                self.credentialsSeen.append(credentials)
 
                 var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
                 let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -666,7 +672,7 @@ final class SessionHarness {
                     node: settings.node,
                     username: settings.username,
                     callsign: identity.callsign,
-                    secret: secret)
+                    secret: credentials.secret)
                 return RadioLink(
                     // Reflects what was asked for, so a test can assert the
                     // mode reached the factory at all.

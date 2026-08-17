@@ -51,6 +51,7 @@ the live node:
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
 | BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client; clean-teardown and watchdog checks (5, 6) still open |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
+| BU-6 | Web Transceiver has never been connected from the app, only from the CLI | Open — APP-11 landed the route; nothing has been dialled with it from a phone |
 
 ---
 
@@ -291,6 +292,40 @@ if the engine is now always built after activation, the retry never runs, and a
 successful first press cannot distinguish the two. Both stay. The retry is not
 dead weight either way — the inactive-session case it also repairs is reachable
 from any interruption, which the ordering fix does nothing for.
+
+### BU-6 — the Web Transceiver call from the app
+
+**Same shape as BU-5, and open for the same reason.** The route works from the
+CLI: `hamvoip-cli iax2` reached a third party's node with nothing but a portal
+account (IAX-12), verified from outside by the callsign appearing in that node's
+link list. The app now presents the same call — APP-11 — and has never placed
+one.
+
+What to check, in order, because each step fails differently:
+
+1. **The token.** Paste it into the *Portal token* field in AllStarLink mode with
+   *Web Transceiver* chosen. `hamvoip-cli wt-token --callsign <yours>` prints one
+   (IAX-13). If the field warns that it does not look like a token, the paste was
+   truncated or autocapitalised — the app connects anyway, so read the warning.
+2. **The node number.** In this route it is not dialled; it travels as CALLING
+   NUMBER and selects which node answers. The *Look up this node* button still
+   fills in the host from the number, exactly as for a node-secret channel.
+3. **The ten-second wait.** A WT node answers, plays "connected to node" and
+   speaks the node number before attaching. That delay is normal and is not a
+   stall — do not press Disconnect through it.
+4. **The check that matters.** A client-side "Connected" is *not* sufficient: the
+   node answers on its failure path too, before hanging up. A call that drops
+   after about a second means the authority check failed. A call that holds is
+   attached, and a WT client appears in the target node's link list **by
+   callsign**, so it is verifiable from outside:
+
+   ```sh
+   curl -s "https://stats.allstarlink.org/api/stats/<node>" \
+       | jq -r '.stats.data.nodes' | tr ',' '\n' | grep "<your callsign>"
+   ```
+
+`swift-hamvoip/docs/CLI.md` §11 is the walkthrough this mirrors, and §11.3 is
+where that last check comes from.
 
 ### BU-2 — the on-air session
 
