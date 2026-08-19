@@ -16,9 +16,9 @@ import Foundation
 ///
 /// | | AllStarLink | M17 | EchoLink |
 /// |---|---|---|---|
-/// | Reached by | a node *number*, dialled | a reflector *module*, linked | a node's *IPv4*, through a proxy |
+/// | Reached by | a node *number*, dialled | a reflector *module*, linked | a node's *IPv4*, through the app-wide proxy |
 /// | Identity | username + secret | callsign only, unauthenticated | callsign + account password, at a directory server |
-/// | Default port | 4569 | 17000 | 8100 — the **proxy's** TCP port |
+/// | Default port | 4569 | 17000 | 8100 — the **proxy's**, and not a channel's |
 ///
 /// `NodeSettings` therefore carries the union and this enum says which third is
 /// live. The alternative — three settings types — would triple the store, the
@@ -26,10 +26,13 @@ import Foundation
 ///
 /// ## EchoLink is the odd one out, and it is worth saying why once
 ///
-/// Its `host` and `port` are **the proxy's**, not the node's. The library speaks
-/// only the proxied route — `EchoLinkDestination.Route.direct` is declared and
-/// throws, because no capture of a direct session exists — so every session is
-/// tunnelled, and the proxy is the only host the app ever resolves.
+/// It names **no host of its own** (APP-13). The library speaks only the proxied
+/// route — `EchoLinkDestination.Route.direct` is declared and throws, because no
+/// capture of a direct session exists — so every session is tunnelled, and the
+/// only host the app resolves for it is the *proxy*, which is app-wide station
+/// infrastructure rather than part of a destination. See
+/// ``EchoLinkProxySettings``. `NodeSettings.host` and `.port` are therefore dead
+/// in this mode, the way `node` is dead in M17.
 ///
 /// The node itself is named twice: a display callsign such as `*ECHOTEST*`, and
 /// a literal IPv4 address, because **nothing in the library resolves a callsign
@@ -117,9 +120,9 @@ enum RadioMode: String, CaseIterable, Codable, Sendable, Identifiable {
     /// Whether this mode links a reflector module.
     var usesModule: Bool { self == .m17 }
 
-    /// Whether this mode reaches its node through an EchoLink proxy, and so
-    /// needs a proxy password, a node address and a directory server rather
-    /// than a node number.
+    /// Whether this mode reaches its node through an EchoLink proxy, and so needs
+    /// a node address and a directory server rather than a node number — and
+    /// takes its proxy from ``EchoLinkProxySettings`` rather than from a channel.
     var usesProxy: Bool { self == .echoLink }
 
     /// Whether the mode has a DTMF path at all.

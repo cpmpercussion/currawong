@@ -26,6 +26,16 @@ struct ProxyCandidate: Equatable, Sendable, Identifiable {
 
     var id: String { "\(host):\(port)" }
 
+    /// This candidate as something a session can tunnel through.
+    ///
+    /// Every public proxy takes the same password, which is a protocol literal
+    /// rather than a secret, so nothing is asked of the operator here.
+    var route: EchoLinkProxyRoute {
+        EchoLinkProxyRoute(
+            host: host, port: port, password: EchoLinkProxySettings.publicPassword,
+            isPrivate: false)
+    }
+
     /// "Sydney · 465 km · 38 ms", skipping whatever the listing did not give.
     ///
     /// A single line rather than a row of labelled fields: the operator is
@@ -95,12 +105,16 @@ enum ProxyFinderError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// The state behind the "find me a proxy" button.
+/// Which proxy an EchoLink session goes through, and the search that finds one.
 ///
 /// Kept out of the view because finding a proxy is not instant: it fetches a
 /// list over HTTPS and then opens real TCP connections to several strangers'
 /// machines, which takes a second or two. That is long enough that the operator
 /// needs to see it happening, and long enough that they may want to stop.
+///
+/// **This is where a proxy comes from, and the only place** (APP-13). Nothing
+/// stores one in a channel; ``route(privateProxy:privatePassword:)`` is what
+/// connecting and reading the directory both call.
 @MainActor
 final class ProxyPicker: ObservableObject {
     @Published private(set) var isSearching = false
@@ -110,8 +124,20 @@ final class ProxyPicker: ObservableObject {
     /// "hung", and this is the part that takes the time.
     @Published private(set) var probedCount = 0
 
-    /// The last proxy found, which the form has already been filled in from.
-    @Published private(set) var chosen: ProxyCandidate?
+    /// The public proxy this sitting is using, if one has been found.
+    ///
+    /// **A lease, not a setting** (APP-13). It is held here, in memory, for as
+    /// long as the operator is doing one thing — a directory refresh and the
+    /// connect that follows it are one sitting and should go through one proxy,
+    /// because probing again would take a second stranger's machine to do one
+    /// operator's work — and it is dropped by ``releaseLease()`` when the link is
+    /// torn down, so the next session probes afresh.
+    ///
+    /// It used to be written into the channel's `host` instead, and that was the
+    /// fault APP-13 exists to fix: the first EchoLink connect burned whichever
+    /// machine answered quickest into the channel permanently, and no later
+    /// connect ever probed again.
+    @Published private(set) var lease: ProxyCandidate?
 
     /// Why the last search found nothing, in words the operator can act on.
     @Published private(set) var failure: String?
@@ -128,47 +154,47 @@ final class ProxyPicker: ObservableObject {
         self.finder = finder
     }
 
-    /// Finds the quickest free proxy and hands it to `apply`.
+    /// Probes for a public proxy and takes it as the sitting's ``lease``.
     ///
-    /// The result is passed out rather than written to settings here: this type
-    /// does not own the connect form's fields, and a picker that reached into
-    /// them would be writing to a draft it cannot see the rest of.
-    func find(then apply: @escaping @MainActor (ProxyCandidate) -> Void) {
-        beginSearch(apply: apply)
+    /// Fire-and-forget, for the "find another proxy" button: the operator has
+    /// looked at the proxy the app picked and wants a different one — usually
+    /// because it has gone away mid-sitting. The result lands in ``lease``, which
+    /// is what the next connect or directory read will use; nothing is written
+    /// into a form, because there is no longer a form field to write into.
+    func findAnother() {
+        lease = nil
+        beginSearch()
     }
 
     /// The same search, awaited.
     ///
-    /// The button path above fires and forgets; ``sourceProxyIfNeeded`` has to
-    /// *wait*, because the thing it is finding a proxy for cannot start until
-    /// there is one. Both go through ``beginSearch(apply:)``, so a search
-    /// started either way is the same single search — same spinner, same probe
-    /// count, same cancellation — rather than a second one racing the first for
-    /// the same strangers' machines.
+    /// The button path above fires and forgets; ``route(privateProxy:privatePassword:)``
+    /// has to *wait*, because the thing it is finding a proxy for cannot start
+    /// until there is one. Both go through ``beginSearch()``, so a search started
+    /// either way is the same single search — same spinner, same probe count,
+    /// same cancellation — rather than a second one racing the first for the same
+    /// strangers' machines.
     ///
     /// - Returns: the proxy, or nil if none was found, the search failed, or it
     ///   was superseded. In the failure case ``failure`` says why, which is
     ///   what the caller should be showing rather than a message of its own.
     @discardableResult
     func findProxy() async -> ProxyCandidate? {
-        await beginSearch(apply: nil).value
+        await beginSearch().value
     }
 
     /// The search itself, and the one place that touches the picker's state.
     ///
     /// **Everything up to `searchTask = task` happens synchronously**, before
     /// this returns: the spinner going up is the caller's own effect, not
-    /// something that lands a hop later. ``find(then:)`` is called straight
+    /// something that lands a hop later. ``findAnother()`` is called straight
     /// from a button, and a picker that had not yet started when the press
     /// returned would let a second press start a second search.
     ///
-    /// `apply` runs *inside* the task, next to `chosen`, rather than being left
-    /// to the awaiting caller — so by the time the spinner comes down, the
-    /// proxy is already in the form.
+    /// The lease is set *inside* the task, so by the time the spinner comes down
+    /// the proxy the next operation will use is already the one on screen.
     @discardableResult
-    private func beginSearch(
-        apply: (@MainActor (ProxyCandidate) -> Void)?
-    ) -> Task<ProxyCandidate?, Never> {
+    private func beginSearch() -> Task<ProxyCandidate?, Never> {
         // Cancelled *and* waited for, below, before the new search opens
         // anything. Cancelling alone would leave the two overlapping for a
         // round trip, and a superseded search can be probing the very proxy the
@@ -205,8 +231,7 @@ final class ProxyPicker: ObservableObject {
                     }
                 }
                 guard !Task.isCancelled, self.generation == generation else { return nil }
-                self.chosen = candidate
-                apply?(candidate)
+                self.lease = candidate
                 return candidate
             } catch is CancellationError {
                 return nil
@@ -221,35 +246,48 @@ final class ProxyPicker: ObservableObject {
         return task
     }
 
-    /// Makes sure `settings` names a proxy before an operation that needs one,
-    /// finding a public one if it does not.
+    /// The proxy this sitting's EchoLink traffic goes through, finding a public
+    /// one if there is nothing else to use.
     ///
-    /// A proxy is not a preference, it is plumbing: EchoLink cannot be reached
-    /// from a phone without one, and there is nothing an operator knows that
-    /// would let them fill the field in better than a probe can. So the two
-    /// places that need a proxy — reading the directory, and placing a call —
-    /// source one at the moment they need it rather than refusing and naming a
-    /// field. That is only true of an *empty* field: a proxy the operator typed
-    /// or the app already found is theirs, and repointing it silently under a
-    /// channel they had set up would be the worse surprise. Use "Find a public
-    /// proxy" in the connect form to replace one deliberately.
+    /// **A proxy is not a preference, it is plumbing** (FR-3.3): EchoLink cannot
+    /// be reached from a phone without one, and there is nothing an operator
+    /// knows that would let them fill a field in better than a probe can. So the
+    /// two places that need a proxy — reading the directory, and placing a call —
+    /// resolve one at the moment they need it, and "connect to a proxy" is not a
+    /// step anybody performs.
     ///
-    /// - Parameter apply: writes the proxy into whatever holds the draft. As in
-    ///   ``find(then:)``, this type does not reach into the form itself.
-    /// - Returns: whether the caller may proceed — true when a proxy was
-    ///   already there or one was found, false when one was needed and the
-    ///   search came back empty. On false, ``failure`` says why.
-    func sourceProxyIfNeeded(
-        for settings: NodeSettings,
-        apply: @MainActor (ProxyCandidate) -> Void
-    ) async -> Bool {
-        guard settings.mode.usesProxy,
-            settings.host.trimmingCharacters(in: .whitespaces).isEmpty
-        else { return true }
+    /// The order is the whole of the policy:
+    ///
+    /// 1. **The operator's own proxy**, if they have configured one. Theirs beats
+    ///    a stranger's every time, and nothing here ever overrides or re-points
+    ///    it — that setting is changed in Settings and nowhere else.
+    /// 2. **The ``lease``**, if this sitting already holds one. Same proxy for
+    ///    the directory read and the call that follows it.
+    /// 3. **A fresh probe**, and that is where the second or two goes.
+    ///
+    /// - Returns: the proxy, or `nil` when a public one was needed and the probe
+    ///   found nothing — in which case ``failure`` says why, and the caller
+    ///   should stop rather than substitute a message of its own. Callers check
+    ///   `RadioMode.usesProxy` before asking; this does not, because a proxy for
+    ///   a mode that does not use one is not a question with an answer.
+    func route(
+        privateProxy: EchoLinkProxySettings, privatePassword: String
+    ) async -> EchoLinkProxyRoute? {
+        if let own = privateProxy.route(password: privatePassword) { return own }
+        if let lease { return lease.route }
+        return await findProxy()?.route
+    }
 
-        guard let candidate = await findProxy() else { return false }
-        apply(candidate)
-        return true
+    /// Gives up the public proxy this sitting was using.
+    ///
+    /// Called when the link is torn down. A public proxy carries one client at a
+    /// time, so holding the name of one past the session that used it is how an
+    /// operator ends up reconnecting to a machine that somebody else has since
+    /// taken — the fault this replaced, in miniature. The private proxy is
+    /// untouched: it is a setting, not a lease.
+    func releaseLease() {
+        lease = nil
+        failure = nil
     }
 
     func cancel() {

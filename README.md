@@ -18,8 +18,8 @@ through a proxy, all against `swift-hamvoip` (pinned `from: 0.5.2`) and all
 reached through one `RadioCore.NetworkClient`. `CompositionRoot.swift` is still the only file that
 names a concrete client. What each mode asks the operator for differs enough
 that the connect form changes shape with the mode — a node number and a secret,
-a reflector module, or a proxy plus a node address and an account password —
-and `RadioMode` is where that fans out.
+a reflector module, or a node address and an account password — and `RadioMode`
+is where that fans out.
 
 **Web Transceiver (APP-11).** AllStarLink has two routes to a node and the app
 now offers both. A node secret is something the node's owner sets up for you, per
@@ -53,6 +53,23 @@ property of a channel — the Keychain has always filed it under
 the form was the wrong shape for what it was editing. What is left on the form is
 whether one is set, because an EchoLink connection with no account password
 succeeds at every step and is then unreachable.
+
+**The EchoLink proxy is not something you set up (APP-13).** A phone cannot reach
+an EchoLink node directly, so every session is tunnelled through a proxy — and
+the app sources one for you at the moment it needs one, when you connect or when
+you refresh the directory. There is no proxy field to fill in and no *connect to
+proxy* step, and the proxy is given back as soon as you disconnect, so the next
+session gets a machine that is actually free rather than returning to one that
+somebody else has since taken.
+
+If you run your own proxy — the answer for sustained operating, since the public
+ones carry one user at a time and are meant for brief use — it goes in *Settings*
+once, for the whole station, and its password goes in the Keychain. It used to be
+three fields of every channel, inside a collapsed drawer on the connect screen,
+which was both the wrong owner and the wrong place: a proxy is the machine your
+traffic leaves through, not a property of the node you are calling. The connect
+form's proxy drawer now says which proxy is carrying this session and offers to
+find another; it asks for nothing.
 
 **Logging in to the portal works from the app.** Type your callsign and
 allstarlink.org password, press *Log in and fetch token*, and the token lands in

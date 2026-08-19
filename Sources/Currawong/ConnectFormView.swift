@@ -58,6 +58,11 @@ struct ConnectFormView: View {
     /// which is EchoLink alone.
     @ObservedObject var proxyPicker: ProxyPicker
 
+    /// **APP-13.** The operator's own proxy, if they run one — app-wide, edited
+    /// on the settings screen, and read here only to say which proxy this session
+    /// will use. Not a binding: this form does not own it and must not change it.
+    let privateProxy: EchoLinkProxySettings
+
     /// The node lookup's state. Only read in AllStarLink mode, which is the
     /// only one with node numbers.
     @ObservedObject var nodeLocator: NodeLocator
@@ -100,23 +105,16 @@ struct ConnectFormView: View {
                 settings.port = port
             }
         }
-        // The port can now change without this form touching it: Connect and
-        // the Stations pane both source a proxy when the channel has none, and
-        // that writes a port. `portText` is only seeded in `onAppear`, so
-        // without this the field would go on showing the old number while the
-        // connection used the new one — and the *next* keystroke in it would
-        // write the stale value back over the proxy's.
-        //
-        // The guard is what stops the loop: `portText`'s own `onChange` writes
-        // `settings.port`, which lands back here.
-        .onChange(of: settings.port) { newPort in
-            if portText != String(newPort) { portText = String(newPort) }
-        }
+        // There used to be a second `onChange` here mirroring `settings.port`
+        // back into `portText`, because sourcing a proxy wrote a port into the
+        // channel behind the form's back. Nothing does that any more (APP-13):
+        // the proxy is not a channel field, and the only writer of `settings.port`
+        // is the field above.
     }
 
     /// What the Connect button is doing before it connects.
     ///
-    /// The same two lines live in ``proxyFinderRow``, which is inside a
+    /// The same two lines live in ``proxyStatusRow``, which is inside a
     /// disclosure group that is collapsed on the common path — so on the path
     /// that matters, pressing Connect with no proxy set, neither of them would
     /// be seen. This is the copy that is always visible, and it is only drawn
@@ -259,9 +257,9 @@ struct ConnectFormView: View {
     /// 2. **Where to.** The station, which is the only part that really varies,
     ///    and which the Stations pane fills in.
     /// 3. **How to get there.** The proxy and the directory server, folded away.
-    ///    A public proxy is found by pressing a button and the directory server
-    ///    has one sensible value, so this is a drawer to open when something is
-    ///    wrong rather than a form to fill in.
+    ///    Neither is a field any more — the proxy is app-wide and sourced by the
+    ///    app (APP-13), the directory server has one sensible value — so this is a
+    ///    drawer to look in when something is wrong rather than a form to fill in.
     @ViewBuilder
     private var echoLinkFields: some View {
         Text("Your EchoLink account")
@@ -284,9 +282,7 @@ struct ConnectFormView: View {
         // cannot be found is the same as a missing field.
         DisclosureGroup("Proxy and directory server") {
             VStack(alignment: .leading, spacing: 14) {
-                proxyFinderRow
-                hostAndPortFields
-                proxyPasswordField
+                proxyStatusRow
                 directoryServerField
             }
             .padding(.top, 10)
@@ -294,56 +290,27 @@ struct ConnectFormView: View {
         .font(.headline)
     }
 
+    /// **AllStarLink and M17 only.** EchoLink names no host: the node is an
+    /// address and the proxy is app-wide (APP-13).
     @ViewBuilder
     private var hostAndPortFields: some View {
-        LabelledField(
-            label: settings.mode.usesProxy ? "Proxy host" : "Host", systemImage: "network"
-        ) {
-            TextField(
-                settings.mode.usesProxy ? "proxy.example.org" : "node.example.org",
-                text: $settings.host
-            )
-            .textFieldStyle(.roundedBorder)
-            #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-            #endif
-            .autocorrectionDisabled()
+        LabelledField(label: "Host", systemImage: "network") {
+            TextField("node.example.org", text: $settings.host)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                #endif
+                .autocorrectionDisabled()
         }
 
-        LabelledField(
-            label: settings.mode.usesProxy ? "Proxy port" : "Port", systemImage: "number"
-        ) {
+        LabelledField(label: "Port", systemImage: "number") {
             TextField(String(settings.mode.defaultPort), text: $portText)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .keyboardType(.numberPad)
                 #endif
         }
-    }
-
-    @ViewBuilder
-    private var proxyPasswordField: some View {
-        LabelledField(label: "Proxy password", systemImage: "lock.open") {
-            // A plain TextField on purpose. `PUBLIC` is the literal a public
-            // proxy expects and is not a secret; hiding it behind dots would
-            // imply it is one, and would stop the operator seeing that it is
-            // still set correctly.
-            TextField(NodeSettings.defaultProxyPassword, text: $settings.proxyPassword)
-                .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                #endif
-                .autocorrectionDisabled()
-        }
-
-        Text(
-            "Public proxies all use \(NodeSettings.defaultProxyPassword), which is not a secret "
-            + "and is stored with the channel. A private proxy's password would be stored the "
-            + "same way — less carefully than your account password.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// **AllStarLink.** The node to dial.
@@ -580,94 +547,128 @@ struct ConnectFormView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// What the first block of fields is addressing. Three words for three
-    /// different things, because in EchoLink it is genuinely not the node.
+    /// What the first block of fields is addressing, in the two modes that dial
+    /// a host. EchoLink does not use this — its fields have headings of their
+    /// own, and the thing it dials is not reached at a host name at all.
     private var destinationHeading: String {
         switch settings.mode {
         case .allStarLink: return "Node"
         case .m17: return "Reflector"
-        case .echoLink: return "Proxy"
+        case .echoLink: return "Node"
         }
     }
 
-    /// **EchoLink.** Fill in the proxy host and port by measurement rather than
-    /// by typing (EL-12).
+    /// **EchoLink.** Which proxy this session goes through — status, not a form
+    /// (EL-12, APP-13).
     ///
     /// A phone cannot reach an EchoLink node directly, so a proxy is mandatory,
     /// and the public ones are a list of strangers' machines that each carry one
     /// user at a time. Choosing well means knowing which are near and which are
     /// free right now — neither of which an operator can tell by looking at a
-    /// list, and both of which a probe answers in a second or two.
+    /// list, and both of which a probe answers in a second or two. So the app
+    /// does the choosing, at the moment it needs one, and there is nothing here
+    /// to fill in: connecting and refreshing the directory both source a proxy on
+    /// their own.
+    ///
+    /// What is left is worth showing rather than hiding, which is why this is not
+    /// simply gone: an operator is entitled to know whose machine is carrying
+    /// their traffic, and a proxy that has gone away mid-sitting is diagnosed
+    /// here and replaced with one button.
     ///
     /// **Finding nothing is an ordinary outcome, not an error.** Every public
     /// proxy being taken is a normal state of the world, so the failure is
     /// phrased as contention and the button stays right there to be pressed
     /// again, rather than raising an alert that has to be dismissed first.
     @ViewBuilder
-    private var proxyFinderRow: some View {
+    private var proxyStatusRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button {
-                    proxyPicker.find { candidate in
-                        settings.host = candidate.host
-                        // Through `portText`, not `settings.port`: the port
-                        // field is bound to the text and its `onChange` is what
-                        // writes the number back. Setting the number directly
-                        // would be overwritten by the stale text.
-                        portText = String(candidate.port)
-                    }
-                } label: {
-                    Label(
-                        proxyPicker.isSearching ? "Finding a proxy…" : "Find a public proxy",
-                        systemImage: "wand.and.stars")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!isEditable || proxyPicker.isSearching)
-
-                if proxyPicker.isSearching {
-                    ProgressView().controlSize(.small)
-                    Button("Stop") { proxyPicker.cancel() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            if proxyPicker.isSearching && proxyPicker.probedCount > 0 {
-                // The count moving is what distinguishes "working" from "hung"
-                // during the second or two of probing.
-                Text("Probed \(proxyPicker.probedCount)…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let chosen = proxyPicker.chosen, !proxyPicker.isSearching {
-                Label(chosen.summary, systemImage: "checkmark.circle")
+            if privateProxy.isConfigured {
+                Label(
+                    "Your own proxy: \(privateProxy.host):\(privateProxy.port)",
+                    systemImage: "house")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            if let failure = proxyPicker.failure {
-                Text(failure)
+                Text("Every EchoLink channel uses it. Change it in Settings.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                publicProxyStatus
+            }
+        }
+    }
+
+    /// The public-proxy half of ``proxyStatusRow``: which one is leased, and a way
+    /// to swap it.
+    @ViewBuilder
+    private var publicProxyStatus: some View {
+        HStack(spacing: 8) {
+            Button {
+                proxyPicker.findAnother()
+            } label: {
+                Label(
+                    proxyPicker.isSearching
+                        ? "Finding a proxy…"
+                        : (proxyPicker.lease == nil ? "Find a public proxy" : "Find another"),
+                    systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isEditable || proxyPicker.isSearching)
+
+            if proxyPicker.isSearching {
+                ProgressView().controlSize(.small)
+                Button("Stop") { proxyPicker.cancel() }
+                    .buttonStyle(.borderless)
                     .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            // Carried across from the CLI, which prints the same thing, because
-            // it is an obligation rather than a nicety: a public proxy is
-            // somebody else's machine, it serves one user at a time, and
-            // echolink.org asks that they be used briefly. An operator who does
-            // not know that cannot honour it.
-            Text(
-                "Public proxies are other operators' machines, one user at a time. Use them "
-                + "briefly — a private proxy is the answer for sustained operating.")
-                .font(.caption2)
+            Spacer(minLength: 0)
+        }
+
+        if proxyPicker.isSearching && proxyPicker.probedCount > 0 {
+            // The count moving is what distinguishes "working" from "hung"
+            // during the second or two of probing.
+            Text("Probed \(proxyPicker.probedCount)…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        if let lease = proxyPicker.lease, !proxyPicker.isSearching {
+            Label(lease.summary, systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if !proxyPicker.isSearching, proxyPicker.failure == nil {
+            // Said plainly, because "no proxy yet" used to mean "fill this in"
+            // and now means "nothing to do". An operator who has read the old
+            // form needs to be told that pressing Connect is the whole step.
+            Text("None yet — one is found when you connect or refresh the directory.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+
+        if let failure = proxyPicker.failure {
+            Text(failure)
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // Carried across from the CLI, which prints the same thing, because
+        // it is an obligation rather than a nicety: a public proxy is
+        // somebody else's machine, it serves one user at a time, and
+        // echolink.org asks that they be used briefly. An operator who does
+        // not know that cannot honour it. It also now names the setting that
+        // answers it, which is a screen away rather than nowhere.
+        Text(
+            "Public proxies are other operators' machines, one user at a time, and this app lets "
+            + "one go as soon as you disconnect. Use them briefly — for sustained operating, set "
+            + "your own proxy in Settings.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// **EchoLink.** The far station, named twice.

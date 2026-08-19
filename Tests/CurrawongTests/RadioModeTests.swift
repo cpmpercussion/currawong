@@ -15,6 +15,10 @@ final class RadioModeTests: XCTestCase {
     /// The operator. App-wide now, rather than a settings field.
     private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
 
+    /// A resolved proxy, which the caller hands the factory (APP-13).
+    private let publicProxy = EchoLinkProxyRoute(
+        host: "proxy.example.org", port: 8100, password: "PUBLIC", isPrivate: false)
+
     // MARK: - The mode itself
 
     func testAllThreeModesAreOfferedAndAllStarLinkIsTheDefault() {
@@ -98,8 +102,6 @@ final class RadioModeTests: XCTestCase {
     private func echoLinkSettings() -> NodeSettings {
         NodeSettings(
             mode: .echoLink,
-            host: "proxy.example.org",
-            port: 8100,
             node: "*ECHOTEST*",
             peer: "13.57.14.183",
             directoryServer: "192.0.2.1")
@@ -115,7 +117,9 @@ final class RadioModeTests: XCTestCase {
         defer { m17.close() }
         XCTAssertEqual(m17.mode, .m17)
 
-        let echoLink = try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, credentials: .init(secret: "account-password"))
+        let echoLink = try CompositionRoot.makeLink(
+            settings: echoLinkSettings(), identity: vk1xyz,
+            credentials: .init(secret: "account-password"), proxy: publicProxy)
         defer { echoLink.close() }
         XCTAssertEqual(echoLink.mode, .echoLink)
     }
@@ -129,7 +133,9 @@ final class RadioModeTests: XCTestCase {
         let links: [RadioLink] = [
             try CompositionRoot.makeLink(settings: allStarSettings(), identity: vk1xyz, credentials: .init(secret: "hunter2")),
             try CompositionRoot.makeLink(settings: m17Settings(), identity: vk1xyz, credentials: .init()),
-            try CompositionRoot.makeLink(settings: echoLinkSettings(), identity: vk1xyz, credentials: .init()),
+            try CompositionRoot.makeLink(
+                settings: echoLinkSettings(), identity: vk1xyz, credentials: .init(),
+                proxy: publicProxy),
         ]
         defer { links.forEach { $0.close() } }
 

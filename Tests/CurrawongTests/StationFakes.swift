@@ -21,6 +21,7 @@ final class FakeStationDirectory: StationDirectory, @unchecked Sendable {
         var settings: NodeSettings
         var identity: OperatorIdentity
         var accountPassword: String
+        var proxy: EchoLinkProxyRoute
     }
 
     private let lock = NSLock()
@@ -36,11 +37,14 @@ final class FakeStationDirectory: StationDirectory, @unchecked Sendable {
     }
 
     func stations(
-        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
+        proxy: EchoLinkProxyRoute
     ) async throws -> [DirectoryStation] {
         lock.lock()
         storedFetches.append(
-            Fetch(settings: settings, identity: identity, accountPassword: accountPassword))
+            Fetch(
+                settings: settings, identity: identity, accountPassword: accountPassword,
+                proxy: proxy))
         let error = storedError
         let stations = storedStations
         let holds = storedHoldUntilReleased

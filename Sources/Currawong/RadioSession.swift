@@ -104,9 +104,14 @@ final class RadioSession: ObservableObject {
     /// The watchdog timeout is passed separately rather than travelling in the
     /// settings, because it is no longer a field of them: it is the operator's
     /// one app-wide limit (SF-1), and the factory is where it meets the library.
+    /// The proxy is passed separately for the same reason and is `nil` for every
+    /// mode but EchoLink — it is the operator's station infrastructure, resolved
+    /// per session (APP-13), and never a field of a channel.
     typealias LinkFactory =
-        @MainActor (NodeSettings, OperatorIdentity, LinkCredentials, TransmitTimeout) throws ->
-            RadioLink
+        @MainActor (
+            NodeSettings, OperatorIdentity, LinkCredentials, TransmitTimeout,
+            EchoLinkProxyRoute?
+        ) throws -> RadioLink
 
     /// What a link is built with, beyond the settings and the identity.
     ///
@@ -178,6 +183,23 @@ final class RadioSession: ObservableObject {
     /// mid-connect. ``secret`` still carries it into a connection, and
     /// ``setEchoLinkAccountPassword(_:)`` keeps the two in step.
     @Published private(set) var echoLinkAccountPassword: String
+
+    /// **APP-13.** The operator's own EchoLink proxy, if they run one.
+    ///
+    /// App-wide, edited on the settings screen, and persisted on change like the
+    /// watchdog — a proxy is a thing an operator sets up once for their whole
+    /// station. Empty means "find a public one", which is what most sessions do.
+    /// It reaches a connection through ``ProxyPicker/route(privateProxy:privatePassword:)``,
+    /// which prefers it over any public proxy and never overwrites it.
+    @Published private(set) var echoLinkProxy: EchoLinkProxySettings
+
+    /// The private proxy's password, in memory only, from the Keychain.
+    ///
+    /// In the Keychain and not `UserDefaults`, unlike the `PUBLIC` literal it
+    /// replaces: a private proxy's password is a real credential, and the field
+    /// it used to live in said as much in its own documentation while storing it
+    /// in the defaults database anyway. Empty when no private proxy is set.
+    @Published private(set) var echoLinkProxyPassword: String
 
     /// What the microphone is putting on the air, **after** ``transmitGain``.
     /// Post-gain because that is the number the operator is trying to set, and
@@ -345,6 +367,14 @@ final class RadioSession: ObservableObject {
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
 
+    /// **APP-13.** Gives up the leased public proxy when a link ends.
+    ///
+    /// A closure rather than a reference to ``ProxyPicker``, so this type keeps
+    /// knowing nothing about probing strangers' machines — it knows only that
+    /// something borrowed has to be returned when the session that borrowed it is
+    /// over. `CompositionRoot` wires it; the tests can watch it.
+    private let releaseProxyLease: @MainActor () -> Void
+
     /// Turns the directory server's host name into the address the library
     /// takes. See ``HostResolver``.
     private let resolver: any HostResolver
@@ -373,6 +403,7 @@ final class RadioSession: ObservableObject {
         settingsStore: SettingsStore,
         secretStore: SecretStore,
         makeLink: @escaping LinkFactory,
+        releaseProxyLease: @escaping @MainActor () -> Void = {},
         resolver: any HostResolver = SystemHostResolver(),
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
@@ -380,6 +411,7 @@ final class RadioSession: ObservableObject {
         self.settingsStore = settingsStore
         self.secretStore = secretStore
         self.makeLink = makeLink
+        self.releaseProxyLease = releaseProxyLease
         self.resolver = resolver
         self.now = now
 
@@ -412,6 +444,23 @@ final class RadioSession: ObservableObject {
             (try? secretStore.secret(for: current.webTransceiverAccount(for: identity))) ?? ""
         self.echoLinkAccountPassword =
             (try? secretStore.secret(for: NodeSettings.echoLinkAccount(for: identity))) ?? ""
+
+        // **APP-13's migration.** A channel written by an earlier build kept the
+        // proxy in its own fields; `loadEchoLinkProxy()` is what rescues a
+        // *private* one out of those blobs and discards a public one. When it
+        // comes back with a harvested password, this is the launch that has to
+        // file it — in the Keychain, where it now belongs — and save the settings
+        // under their own key so the harvest does not run again.
+        let storedProxy = settingsStore.loadEchoLinkProxy()
+        self.echoLinkProxy = storedProxy?.settings ?? .none
+        if let harvested = storedProxy?.harvestedPassword {
+            self.echoLinkProxyPassword = harvested
+            try? secretStore.setSecret(harvested, for: EchoLinkProxySettings.passwordAccount)
+            settingsStore.saveEchoLinkProxy(storedProxy?.settings ?? .none)
+        } else {
+            self.echoLinkProxyPassword =
+                (try? secretStore.secret(for: EchoLinkProxySettings.passwordAccount)) ?? ""
+        }
     }
 
     // MARK: - The stored accounts (APP-12)
@@ -469,6 +518,47 @@ final class RadioSession: ObservableObject {
                     + "type it again next time.")
             return false
         }
+    }
+
+    /// **APP-13.** Stores the operator's own EchoLink proxy: host and port in
+    /// `UserDefaults`, password in the Keychain.
+    ///
+    /// One call for both halves, because they are one setting and a proxy stored
+    /// without its password is a proxy that refuses every session. Validated
+    /// here rather than at connect time, so a pasted URL is refused while the
+    /// operator is looking at the field.
+    ///
+    /// Clearing the host clears the password with it — a stored password for a
+    /// proxy that is no longer configured is a credential kept for nothing.
+    ///
+    /// - Returns: `nil` on success, or the complaint to show.
+    @discardableResult
+    func setEchoLinkProxy(_ proxy: EchoLinkProxySettings, password: String) -> String? {
+        let validated: EchoLinkProxySettings
+        do {
+            validated = try proxy.validated()
+        } catch let error as EchoLinkProxySettings.ValidationError {
+            return error.description
+        } catch {
+            return "\(error)"
+        }
+
+        let storedPassword = validated.isConfigured ? password : ""
+        echoLinkProxy = validated
+        echoLinkProxyPassword = storedPassword
+        settingsStore.saveEchoLinkProxy(validated)
+
+        do {
+            try secretStore.setSecret(storedPassword, for: EchoLinkProxySettings.passwordAccount)
+        } catch {
+            // Not fatal, and said the way the other two credentials say it: the
+            // proxy works for this run from memory, and the operator needs to
+            // know it will not be there next time rather than to find out then.
+            return
+                "\(error) The proxy will work for this run, but its password was not stored — you "
+                + "will have to type it again next time."
+        }
+        return nil
     }
 
     // MARK: - Channels (APP-4)
@@ -625,9 +715,15 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Connecting
 
-    func toggleConnection() async {
+    /// - Parameter proxy: the proxy an EchoLink session is to tunnel through,
+    ///   already resolved by ``ProxyPicker`` — `nil` for the other two modes.
+    ///   Passed in rather than read from the settings because a proxy is not part
+    ///   of a channel (APP-13), and passed at the moment of connecting rather
+    ///   than held on this object because that is the moment it is true: a public
+    ///   proxy is leased for one sitting.
+    func toggleConnection(proxy: EchoLinkProxyRoute? = nil) async {
         switch connection {
-        case .disconnected: await connect()
+        case .disconnected: await connect(proxy: proxy)
         case .connected: await disconnect()
         case .connecting, .disconnecting: break
         }
@@ -640,7 +736,7 @@ final class RadioSession: ObservableObject {
     /// ignored. A connection whose microphone will never open is a PTT button
     /// that lights up and transmits nothing, and the operator would have no
     /// way to tell that from a quiet channel.
-    func connect() async {
+    func connect(proxy: EchoLinkProxyRoute? = nil) async {
         guard connection == .disconnected else { return }
 
         // Two validations, because there are now two things being validated:
@@ -792,7 +888,7 @@ final class RadioSession: ObservableObject {
             newLink = try makeLink(
                 resolved, validatedIdentity,
                 LinkCredentials(secret: secret, webTransceiverToken: trimmedToken),
-                transmitTimeout)
+                transmitTimeout, proxy)
         } catch {
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
@@ -1292,6 +1388,14 @@ final class RadioSession: ObservableObject {
     // MARK: - Teardown
 
     private func tearDownLink() {
+        // **APP-13.** The sitting is over, so the public proxy goes back. Here
+        // rather than in `disconnect()` because both ways a link ends come
+        // through this — the operator hanging up, and the link dropping by itself
+        // — and a lease surviving one of them would send the next session back to
+        // a machine somebody else has since taken. The library has already closed
+        // the proxy connection itself by this point: `EchoLinkClient` sends the
+        // RTCP farewell, then `CLOSE`, then closes the transport.
+        releaseProxyLease()
         eventTask?.cancel()
         eventTask = nil
         receiveTask?.cancel()

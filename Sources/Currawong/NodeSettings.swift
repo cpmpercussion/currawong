@@ -89,9 +89,18 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     var mode: RadioMode
 
     /// Hostname or literal address of the node.
+    ///
+    /// **Empty and unused in EchoLink** (APP-13). It held the proxy there, which
+    /// was the wrong owner: a proxy is the operator's station infrastructure, not
+    /// a property of one destination, and persisting it here meant a public proxy
+    /// found by probing was written into a channel and reused for ever. It now
+    /// lives in ``EchoLinkProxySettings``, and an EchoLink node is named by
+    /// ``peer`` and ``node`` alone — which ``isSamePlace(as:)`` had already
+    /// assumed.
     var host: String
 
     /// UDP port. 4569 is the registered IAX2 port and the default everywhere.
+    /// Unused in EchoLink, with ``host``.
     var port: UInt16
 
     /// The number being called — an AllStar node number such as `"55553"`.
@@ -104,23 +113,11 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
 
     /// **EchoLink.** The far node's IPv4 address, as a dotted quad.
     ///
-    /// Separate from ``host`` because in EchoLink those are two different
-    /// machines: `host` is the proxy the session is tunnelled through, and this
-    /// is the node at the far end of the tunnel. The library takes it as four
-    /// literal octets and resolves nothing, so a name will not do — the station
-    /// browser exists to fill this in from the directory listing.
+    /// The node at the far end of the proxy tunnel — the proxy itself is
+    /// ``EchoLinkProxySettings`` and is not part of a channel at all. The library
+    /// takes this as four literal octets and resolves nothing, so a name will not
+    /// do; the station browser exists to fill it in from the directory listing.
     var peer: String
-
-    /// **EchoLink.** The proxy's password. `PUBLIC` on a public proxy, which is
-    /// the only value ever observed on the wire and is not a secret.
-    ///
-    /// It lives here, in `UserDefaults`, rather than in the Keychain, and that
-    /// is a judgement about `PUBLIC` rather than about passwords: the account
-    /// password — the one that is genuinely secret — is in the Keychain, keyed
-    /// by ``secretAccount``, and never in this type. An operator running a
-    /// *private* proxy would be storing its password less carefully than their
-    /// account password, which is worth knowing before doing it.
-    var proxyPassword: String
 
     /// **EchoLink.** The directory server's IPv4 address, dotted quad.
     ///
@@ -157,10 +154,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// `IAX2Destination`'s own default is the authority on the wire.
     static let defaultPort: UInt16 = 4569
 
-    /// The literal string a public EchoLink proxy expects, and the only proxy
-    /// password ever seen on the wire. Not a secret; see ``proxyPassword``.
-    static let defaultProxyPassword = "PUBLIC"
-
     /// The directory server a new EchoLink channel starts with.
     ///
     /// `servers` rather than one of the regional names (`naeast`, `nasouth`,
@@ -182,7 +175,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         node: String = "",
         module: String = "",
         peer: String = "",
-        proxyPassword: String = NodeSettings.defaultProxyPassword,
         directoryServer: String = "",
         username: String = "",
         allStarAccess: AllStarLinkAccess = .nodeSecret
@@ -196,7 +188,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.node = node
         self.module = module
         self.peer = peer
-        self.proxyPassword = proxyPassword
         self.directoryServer = directoryServer
         self.username = username
     }
@@ -282,9 +273,6 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.node = try container.decode(String.self, forKey: .node)
         self.module = try container.decodeIfPresent(String.self, forKey: .module) ?? ""
         self.peer = try container.decodeIfPresent(String.self, forKey: .peer) ?? ""
-        self.proxyPassword =
-            try container.decodeIfPresent(String.self, forKey: .proxyPassword)
-            ?? Self.defaultProxyPassword
         self.directoryServer =
             try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
@@ -294,6 +282,19 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.allStarAccess =
             try container.decodeIfPresent(AllStarLinkAccess.self, forKey: .allStarAccess)
             ?? .nodeSecret
+        // **APP-13.** A channel written by a build that kept the proxy in `host`
+        // still has one in the blob, and the whole point of hoisting it is that a
+        // channel must not name a proxy. Dropped here as well as in
+        // ``validated()`` so it is gone the moment the channel is read, whatever
+        // path saves it next. The migration that *rescues* a private proxy from
+        // these blobs reads them as raw JSON — see
+        // `UserDefaultsSettingsStore.loadEchoLinkProxy()` — so it is unaffected by
+        // this, and it runs on the same launch.
+        if self.mode.usesProxy {
+            self.host = ""
+            self.port = self.mode.defaultPort
+        }
+
         // `callsign`, `operatorName`, `location` and `transmitTimeout` may all be
         // present in a blob written before they became app-wide. They are
         // deliberately not read here: the type no longer has those fields, and an
@@ -436,13 +437,20 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             node: node.trimmed,
             module: module.trimmed.uppercased(),
             peer: peer.trimmed,
-            proxyPassword: proxyPassword.trimmed.isEmpty
-                ? Self.defaultProxyPassword : proxyPassword.trimmed,
             directoryServer: directoryServer.trimmed,
             username: username.trimmed,
             allStarAccess: allStarAccess)
 
-        guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
+        // EchoLink names no host: the proxy is app-wide (APP-13) and the node is
+        // `peer`. Cleared rather than merely unchecked, so a channel written by a
+        // build that did hold a proxy here cannot carry it forward the next time
+        // the draft is saved — which is the whole of how the old fault persisted.
+        if mode.usesProxy {
+            trimmed.host = ""
+            trimmed.port = mode.defaultPort
+        } else {
+            guard !trimmed.host.isEmpty else { throw ValidationError.missingHost }
+        }
 
         if mode.usesNodeNumber {
             guard !trimmed.node.isEmpty else { throw ValidationError.missingNode }

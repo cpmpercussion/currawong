@@ -27,6 +27,13 @@ import SwiftUI
 /// * **The PTT accessory** was reachable only from a row on the session pane,
 ///   which meant accessory setup was something found mid-session — a poor moment
 ///   to be pairing a fob.
+/// * **A private EchoLink proxy** (APP-13) was three fields of every channel,
+///   inside a collapsed drawer on the connect screen. A proxy is the machine an
+///   operator's traffic leaves through — one for the whole station, set up once —
+///   so asking for it per destination put the most durable setting in the app in
+///   its least durable place. It is also tricky enough to set up that it deserves
+///   a screen where an operator is *expecting* to configure something, rather
+///   than one they are on because they want to talk to somebody.
 ///
 /// The connect form keeps the callsign field, because it is the field an operator
 /// filling in their first channel must not have to go looking for. Both edit the
@@ -55,6 +62,17 @@ struct SettingsView: View {
     /// Likewise the EchoLink password.
     @State private var echoLinkPasswordText = ""
 
+    /// The private proxy, as typed. Committed together, on the button, for the
+    /// reason ``RadioSession/setEchoLinkProxy(_:password:)`` takes both: a host
+    /// stored without its password is a proxy that refuses every session.
+    @State private var proxyHostText = ""
+    @State private var proxyPortText = ""
+    @State private var proxyPasswordText = ""
+
+    /// What went wrong saving the proxy, if anything. Shown beside the fields
+    /// rather than as an alert: it is a complaint about something on screen.
+    @State private var proxyComplaint: String?
+
     /// The watchdog timeout as typed. Committed on every keystroke that parses,
     /// unlike the two credentials above: it is one number rather than a pasted
     /// string, there is nothing to half-type, and a safety limit that only takes
@@ -72,6 +90,8 @@ struct SettingsView: View {
                 Divider()
                 echoLinkSection
                 Divider()
+                proxySection
+                Divider()
                 accessorySection
             }
             .padding(20)
@@ -82,6 +102,9 @@ struct SettingsView: View {
             tokenText = session.webTransceiverToken
             echoLinkPasswordText = session.echoLinkAccountPassword
             timeoutText = String(session.transmitTimeout.wholeSeconds)
+            proxyHostText = session.echoLinkProxy.host
+            proxyPortText = String(session.echoLinkProxy.port)
+            proxyPasswordText = session.echoLinkProxyPassword
         }
         .onChange(of: timeoutText) { newValue in
             // An unparseable value is left alone rather than reset, so a field
@@ -336,7 +359,8 @@ struct SettingsView: View {
             .disabled(echoLinkPasswordText == session.echoLinkAccountPassword)
 
             Text(
-                "The password issued with your callsign by echolink.org — not a proxy password. "
+                "The password issued with your callsign by echolink.org — not a proxy password, "
+                + "which is the section below. "
                 + "Without it the directory server will not list stations or register you, and "
                 + "nobody can call you. One password per callsign, so every EchoLink channel uses "
                 + "this one.")
@@ -354,6 +378,127 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    // MARK: - EchoLink proxy (APP-13)
+
+    /// **APP-13.** The operator's own proxy, if they run one.
+    ///
+    /// Its own section rather than part of the account above, because they are
+    /// two unrelated things that happen to share a network: one is who you are to
+    /// echolink.org, the other is which machine your packets leave through. An
+    /// operator with an account and no proxy is the ordinary case.
+    ///
+    /// **Empty is a working configuration and the copy has to say so**, or this
+    /// reads as three more fields to fill in before EchoLink works — which is
+    /// precisely the impression the connect form used to give and the reason this
+    /// moved. Nothing here is required.
+    private var proxySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Your own proxy")
+                .font(.title3.weight(.semibold))
+
+            Text(
+                "Optional. Leave this empty and a public proxy is found for you each time you "
+                + "connect — that is the normal way to use the app. Fill it in if you run your "
+                + "own proxy: public ones carry one user at a time and are meant for brief use, "
+                + "so a private one is the answer for sustained operating.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            LabelledField(label: "Proxy host", systemImage: "network") {
+                TextField("shackpi or proxy.example.org", text: $proxyHostText)
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                    #endif
+                    .autocorrectionDisabled()
+            }
+
+            LabelledField(label: "Proxy port", systemImage: "number") {
+                TextField(String(EchoLinkProxySettings.defaultPort), text: $proxyPortText)
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                        .keyboardType(.numberPad)
+                    #endif
+            }
+
+            LabelledField(label: "Proxy password", systemImage: "lock") {
+                SecureField("stored in the Keychain", text: $proxyPasswordText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { saveProxy() }
+            }
+
+            HStack(spacing: 10) {
+                Button("Save proxy") { saveProxy() }
+                    .buttonStyle(.bordered)
+                    .disabled(!proxyHasChanges)
+
+                if session.echoLinkProxy.isConfigured {
+                    // Clearing is a button rather than "empty the field and
+                    // save", because emptying a field is not obviously an
+                    // instruction, and going back to public proxies is a thing an
+                    // operator does deliberately.
+                    Button("Use public proxies") {
+                        proxyHostText = ""
+                        proxyPasswordText = ""
+                        saveProxy()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            }
+
+            if let proxyComplaint {
+                Label(proxyComplaint, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if session.echoLinkProxy.isConfigured {
+                Label(
+                    "Every EchoLink channel goes through "
+                        + "\(session.echoLinkProxy.host):\(session.echoLinkProxy.port). Its "
+                        + "password is in the Keychain.",
+                    systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Label(
+                    "No private proxy — a public one is found when you connect.",
+                    systemImage: "circle.dashed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Whether the fields differ from what is stored, which is what makes the
+    /// Save button live. The password counts: changing only that is a real edit.
+    private var proxyHasChanges: Bool {
+        proxyHostText != session.echoLinkProxy.host
+            || proxyPortText != String(session.echoLinkProxy.port)
+            || proxyPasswordText != session.echoLinkProxyPassword
+    }
+
+    /// Commits the three fields, and re-reads them from the session afterwards so
+    /// the screen shows what was actually stored — trimmed, and with an empty
+    /// port turned into 8100 — rather than what was typed.
+    private func saveProxy() {
+        let port =
+            UInt16(proxyPortText.trimmingCharacters(in: .whitespaces))
+            ?? EchoLinkProxySettings.defaultPort
+        proxyComplaint = session.setEchoLinkProxy(
+            EchoLinkProxySettings(host: proxyHostText, port: port),
+            password: proxyPasswordText)
+        proxyHostText = session.echoLinkProxy.host
+        proxyPortText = String(session.echoLinkProxy.port)
+        proxyPasswordText = session.echoLinkProxyPassword
     }
 
     // MARK: - PTT accessory

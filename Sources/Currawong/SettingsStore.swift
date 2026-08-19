@@ -57,6 +57,25 @@ protocol SettingsStore: AnyObject, Sendable {
     /// watchdog was hoisted out of them.
     func loadTransmitTimeout() -> TransmitTimeout?
     func saveTransmitTimeout(_ timeout: TransmitTimeout)
+
+    /// **APP-13.** The operator's own EchoLink proxy, app-wide. `nil` means none
+    /// has ever been saved *under its own key*, which — as with
+    /// ``loadIdentity()`` — is the signal to go looking for one in the channels
+    /// written before the proxy was hoisted out of them.
+    func loadEchoLinkProxy() -> StoredEchoLinkProxy?
+    func saveEchoLinkProxy(_ proxy: EchoLinkProxySettings)
+}
+
+/// What ``SettingsStore/loadEchoLinkProxy()`` found, and where.
+///
+/// The password is separate from the settings and optional because it is
+/// **migration output, not stored state**: the private proxy's password lives in
+/// the Keychain, which this type cannot reach, so a password harvested out of an
+/// old channel blob has to be handed up to whoever can write it. Non-`nil` means
+/// exactly "this came from a pre-APP-13 channel and has not been filed yet".
+struct StoredEchoLinkProxy: Equatable {
+    var settings: EchoLinkProxySettings
+    var harvestedPassword: String?
 }
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
@@ -64,8 +83,10 @@ protocol SettingsStore: AnyObject, Sendable {
 /// **No secret ever reaches this type.** ``NodeSettings`` does not have a
 /// secret field, which is the point: the password cannot be persisted here by
 /// accident, only deliberately, and nobody is going to do that deliberately.
-/// The EchoLink *proxy* password is the one exception, and it is in
-/// `NodeSettings` on purpose — see ``NodeSettings/proxyPassword``.
+/// There is no longer an exception: the EchoLink proxy password used to be one,
+/// and APP-13 moved it to the Keychain where it belongs. The only proxy password
+/// this type ever sees is one it is *reading out* of a pre-APP-13 blob in order
+/// to have it filed properly.
 ///
 /// One key for the whole list rather than one per channel, for the same reason
 /// the single node used one key for five fields: a partially-written set of
@@ -82,6 +103,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
     private static let transmitTimeoutKey = "au.charlesmartin.currawong.transmitTimeoutSeconds"
     private static let receiveGainKey = "au.charlesmartin.currawong.receiveGainDB"
+    private static let echoLinkProxyKey = "au.charlesmartin.currawong.echoLinkProxy"
 
     private let defaults: UserDefaults
 
@@ -223,6 +245,62 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// Stored as a bare number, on the same reasoning as ``saveTransmitGain(_:)``.
     func saveTransmitTimeout(_ timeout: TransmitTimeout) {
         defaults.set(timeout.seconds, forKey: Self.transmitTimeoutKey)
+    }
+
+    /// **APP-13.** The app-wide private proxy, rescuing one from older
+    /// per-channel settings if this is the first launch since it was hoisted out
+    /// of them.
+    ///
+    /// Raw JSON for the reason ``loadIdentity()`` reads it that way: `NodeSettings`
+    /// no longer has a `proxyPassword`, and it blanks an EchoLink `host` at decode,
+    /// so a decoded channel has already forgotten the proxy this has to find.
+    ///
+    /// **The `PUBLIC` test is what makes the migration safe.** A stored EchoLink
+    /// channel holds one of two very different things in these fields, and the
+    /// password says which. `PUBLIC` means the app itself put a stranger's public
+    /// proxy there by probing — the fault APP-13 exists to fix — and adopting it
+    /// as the operator's own proxy would make the fault permanent instead of
+    /// ending it, so it is dropped. Anything else was typed by an operator who
+    /// runs their own proxy, and losing it would mean they had to go and find the
+    /// details again.
+    ///
+    /// Nothing is written back from here. The caller files the password in the
+    /// Keychain and then saves, which is what stops the harvest running twice.
+    func loadEchoLinkProxy() -> StoredEchoLinkProxy? {
+        if let data = defaults.data(forKey: Self.echoLinkProxyKey),
+            let stored = try? JSONDecoder().decode(EchoLinkProxySettings.self, from: data)
+        {
+            return StoredEchoLinkProxy(settings: stored, harvestedPassword: nil)
+        }
+
+        let blobs =
+            Self.storedChannelBlobs(defaults: defaults)
+            + [Self.storedNodeBlob(defaults: defaults)].compactMap { $0 }
+
+        for blob in blobs {
+            guard (blob["mode"] as? String) == RadioMode.echoLink.rawValue else { continue }
+            let host =
+                (blob["host"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let password =
+                (blob["proxyPassword"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !host.isEmpty, !password.isEmpty,
+                password != EchoLinkProxySettings.publicPassword
+            else { continue }
+
+            let port = (blob["port"] as? NSNumber)?.uint16Value ?? EchoLinkProxySettings.defaultPort
+            return StoredEchoLinkProxy(
+                settings: EchoLinkProxySettings(host: host, port: port),
+                harvestedPassword: password)
+        }
+
+        return nil
+    }
+
+    func saveEchoLinkProxy(_ proxy: EchoLinkProxySettings) {
+        guard let data = try? JSONEncoder().encode(proxy) else { return }
+        defaults.set(data, forKey: Self.echoLinkProxyKey)
     }
 
     /// The first non-empty value of `key` across the stored blobs.

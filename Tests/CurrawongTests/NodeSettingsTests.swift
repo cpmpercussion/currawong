@@ -120,8 +120,8 @@ final class NodeSettingsTests: XCTestCase {
     ///
     /// Pinned as an exact set rather than a "does not contain" check, so that
     /// adding a field that *should* be a secret fails here rather than passing
-    /// quietly. `proxyPassword` is the one credential-shaped key in the list and
-    /// it is deliberate — `PUBLIC` is not a secret; see its doc comment.
+    /// quietly. There is no longer a credential-shaped key in the list at all:
+    /// `proxyPassword` was the one, and APP-13 moved it to the Keychain.
     func testTheCodableFormHasNoSecretField() throws {
         let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(good))
         let keys = Set((json as? [String: Any])?.keys.map { $0 } ?? [])
@@ -130,7 +130,7 @@ final class NodeSettingsTests: XCTestCase {
             keys,
             [
                 "id", "name", "mode", "host", "port", "node", "module",
-                "peer", "proxyPassword", "directoryServer", "username", "allStarAccess",
+                "peer", "directoryServer", "username", "allStarAccess",
             ])
         XCTAssertFalse(
             keys.contains("callsign") || keys.contains("operatorName")
@@ -263,10 +263,11 @@ final class NodeSettingsTests: XCTestCase {
         }
     }
 
-    /// No mode gets to skip these: no host is nowhere to send to, and an
-    /// unidentified transmission is not legal on any of these networks.
-    func testHostAndCallsignAreRequiredInEveryMode() {
-        for settings in [good, m17, echoLink] {
+    /// The two modes that dial a host must have one: no host is nowhere to send
+    /// to. EchoLink is not among them — it dials an address through an app-wide
+    /// proxy and names no host at all (APP-13).
+    func testAHostIsRequiredInTheTwoModesThatDialOne() {
+        for settings in [good, m17] {
             var noHost = settings
             noHost.host = "   "
             XCTAssertThrowsError(try noHost.validated()) {
@@ -278,12 +279,12 @@ final class NodeSettingsTests: XCTestCase {
 
     // MARK: - Radio mode (EchoLink)
 
-    /// `host` here is the **proxy's**, not the node's — the node is `peer`, and
-    /// it is a literal address because nothing in the path resolves a name.
+    /// **No host.** The node is `peer` — a literal address, because nothing in
+    /// the path resolves a name — and the proxy is app-wide rather than part of
+    /// the channel (APP-13).
     private let echoLink = NodeSettings(
         name: "Echo test",
         mode: .echoLink,
-        host: "proxy.example.org",
         port: 8100,
         node: "*ECHOTEST*",
         peer: "13.57.14.183",
@@ -370,21 +371,29 @@ final class NodeSettingsTests: XCTestCase {
         }
     }
 
-    /// `PUBLIC` is what a public proxy expects and the only proxy password ever
-    /// seen on the wire, so an operator who clears the field gets the working
-    /// value rather than an empty one that fails inside the proxy handshake.
-    func testAnEmptyProxyPasswordNormalisesToPublic() throws {
-        for empty in ["", "  \n"] {
-            var settings = echoLink
-            settings.proxyPassword = empty
-            XCTAssertEqual(try settings.validated().proxyPassword, "PUBLIC")
-        }
-        XCTAssertEqual(NodeSettings.defaultProxyPassword, "PUBLIC")
+    /// **APP-13.** An EchoLink channel names no proxy, and `validated()` is one of
+    /// the two places that enforces it. Cleared rather than merely unchecked: a
+    /// channel written by a build that did hold a proxy here must not carry it
+    /// forward the next time the draft is saved, which is exactly how the old
+    /// fault persisted.
+    func testValidatingAnEchoLinkChannelClearsAnyProxyItStillCarries() throws {
+        var settings = echoLink
+        settings.host = "203.0.113.7"
+        settings.port = 8100
 
-        // A proxy password the operator did type is theirs and is left alone.
-        var privateProxy = echoLink
-        privateProxy.proxyPassword = " s3cret "
-        XCTAssertEqual(try privateProxy.validated().proxyPassword, "s3cret")
+        let validated = try settings.validated()
+
+        XCTAssertEqual(validated.host, "")
+        XCTAssertEqual(validated.port, 8100, "the mode's own port, not a proxy's")
+    }
+
+    /// And the host is not demanded of it either — the missing-host complaint
+    /// belongs to the two modes that dial one.
+    func testAnEchoLinkChannelWithNoHostStillValidates() throws {
+        var settings = echoLink
+        settings.host = ""
+
+        XCTAssertNoThrow(try settings.validated())
     }
 
     /// **The EchoLink account form.** Keyed by callsign alone, because the
@@ -446,9 +455,6 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.name, "")
         XCTAssertEqual(decoded.peer, "")
         XCTAssertEqual(decoded.directoryServer, "")
-        // Absent rather than empty: `PUBLIC` is the working value, so a blob
-        // that never had the key must not decode to a proxy password that fails.
-        XCTAssertEqual(decoded.proxyPassword, "PUBLIC")
 
         // And the id it was given is kept, rather than being re-minted on every
         // decode — otherwise a channel would change identity on every launch.
