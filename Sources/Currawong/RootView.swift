@@ -463,6 +463,7 @@ struct RootView: View {
             isBusy: session.connection.isBusy || proxyPicker.isSearching,
             connectAction: { Task { await connectOrDisconnect() } },
             proxyPicker: proxyPicker,
+            privateProxy: session.echoLinkProxy,
             nodeLocator: nodeLocator)
     }
 
@@ -480,16 +481,20 @@ struct RootView: View {
     /// looking for one and every public proxy was busy — and the opposite of
     /// useful, since it names a field the operator was never meant to fill in.
     private func connectOrDisconnect() async {
-        if session.connection == .disconnected {
+        var proxy: EchoLinkProxyRoute?
+        if session.connection == .disconnected, session.settings.mode.usesProxy {
+            // Handed to the connect rather than written into the channel
+            // (APP-13): a proxy is not part of a destination, and a public one is
+            // borrowed for this sitting only.
             guard
-                await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
-                    session.settings.host = candidate.host
-                    session.settings.port = candidate.port
-                })
+                let resolved = await proxyPicker.route(
+                    privateProxy: session.echoLinkProxy,
+                    privatePassword: session.echoLinkProxyPassword)
             else { return }
+            proxy = resolved
         }
 
-        await session.toggleConnection()
+        await session.toggleConnection(proxy: proxy)
     }
 
     /// **APP-12.** The settings screen — the operator, the two stored accounts,

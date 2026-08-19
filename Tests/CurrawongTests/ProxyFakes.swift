@@ -52,6 +52,14 @@ final class FakeProxyFinder: ProxyFinder, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// What the *next* search will find, so a test can watch a second search
+    /// return a different machine from the first.
+    func setCandidate(_ candidate: ProxyCandidate) {
+        lock.lock()
+        storedCandidate = candidate
+        lock.unlock()
+    }
+
     func setProgressSteps(_ steps: [Int]) {
         lock.lock()
         storedProgressSteps = steps

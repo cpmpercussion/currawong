@@ -9,22 +9,31 @@ final class ProxyPickerTests: XCTestCase {
 
     // MARK: - Finding one
 
-    /// The whole point: what the finder returns reaches the caller, so the
-    /// connect form can be filled in from it.
-    func testASuccessfulSearchHandsTheProxyToTheCaller() async {
+    /// The whole point: what the finder returns becomes the sitting's lease, so
+    /// the next connect or directory read goes through it.
+    func testASuccessfulSearchBecomesTheLease() async {
         let finder = FakeProxyFinder(
             candidate: .fake(name: "Sydney", host: "203.0.113.7", port: 8100))
         let picker = ProxyPicker(finder: finder)
 
-        var applied: ProxyCandidate?
-        picker.find { applied = $0 }
+        picker.findAnother()
 
         await waitUntil("the search finishes") { !picker.isSearching }
 
-        XCTAssertEqual(applied?.host, "203.0.113.7")
-        XCTAssertEqual(applied?.port, 8100)
-        XCTAssertEqual(picker.chosen, applied)
+        XCTAssertEqual(picker.lease?.host, "203.0.113.7")
+        XCTAssertEqual(picker.lease?.port, 8100)
         XCTAssertNil(picker.failure)
+    }
+
+    /// A public proxy's route carries the protocol literal, which is not
+    /// something the operator is ever asked for.
+    func testAPublicProxyRouteCarriesThePublicPassword() {
+        let route = ProxyCandidate.fake(host: "203.0.113.7", port: 8100).route
+
+        XCTAssertEqual(route.host, "203.0.113.7")
+        XCTAssertEqual(route.port, 8100)
+        XCTAssertEqual(route.password, "PUBLIC")
+        XCTAssertFalse(route.isPrivate)
     }
 
     func testProgressIsReportedWhileProbing() async {
@@ -32,7 +41,7 @@ final class ProxyPickerTests: XCTestCase {
         finder.setProgressSteps([5, 5])
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the search finishes") { !picker.isSearching }
 
         // Ten across two batches — the running total, not the batch size.
@@ -44,7 +53,7 @@ final class ProxyPickerTests: XCTestCase {
         finder.holdUntilReleased()
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the search starts") { picker.isSearching }
 
         finder.release()
@@ -59,25 +68,24 @@ final class ProxyPickerTests: XCTestCase {
         let finder = FakeProxyFinder(error: ProxyFinderError.noneAvailable)
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the search finishes") { !picker.isSearching }
 
         XCTAssertNotNil(picker.failure)
         XCTAssertTrue(
             picker.failure?.contains("contended") == true,
             "the operator should be told this is contention, not a fault")
-        XCTAssertNil(picker.chosen)
+        XCTAssertNil(picker.lease)
     }
 
-    func testAFailedSearchDoesNotApplyAnything() async {
+    func testAFailedSearchLeavesNoLease() async {
         let finder = FakeProxyFinder(error: ProxyFinderError.noneAnswered(probed: 15))
         let picker = ProxyPicker(finder: finder)
 
-        var applied: ProxyCandidate?
-        picker.find { applied = $0 }
+        picker.findAnother()
         await waitUntil("the search finishes") { !picker.isSearching }
 
-        XCTAssertNil(applied, "nothing answered, so there is nothing to fill the field with")
+        XCTAssertNil(picker.lease, "nothing answered, so there is nothing to go through")
     }
 
     /// A retry after a failure clears the old complaint — otherwise the second
@@ -86,15 +94,15 @@ final class ProxyPickerTests: XCTestCase {
         let finder = FakeProxyFinder(error: ProxyFinderError.noneAvailable)
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the first search fails") { picker.failure != nil }
 
         finder.setError(nil)
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the second search finishes") { !picker.isSearching }
 
         XCTAssertNil(picker.failure)
-        XCTAssertNotNil(picker.chosen)
+        XCTAssertNotNil(picker.lease)
         XCTAssertEqual(finder.callCount, 2)
     }
 
@@ -105,7 +113,7 @@ final class ProxyPickerTests: XCTestCase {
         finder.holdUntilReleased()
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the search starts") { picker.isSearching }
 
         picker.cancel()
@@ -121,17 +129,17 @@ final class ProxyPickerTests: XCTestCase {
         finder.holdUntilReleased()
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the first search starts") { picker.isSearching }
 
         // Replaces the first, which is still parked.
-        picker.find { _ in }
+        picker.findAnother()
         XCTAssertTrue(picker.isSearching)
 
         // Let both run out. The spinner must still belong to the second.
         finder.release()
         await waitUntil("the second search finishes") { !picker.isSearching }
-        XCTAssertNotNil(picker.chosen)
+        XCTAssertNotNil(picker.lease)
     }
 
     /// Probing touches other operators' single-user machines, so a superseded
@@ -147,10 +155,10 @@ final class ProxyPickerTests: XCTestCase {
         finder.holdUntilReleased(ignoringCancellation: true)
         let picker = ProxyPicker(finder: finder)
 
-        picker.find { _ in }
+        picker.findAnother()
         await waitUntil("the first search is in flight") { finder.callCount == 1 }
 
-        picker.find { _ in }
+        picker.findAnother()
 
         // Long enough that the second search's task has certainly been
         // scheduled. Without this the assertion would hold whether or not the
@@ -167,87 +175,106 @@ final class ProxyPickerTests: XCTestCase {
                 + "new one is about to pick")
     }
 
-    // MARK: - Sourcing one at the moment it is needed
+    // MARK: - Resolving one at the moment it is needed
 
-    /// The point of `sourceProxyIfNeeded`: an operator who has just made an
-    /// EchoLink channel and pressed Refresh or Connect gets a proxy, rather
-    /// than a message naming a field they have no way to fill in well.
-    func testAnEmptyProxyIsFilledInBeforeTheCallerProceeds() async {
+    /// The point of `route`: an operator who has just made an EchoLink channel
+    /// and pressed Refresh or Connect gets a proxy, rather than a message naming
+    /// a field they have no way to fill in well.
+    func testAPublicProxyIsFoundWhenThereIsNothingElseToUse() async {
         let finder = FakeProxyFinder(
             candidate: .fake(name: "Sydney", host: "203.0.113.7", port: 8100))
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "")
 
-        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { candidate in
-            settings.host = candidate.host
-            settings.port = candidate.port
-        }
+        let route = await picker.route(privateProxy: .none, privatePassword: "")
 
-        XCTAssertTrue(mayProceed)
-        XCTAssertEqual(settings.host, "203.0.113.7")
-        XCTAssertEqual(settings.port, 8100)
+        XCTAssertEqual(route?.host, "203.0.113.7")
+        XCTAssertEqual(route?.port, 8100)
+        XCTAssertEqual(route?.password, "PUBLIC")
+        XCTAssertEqual(route?.isPrivate, false)
     }
 
-    /// A proxy the operator typed, or one the app already found, is theirs.
-    /// Repointing it under a channel they had working would be the worse
-    /// surprise, so a set field is left alone and nothing is probed at all.
-    func testAProxyThatIsAlreadySetIsLeftAlone() async {
+    /// The operator's own proxy beats a stranger's, and nothing is probed at all
+    /// — probing when there is already an answer is touching somebody else's
+    /// single-user machine for nothing.
+    func testAPrivateProxyWinsAndNothingIsProbed() async {
         let finder = FakeProxyFinder()
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "proxy.example.org")
+        let own = EchoLinkProxySettings(host: "shackpi", port: 8100)
 
-        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { candidate in
-            settings.host = candidate.host
-        }
+        let route = await picker.route(privateProxy: own, privatePassword: "s3cret")
 
-        XCTAssertTrue(mayProceed)
-        XCTAssertEqual(settings.host, "proxy.example.org")
+        XCTAssertEqual(route?.host, "shackpi")
+        XCTAssertEqual(route?.password, "s3cret")
+        XCTAssertEqual(route?.isPrivate, true)
         XCTAssertEqual(finder.callCount, 0, "nothing was needed, so nobody's machine was probed")
+        XCTAssertNil(picker.lease, "a private proxy is not a lease and must not become one")
     }
 
     /// Whitespace is an empty field with a space in it, not a host name.
-    func testAProxyFieldOfWhitespaceCountsAsEmpty() async {
+    func testAPrivateProxyOfWhitespaceCountsAsAbsent() async {
         let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "   ")
 
-        _ = await picker.sourceProxyIfNeeded(for: settings) { settings.host = $0.host }
+        let route = await picker.route(
+            privateProxy: EchoLinkProxySettings(host: "   "), privatePassword: "")
 
-        XCTAssertEqual(settings.host, "203.0.113.7")
+        XCTAssertEqual(route?.host, "203.0.113.7")
     }
 
-    /// The other two modes reach their destination directly. A proxy search
-    /// before an M17 connect would be a second or two of probing strangers'
-    /// machines for a field that mode does not have.
-    func testAModeWithoutAProxyNeverSearches() async {
+    /// **The lease.** A directory refresh and the connect that follows it are one
+    /// sitting, and probing again would take a second stranger's machine to do
+    /// one operator's work.
+    func testASecondResolutionReusesTheLeaseRatherThanProbingAgain() async {
+        let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
+        let picker = ProxyPicker(finder: finder)
+
+        let first = await picker.route(privateProxy: .none, privatePassword: "")
+        let second = await picker.route(privateProxy: .none, privatePassword: "")
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(finder.callCount, 1, "one sitting, one proxy, one set of probes")
+    }
+
+    /// And the other half of it: the sitting ends, the machine goes back, and the
+    /// next one probes afresh rather than returning to a proxy somebody else may
+    /// have taken. This is the fault APP-13 exists to fix, in miniature.
+    func testReleasingTheLeaseMakesTheNextResolutionProbeAgain() async {
+        let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
+        let picker = ProxyPicker(finder: finder)
+
+        _ = await picker.route(privateProxy: .none, privatePassword: "")
+        picker.releaseLease()
+        XCTAssertNil(picker.lease)
+
+        _ = await picker.route(privateProxy: .none, privatePassword: "")
+
+        XCTAssertEqual(finder.callCount, 2)
+    }
+
+    /// Releasing gives up a *borrowed* proxy. The operator's own is a setting and
+    /// is not the picker's to drop.
+    func testReleasingTheLeaseDoesNotTouchThePrivateProxy() async {
         let finder = FakeProxyFinder()
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "")
-        settings.mode = .m17
+        let own = EchoLinkProxySettings(host: "shackpi")
 
-        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { _ in
-            XCTFail("an M17 channel has no proxy to fill in")
-        }
+        picker.releaseLease()
+        let route = await picker.route(privateProxy: own, privatePassword: "s3cret")
 
-        XCTAssertTrue(mayProceed)
+        XCTAssertEqual(route?.host, "shackpi")
         XCTAssertEqual(finder.callCount, 0)
     }
 
     /// Every public proxy being busy has to stop the caller. Falling through
-    /// would put the operator in front of "enter the proxy's host name" — a
-    /// field they were never meant to fill in — instead of the contention that
-    /// actually happened.
-    func testTheCallerIsStoppedWhenNoProxyCouldBeFound() async {
+    /// would put the operator in front of a message about an empty field instead
+    /// of the contention that actually happened.
+    func testNoRouteWhenNoProxyCouldBeFound() async {
         let finder = FakeProxyFinder(error: ProxyFinderError.noneAvailable)
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "")
 
-        let mayProceed = await picker.sourceProxyIfNeeded(for: settings) { _ in
-            XCTFail("nothing answered, so there is nothing to fill the field with")
-        }
+        let route = await picker.route(privateProxy: .none, privatePassword: "")
 
-        XCTAssertFalse(mayProceed)
-        XCTAssertEqual(settings.host, "")
+        XCTAssertNil(route)
         XCTAssertNotNil(picker.failure, "the reason has to be on the picker for the view to show")
     }
 
@@ -257,30 +284,36 @@ final class ProxyPickerTests: XCTestCase {
         let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
         finder.holdUntilReleased()
         let picker = ProxyPicker(finder: finder)
-        var settings = echoLinkSettings(host: "")
 
-        let sourcing = Task { @MainActor in
-            await picker.sourceProxyIfNeeded(for: settings) { settings.host = $0.host }
+        let resolving = Task { @MainActor in
+            await picker.route(privateProxy: .none, privatePassword: "")
         }
 
         await waitUntil("the search starts") { picker.isSearching }
         finder.release()
 
-        let mayProceed = await sourcing.value
-        XCTAssertTrue(mayProceed)
+        let route = await resolving.value
+        XCTAssertEqual(route?.host, "203.0.113.7")
         XCTAssertFalse(picker.isSearching, "the spinner comes down with the search it belongs to")
-        XCTAssertEqual(settings.host, "203.0.113.7")
-        XCTAssertEqual(picker.chosen?.host, "203.0.113.7")
+        XCTAssertEqual(picker.lease?.host, "203.0.113.7")
         XCTAssertEqual(finder.callCount, 1)
     }
 
-    private func echoLinkSettings(host: String) -> NodeSettings {
-        NodeSettings(
-            mode: .echoLink,
-            host: host,
-            port: 8100,
-            peer: "13.57.14.183",
-            directoryServer: "192.0.2.1")
+    /// "Find another" is for a proxy that has gone away mid-sitting: it drops the
+    /// lease first, so it probes rather than handing back the machine that is no
+    /// longer answering.
+    func testFindAnotherDropsTheLeaseAndProbesAgain() async {
+        let finder = FakeProxyFinder(candidate: .fake(host: "203.0.113.7"))
+        let picker = ProxyPicker(finder: finder)
+
+        _ = await picker.route(privateProxy: .none, privatePassword: "")
+        finder.setCandidate(.fake(host: "198.51.100.4"))
+
+        picker.findAnother()
+        await waitUntil("the second search finishes") { !picker.isSearching }
+
+        XCTAssertEqual(picker.lease?.host, "198.51.100.4")
+        XCTAssertEqual(finder.callCount, 2)
     }
 
     // MARK: - What the operator reads

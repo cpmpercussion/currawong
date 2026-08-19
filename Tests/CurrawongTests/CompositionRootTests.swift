@@ -22,6 +22,11 @@ final class CompositionRootTests: XCTestCase {
     /// living in the settings.
     private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
 
+    /// A resolved public proxy. Supplied by the caller (APP-13) — a channel names
+    /// no proxy, so every EchoLink factory call has to be handed one.
+    private let publicProxy = EchoLinkProxyRoute(
+        host: "proxy.example.org", port: 8100, password: "PUBLIC", isPrivate: false)
+
     private func makeRoot() -> CompositionRoot {
         CompositionRoot(
             audio: FakeAudioIO(),
@@ -108,8 +113,6 @@ final class CompositionRootTests: XCTestCase {
     private func echoLinkSettings() -> NodeSettings {
         NodeSettings(
             mode: .echoLink,
-            host: "proxy.example.org",
-            port: 8100,
             node: "*ECHOTEST*",
             peer: "13.57.14.183",
             directoryServer: "192.0.2.1")
@@ -120,7 +123,8 @@ final class CompositionRootTests: XCTestCase {
     /// transport inside `connect(to:)`.
     func testTheEchoLinkFactoryBuildsALinkWithoutConnectingIt() throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "account-password",
+            proxy: publicProxy)
         defer { link.close() }
 
         XCTAssertEqual(link.mode, .echoLink)
@@ -138,26 +142,44 @@ final class CompositionRootTests: XCTestCase {
 
             XCTAssertThrowsError(
                 try CompositionRoot.makeEchoLinkLink(
-                    settings: settings, identity: vk1xyz, secret: ""), bad
+                    settings: settings, identity: vk1xyz, secret: "", proxy: publicProxy), bad
             ) { error in
                 XCTAssertEqual(error as? EchoLinkLinkError, .invalidPeerAddress(bad), bad)
             }
         }
     }
 
-    /// `NodeSettings.validated()` should have caught an empty host already.
-    /// This is the backstop, and it earns its keep: without it the failure
-    /// happens inside the transport, where the message is about a socket rather
-    /// than about a settings field.
-    func testAnEmptyProxyHostIsRefused() {
-        var settings = echoLinkSettings()
-        settings.host = ""
-
-        XCTAssertThrowsError(
-            try CompositionRoot.makeEchoLinkLink(settings: settings, identity: vk1xyz, secret: "")
-        ) { error in
-            XCTAssertEqual(error as? EchoLinkLinkError, .missingProxyHost)
+    /// A caller that sourced no proxy is stopped here. `ProxyPicker` is what
+    /// resolves one and `RootView` stops when it cannot, so this is the backstop
+    /// — and it earns its keep: without it the failure happens inside the
+    /// transport, where the message is about a socket rather than about a proxy.
+    func testALinkWithNoProxyIsRefused() {
+        for proxy in [nil, EchoLinkProxyRoute(host: "", port: 8100, password: "PUBLIC", isPrivate: false)] {
+            XCTAssertThrowsError(
+                try CompositionRoot.makeEchoLinkLink(
+                    settings: echoLinkSettings(), identity: vk1xyz, secret: "", proxy: proxy)
+            ) { error in
+                XCTAssertEqual(error as? EchoLinkLinkError, .missingProxyHost)
+            }
         }
+    }
+
+    /// The proxy the caller resolved is the one the destination is built from.
+    /// Nothing reads a proxy off the channel any more — `echoLinkSettings()` above
+    /// has no host in it, which is the point.
+    func testTheResolvedProxyIsWhatTheLinkIsBuiltWith() throws {
+        let own = EchoLinkProxyRoute(
+            host: "shackpi", port: 8101, password: "s3cret", isPrivate: true)
+        let link = try CompositionRoot.makeEchoLinkLink(
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "", proxy: own)
+        defer { link.close() }
+
+        // The destination is inside the client, so what is assertable here is
+        // that a proxy naming a private machine builds at all — the wire-level
+        // check is `EchoLinkKit`'s. What matters at this seam is that the route
+        // came from the parameter: with the channel carrying no host, a factory
+        // still reading `settings.host` would have thrown above.
+        XCTAssertEqual(link.mode, .echoLink)
     }
 
     /// EchoLink has no digit path at all, so the link says so rather than
@@ -166,7 +188,7 @@ final class CompositionRootTests: XCTestCase {
     /// line of defence.
     func testEchoLinkRefusesDTMFRatherThanSwallowingIt() async throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), identity: vk1xyz, secret: "")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "", proxy: publicProxy)
         defer { link.close() }
 
         do {
@@ -190,7 +212,7 @@ final class CompositionRootTests: XCTestCase {
             stationDirectory: directory)
 
         root.stationBrowser.load(
-            for: echoLinkSettings(), identity: vk1xyz, accountPassword: "pw")
+            for: echoLinkSettings(), identity: vk1xyz, accountPassword: "pw", proxy: publicProxy)
         await waitUntil("the injected directory answers") {
             !root.stationBrowser.stations.isEmpty
         }
@@ -217,7 +239,7 @@ final class CompositionRootTests: XCTestCase {
     /// and they do not know which mode is up either.
     func testStopTransmitOnAnUnconnectedEchoLinkClientIsHarmless() async throws {
         let link = try CompositionRoot.makeEchoLinkLink(
-            settings: echoLinkSettings(), identity: vk1xyz, secret: "")
+            settings: echoLinkSettings(), identity: vk1xyz, secret: "", proxy: publicProxy)
         defer { link.close() }
 
         await link.stopTransmit()

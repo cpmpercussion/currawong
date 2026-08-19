@@ -62,12 +62,13 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
     }
 
     /// A channel pointed at this station, filled in from an existing channel's
-    /// proxy, directory server and callsign.
+    /// directory server.
     ///
-    /// Takes a template rather than building from nothing because the parts a
-    /// station cannot supply — which proxy to tunnel through, which directory
-    /// server, who *we* are — are exactly the parts the operator has already
-    /// configured once and should never type twice.
+    /// Takes a template rather than building from nothing because the part a
+    /// station cannot supply — which directory server listed it — is one the
+    /// operator has already configured once and should never type twice. The
+    /// proxy is not among them any more: it is app-wide (APP-13), so a new
+    /// channel inherits it by not naming it.
     func channel(basedOn template: NodeSettings) -> NodeSettings {
         var channel = template
         channel.id = UUID()
@@ -90,14 +91,17 @@ protocol StationDirectory: Sendable {
     /// Every station the directory server lists.
     ///
     /// - Parameters:
-    ///   - settings: supplies the proxy, the directory server and our callsign.
-    ///     The node fields are ignored: this opens a directory-only session and
-    ///     never contacts a node.
+    ///   - settings: supplies the directory server. The node fields are ignored:
+    ///     this opens a directory-only session and never contacts a node.
     ///   - accountPassword: the operator's EchoLink account password.
     ///   - identity: the operator's callsign, which is who the directory server
     ///     is asked to log in as.
+    ///   - proxy: the proxy to tunnel the directory session through, resolved by
+    ///     ``ProxyPicker`` (APP-13). The listing does not arrive over HTTP; it
+    ///     comes down a proxy connection like a QSO does.
     func stations(
-        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
+        proxy: EchoLinkProxyRoute
     ) async throws -> [DirectoryStation]
 }
 
@@ -121,7 +125,10 @@ enum StationDirectoryError: Error, Equatable, CustomStringConvertible {
         case .missingCallsign:
             return "Enter your callsign. The directory server logs you in as a station, not anonymously."
         case .missingProxy:
-            return "Enter the proxy's host name or address. The directory is reached through it."
+            return """
+                No proxy could be found. The directory is reached through one, and every public \
+                proxy appears to be busy — try again, or set your own proxy in Settings.
+                """
         case .missingDirectoryServer:
             return """
                 Enter the directory server's IP address. Without it there is nothing to ask \
@@ -161,7 +168,7 @@ final class StationBrowser: ObservableObject {
     private let now: @MainActor () -> Date
     private var fetchTask: Task<Void, Never>?
 
-    /// Bumped by every ``load(for:accountPassword:)``, so a fetch that has been
+    /// Bumped by every ``load(for:identity:accountPassword:proxy:)``, so a fetch that has been
     /// superseded can tell that it has.
     private var generation = 0
 
@@ -191,17 +198,26 @@ final class StationBrowser: ObservableObject {
 
     /// Fetches the listing. A second call while one is in flight replaces it —
     /// the operator has changed something and wants the new answer.
-    func load(for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String) {
+    func load(
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
+        proxy: EchoLinkProxyRoute?
+    ) {
         fetchTask?.cancel()
 
         if let complaint = Self.whatIsMissing(
-            in: settings, identity: identity, accountPassword: accountPassword)
+            in: settings, identity: identity, accountPassword: accountPassword, proxy: proxy)
         {
             stations = []
             failure = complaint.description
             isLoading = false
             return
         }
+
+        // `whatIsMissing` answers `.missingProxy` for a nil proxy, so this cannot
+        // fail — unwrapped with `guard` rather than `!` so that an edit to that
+        // check degrades into "no fetch" instead of a crash on a screen the
+        // operator opened to look for a station.
+        guard let proxy else { return }
 
         isLoading = true
         failure = nil
@@ -225,7 +241,8 @@ final class StationBrowser: ObservableObject {
 
             do {
                 let fetched = try await self.directory.stations(
-                    for: settings, identity: identity, accountPassword: accountPassword)
+                    for: settings, identity: identity, accountPassword: accountPassword,
+                    proxy: proxy)
                 guard !Task.isCancelled else { return }
                 self.stations = fetched
                 self.fetchedAt = self.now()
@@ -253,13 +270,18 @@ final class StationBrowser: ObservableObject {
     /// `nonisolated` because the directory implementation checks it too, off the
     /// main actor, and one copy of the rule is the point.
     nonisolated static func whatIsMissing(
-        in settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+        in settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
+        proxy: EchoLinkProxyRoute?
     ) -> StationDirectoryError? {
         guard settings.mode == .echoLink else { return .notEchoLink }
         if identity.callsign.trimmingCharacters(in: .whitespaces).isEmpty {
             return .missingCallsign
         }
-        if settings.host.trimmingCharacters(in: .whitespaces).isEmpty { return .missingProxy }
+        // `nil` here is not an empty field the operator can go and fill in: it
+        // means the app tried to source a proxy and could not (APP-13). The
+        // wording says so, and it is the last thing checked before the fetch
+        // because it is the one thing nobody typed.
+        guard let proxy, !proxy.host.isEmpty else { return .missingProxy }
         if settings.directoryServer.trimmingCharacters(in: .whitespaces).isEmpty {
             return .missingDirectoryServer
         }

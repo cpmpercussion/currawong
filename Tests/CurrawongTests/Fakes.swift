@@ -376,6 +376,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var storedGain: TransmitGain?
     private var storedReceiveGain: ReceiveGain?
     private var storedTimeout: TransmitTimeout?
+    private var storedProxy: StoredEchoLinkProxy?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
 
@@ -386,7 +387,8 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         identity: OperatorIdentity? = nil,
         gain: TransmitGain? = nil,
         timeout: TransmitTimeout? = nil,
-        receiveGain: ReceiveGain? = nil
+        receiveGain: ReceiveGain? = nil,
+        echoLinkProxy: StoredEchoLinkProxy? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
@@ -395,6 +397,29 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         self.storedGain = gain
         self.storedTimeout = timeout
         self.storedReceiveGain = receiveGain
+        self.storedProxy = echoLinkProxy
+    }
+
+    func loadEchoLinkProxy() -> StoredEchoLinkProxy? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedProxy
+    }
+
+    /// Stores what a save stores: the settings, and never a harvested password —
+    /// the harvest is a one-off read, and a store that echoed it back would let a
+    /// test pass while the real migration ran on every launch.
+    func saveEchoLinkProxy(_ proxy: EchoLinkProxySettings) {
+        lock.lock()
+        storedProxy = StoredEchoLinkProxy(settings: proxy, harvestedPassword: nil)
+        lock.unlock()
+    }
+
+    /// What ``saveEchoLinkProxy(_:)`` last wrote.
+    var savedEchoLinkProxy: EchoLinkProxySettings? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedProxy?.settings
     }
 
     func loadIdentity() -> OperatorIdentity? {
@@ -609,6 +634,16 @@ final class SessionHarness {
     /// than a per-channel value that no longer exists.
     private(set) var timeoutsSeen: [TransmitTimeout] = []
 
+    /// The proxy each link was built with (APP-13). `nil` for the two modes that
+    /// need none — and, for EchoLink, the evidence that the route came from the
+    /// caller rather than out of the channel.
+    private(set) var proxiesSeen: [EchoLinkProxyRoute?] = []
+
+    /// How many times the session gave up its leased public proxy. The session
+    /// does this on every teardown, however the link ended, so a test can prove a
+    /// dropped link releases the machine as surely as hanging up does.
+    private(set) var proxyLeaseReleases = 0
+
     /// Bumped by the link's `close` callback, which is `@Sendable` and may run
     /// off the main actor, so it counts through a lock rather than a property.
     let closedLinks = Counter()
@@ -664,11 +699,11 @@ final class SessionHarness {
         username: "vk1abc")
 
     /// An EchoLink channel that validates, for the tests about a mode whose
-    /// secret account is shared between channels.
+    /// secret account is shared between channels. **No host** — the proxy is
+    /// app-wide (APP-13) and the node is `peer`.
     static let echoLinkSettings = NodeSettings(
         name: "Echo test",
         mode: .echoLink,
-        host: "proxy.example.org",
         port: 8100,
         node: "*ECHOTEST*",
         peer: "13.57.14.183",
@@ -683,11 +718,13 @@ final class SessionHarness {
         identity: OperatorIdentity? = OperatorIdentity(callsign: "VK1XYZ"),
         gain: TransmitGain? = nil,
         timeout: TransmitTimeout? = nil,
-        receiveGain: ReceiveGain? = nil
+        receiveGain: ReceiveGain? = nil,
+        echoLinkProxy: StoredEchoLinkProxy? = nil
     ) {
         self.settingsStore = InMemorySettingsStore(
             initial: settings, channels: channels, selectedID: selectedID, identity: identity,
-            gain: gain, timeout: timeout, receiveGain: receiveGain)
+            gain: gain, timeout: timeout, receiveGain: receiveGain,
+            echoLinkProxy: echoLinkProxy)
         self.secretStore = InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks
@@ -695,8 +732,9 @@ final class SessionHarness {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { [unowned self] settings, identity, credentials, timeout in
+            makeLink: { [unowned self] settings, identity, credentials, timeout, proxy in
                 if let error = self.makeLinkError { throw error }
+                self.proxiesSeen.append(proxy)
                 self.linksMade += 1
                 self.settingsSeen.append(settings)
                 self.identitiesSeen.append(identity)
@@ -740,6 +778,10 @@ final class SessionHarness {
                     sendDTMF: { try client.send(dtmf: $0) },
                     close: { closedLinks.bump() })
             },
+            // `weak`, not `unowned` like the factory above: this runs from
+            // `tearDownLink()`, which the session reaches while the harness is
+            // being torn down at the end of a test.
+            releaseProxyLease: { [weak self] in self?.proxyLeaseReleases += 1 },
             resolver: resolver)
     }
 

@@ -166,11 +166,17 @@ final class CompositionRoot {
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
         portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin()
     ) {
+        // Before the session, so the session can be handed its release hook
+        // (APP-13). The order is load-bearing rather than tidy: a closure
+        // capturing `self` cannot be built until every property is initialised,
+        // and capturing the picker itself needs the picker to exist first.
+        let proxyPicker = ProxyPicker(finder: proxyFinder)
+
         let session = RadioSession(
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { settings, identity, credentials, transmitTimeout in
+            makeLink: { settings, identity, credentials, transmitTimeout, proxy in
                 // Dispatches on the mode in the settings; see `makeLink`.
                 // `configuration` is the IAX2 one, so it only applies there.
                 switch settings.mode {
@@ -188,9 +194,10 @@ final class CompositionRoot {
                     // here, not a node password — see `makeEchoLinkLink`.
                     return try CompositionRoot.makeEchoLinkLink(
                         settings: settings, identity: identity, secret: credentials.secret,
-                        transmitTimeout: transmitTimeout)
+                        proxy: proxy, transmitTimeout: transmitTimeout)
                 }
-            })
+            },
+            releaseProxyLease: { proxyPicker.releaseLease() })
         let accessory = accessory ?? BLEPTTController()
         let remoteCommand = remoteCommand ?? RemoteCommandPTTController()
 
@@ -198,7 +205,7 @@ final class CompositionRoot {
         self.accessory = accessory
         self.remoteCommand = remoteCommand
         self.stationBrowser = StationBrowser(directory: stationDirectory)
-        self.proxyPicker = ProxyPicker(finder: proxyFinder)
+        self.proxyPicker = proxyPicker
         self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
         self.nodeLocator = NodeLocator(lookup: nodeLookup)
         self.portalLogin = PortalLoginController(login: portalLogin)
@@ -519,10 +526,12 @@ final class CompositionRoot {
     /// The same shape as the two above, and again the differences are the
     /// protocol's rather than ours:
     ///
-    /// - **`host` and `port` are the proxy's**, not the far node's. EchoLink
-    ///   audio is UDP 5198/5199 inbound, which carrier-grade NAT eats, so
-    ///   FR-3.3 makes a TCP proxy on 8100 the normal path and the library only
-    ///   implements that one. `settings.peer` is the node's own address, and it
+    /// - **The proxy arrives as a parameter, not in the settings** (APP-13).
+    ///   EchoLink audio is UDP 5198/5199 inbound, which carrier-grade NAT eats,
+    ///   so FR-3.3 makes a TCP proxy on 8100 the normal path and the library only
+    ///   implements that one — but which proxy is the operator's station
+    ///   infrastructure rather than a property of the node, and a public one is
+    ///   leased for a sitting. `settings.peer` is the node's own address, and it
     ///   travels inside the proxy's `OPEN` frame rather than being dialled.
     /// - **Two addresses, and one of them must be a dotted quad.** Nothing in
     ///   the proxy protocol resolves DNS: the peer field is four raw octets. So
@@ -551,6 +560,9 @@ final class CompositionRoot {
     /// - Parameters:
     ///   - secret: the operator's EchoLink account password. Empty means "no
     ///     directory login", which is a supported way to run.
+    ///   - proxy: the proxy to tunnel through, resolved by ``ProxyPicker``.
+    ///     `nil` is a caller that has not sourced one, which cannot be made to
+    ///     work and is reported as such.
     ///   - configuration: injectable for tests. The fields that belong to the
     ///     operator — callsign, name, location, watchdog, and the directory
     ///     pair — are overwritten from `identity`, `transmitTimeout` and
@@ -561,13 +573,14 @@ final class CompositionRoot {
         settings: NodeSettings,
         identity: OperatorIdentity,
         secret: String,
+        proxy: EchoLinkProxyRoute?,
         transmitTimeout: TransmitTimeout = .default,
         configuration: EchoLinkClient.Configuration? = nil
     ) throws -> RadioLink {
         guard let peer = EchoLinkPeerAddress(settings.peer) else {
             throw EchoLinkLinkError.invalidPeerAddress(settings.peer)
         }
-        guard !settings.host.isEmpty else {
+        guard let proxy, !proxy.host.isEmpty else {
             throw EchoLinkLinkError.missingProxyHost
         }
 
@@ -602,9 +615,9 @@ final class CompositionRoot {
             peer: peer,
             node: settings.node,
             route: .proxy(
-                host: settings.host,
-                port: settings.port,
-                password: EchoLinkProxyPassword(settings.proxyPassword)))
+                host: proxy.host,
+                port: proxy.port,
+                password: EchoLinkProxyPassword(proxy.password)))
 
         var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
         let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
@@ -680,7 +693,8 @@ final class CompositionRoot {
         settings: NodeSettings,
         identity: OperatorIdentity,
         credentials: RadioSession.LinkCredentials,
-        transmitTimeout: TransmitTimeout = .default
+        transmitTimeout: TransmitTimeout = .default,
+        proxy: EchoLinkProxyRoute? = nil
     ) throws -> RadioLink {
         switch settings.mode {
         case .allStarLink:
@@ -693,7 +707,7 @@ final class CompositionRoot {
         case .echoLink:
             return try makeEchoLinkLink(
                 settings: settings, identity: identity, secret: credentials.secret,
-                transmitTimeout: transmitTimeout)
+                proxy: proxy, transmitTimeout: transmitTimeout)
         }
     }
 }
@@ -711,10 +725,10 @@ enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
     /// a hostname cannot be made to work here by trying harder.
     case invalidPeerAddress(String)
 
-    /// No proxy host. `NodeSettings.validated()` should have caught an empty
-    /// host; this is the backstop, and it is worth having because the failure
-    /// without it happens inside the transport, where the message is about a
-    /// socket rather than about a settings field.
+    /// No proxy was sourced. `ProxyPicker` is what resolves one and the caller
+    /// stops when it cannot; this is the backstop, and it is worth having because
+    /// the failure without it happens inside the transport, where the message is
+    /// about a socket rather than about a proxy.
     case missingProxyHost
 
     /// DTMF was attempted on a mode that has no such thing.
@@ -731,8 +745,9 @@ enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
                 """
         case .missingProxyHost:
             return """
-                No EchoLink proxy is set. Enter the address of a proxy in \
-                Settings — EchoLink needs one to reach a node from a phone.
+                No EchoLink proxy could be found. Public proxies carry one user at a time and \
+                are heavily contended, so this is usually contention rather than a fault — try \
+                again, or set your own proxy in Settings.
                 """
         case .dtmfUnsupported:
             return "EchoLink has no DTMF signalling. Connect to an AllStarLink node to send digits."
@@ -904,10 +919,11 @@ struct EchoLinkStationDirectory: StationDirectory {
     }
 
     func stations(
-        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String
+        for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
+        proxy: EchoLinkProxyRoute
     ) async throws -> [DirectoryStation] {
         if let missing = StationBrowser.whatIsMissing(
-            in: settings, identity: identity, accountPassword: accountPassword)
+            in: settings, identity: identity, accountPassword: accountPassword, proxy: proxy)
         {
             throw missing
         }
@@ -938,9 +954,9 @@ struct EchoLinkStationDirectory: StationDirectory {
             peer: .unspecified,
             node: settings.node,
             route: .proxy(
-                host: settings.host,
-                port: settings.port,
-                password: EchoLinkProxyPassword(settings.proxyPassword)))
+                host: proxy.host,
+                port: proxy.port,
+                password: EchoLinkProxyPassword(proxy.password)))
 
         try await client.connect(to: destination, mode: .directoryOnly)
         do {

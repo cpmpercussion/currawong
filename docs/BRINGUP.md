@@ -84,10 +84,15 @@ CLI, and the audio devices.
 Two things about EchoLink that the other two modes do not have, and that a
 first session will trip over if they are wrong:
 
-- **The proxy is chosen, and public proxies are single-user.** A proxy that was
-  free an hour ago is often taken, and a taken one accepts the TCP connection
-  and then hangs up before sending its nonce. That surfaces as "the proxy
-  stream closed" and is not a fault in the app. Try another.
+- **Public proxies are single-user, and the app now sources one per session
+  (APP-13).** A proxy that was free an hour ago is often taken, and a taken one
+  accepts the TCP connection and then hangs up before sending its nonce. That
+  surfaces as "the proxy stream closed" and is not a fault in the app — press
+  *Find another* in the connect form's proxy drawer. Two things to watch for on
+  air now that the proxy is not a stored field: that a second connect in one
+  sitting goes through the *same* proxy as the directory refresh before it
+  (one machine per sitting), and that a fresh launch probes again rather than
+  returning to yesterday's. The old behaviour was the opposite of both.
 - **The directory login is what registers you as available.** Leave the
   directory server empty and every step still reports success while no node
   ever answers. The connect form warns about this; believe the warning.

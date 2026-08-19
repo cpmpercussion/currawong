@@ -32,7 +32,7 @@ struct StationBrowserView: View {
 
     /// The public-proxy finder. Here because a listing is read *through* a
     /// proxy, so Refresh is one of the two moments a proxy is needed — see
-    /// ``ProxyPicker/sourceProxyIfNeeded(for:apply:)``. Its state is shown in
+    /// ``ProxyPicker/route(privateProxy:privatePassword:)``. Its state is shown in
     /// ``status`` as well, because from this pane the search is a step of the
     /// refresh rather than something happening on another screen.
     @ObservedObject var proxyPicker: ProxyPicker
@@ -94,25 +94,27 @@ struct StationBrowserView: View {
         }
     }
 
-    /// Source a proxy if the channel has not got one, then read the directory.
+    /// Resolve a proxy, then read the directory through it.
     ///
     /// The two steps are one button because they are one intention. A listing
     /// travels through a proxy, so an operator who has just added an EchoLink
     /// channel and pressed Refresh needs one — and being told to go to another
-    /// pane, open a drawer and press a different button first is a detour
-    /// through information they cannot act on. `settings` is read again after
-    /// the await: the proxy was written into it while we were waiting.
+    /// pane, open a drawer and press a different button first is a detour through
+    /// information they cannot act on.
+    ///
+    /// The proxy this returns is handed straight to the fetch and stored nowhere
+    /// (APP-13). It is also the same one the Connect button will use, because a
+    /// public one is leased for the sitting rather than probed for again.
     private func refresh() async {
         guard
-            await proxyPicker.sourceProxyIfNeeded(for: session.settings, apply: { candidate in
-                session.settings.host = candidate.host
-                session.settings.port = candidate.port
-            })
+            let proxy = await proxyPicker.route(
+                privateProxy: session.echoLinkProxy,
+                privatePassword: session.echoLinkProxyPassword)
         else { return }
 
         browser.load(
             for: session.settings, identity: session.identity,
-            accountPassword: session.secret)
+            accountPassword: session.secret, proxy: proxy)
     }
 
     private var searchField: some View {
