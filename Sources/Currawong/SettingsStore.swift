@@ -255,14 +255,22 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// no longer has a `proxyPassword`, and it blanks an EchoLink `host` at decode,
     /// so a decoded channel has already forgotten the proxy this has to find.
     ///
-    /// **The `PUBLIC` test is what makes the migration safe.** A stored EchoLink
-    /// channel holds one of two very different things in these fields, and the
-    /// password says which. `PUBLIC` means the app itself put a stranger's public
-    /// proxy there by probing — the fault APP-13 exists to fix — and adopting it
-    /// as the operator's own proxy would make the fault permanent instead of
-    /// ending it, so it is dropped. Anything else was typed by an operator who
-    /// runs their own proxy, and losing it would mean they had to go and find the
-    /// details again.
+    /// **The `PUBLIC` test, and what it can and cannot tell.** A password other
+    /// than `PUBLIC` is strong evidence: the old form *defaulted* to `PUBLIC`, so
+    /// anything else was typed by an operator who runs their own proxy, and losing
+    /// it would mean going to find those details again. That case is rescued.
+    ///
+    /// `PUBLIC` itself proves less than it looks. It is not the mark of a probe —
+    /// it is the **definition** of a public proxy, which is precisely why the app
+    /// wrote it when it captured one — but an operator who typed their own host
+    /// into the old form and left the password field at its default looks
+    /// identical. Those hosts are dropped anyway, and it is a judgement under
+    /// ambiguity rather than a deduction: the two mistakes are not the same size.
+    /// Dropping a private host costs one field re-typed in Settings, where
+    /// adopting a captured public proxy as "your own proxy" would make the fault
+    /// APP-13 exists to end permanent and invisible — a stranger's single-user
+    /// machine, named as the operator's station infrastructure, on every session
+    /// from then on.
     ///
     /// Nothing is written back from here. The caller files the password in the
     /// Keychain and then saves, which is what stops the harvest running twice.

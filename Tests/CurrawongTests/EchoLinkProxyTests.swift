@@ -120,14 +120,36 @@ final class EchoLinkProxyMigrationTests: XCTestCase {
         XCTAssertEqual(loaded?.harvestedPassword, "s3cret")
     }
 
-    /// **The discard, and it is the more important half.** `PUBLIC` means the app
-    /// itself put a stranger's machine there by probing — the fault — so adopting
-    /// it as the operator's own proxy would make the fault permanent instead of
-    /// ending it.
-    func testACapturedPublicProxyIsDiscardedRatherThanAdopted() throws {
+    /// **The discard, and it is the more important half.** `PUBLIC` is the
+    /// definition of a public proxy and so is what the app wrote when it captured
+    /// one by probing. It is dropped rather than adopted, because adopting a
+    /// stranger's single-user machine as the operator's own station
+    /// infrastructure would make the fault APP-13 ends permanent and invisible.
+    ///
+    /// The same rule drops a *private* host whose owner left the password at the
+    /// old form's default, which is the known cost of this test being the only
+    /// evidence available. See the next test.
+    func testAProxyWithThePublicPasswordIsDiscardedRatherThanAdopted() throws {
         try writeRawChannels([
             [
                 "id": UUID().uuidString, "mode": "echoLink", "host": "203.0.113.7", "port": 8100,
+                "node": "*ECHOTEST*", "peer": "13.57.14.183", "proxyPassword": "PUBLIC",
+                "username": "",
+            ]
+        ])
+
+        XCTAssertNil(store().loadEchoLinkProxy())
+    }
+
+    /// The cost of the rule above, pinned so it is a decision rather than a
+    /// surprise: an operator who typed their own proxy host into the old form and
+    /// left its password at the default is not distinguishable from a captured
+    /// public one, and loses the host. One field, re-typed in Settings — against
+    /// which the alternative is silently keeping a stranger's machine for ever.
+    func testAPrivateHostLeftAtTheDefaultPasswordIsAlsoDropped() throws {
+        try writeRawChannels([
+            [
+                "id": UUID().uuidString, "mode": "echoLink", "host": "shackpi", "port": 8100,
                 "node": "*ECHOTEST*", "peer": "13.57.14.183", "proxyPassword": "PUBLIC",
                 "username": "",
             ]
