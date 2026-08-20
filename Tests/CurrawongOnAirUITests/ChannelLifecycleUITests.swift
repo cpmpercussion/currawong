@@ -29,9 +29,19 @@ final class ChannelLifecycleUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), "the new channel never appeared")
 
         row.rightClick()
-        let delete = app.menuItems["Delete"].firstMatch
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "no Delete item")
-        print("=== DELETE (never connected) REPORTS isEnabled: \(delete.isEnabled)")
+
+        // Scoped to the context menu that just opened. `app.menuItems["Delete"]`
+        // would also match the menu bar's own always-greyed `Edit ▸ Delete`, so
+        // it passes `waitForExistence` even when no context menu opened at all —
+        // and then reports `isEnabled == false` and clicks nothing. That is the
+        // shape of BU-9 item 3's evidence, and it is a query fault rather than a
+        // finding.
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { app.menus.count > 0 },
+            "no context menu opened on the row — not a disabled Delete, no menu at all")
+        let delete = app.menus.firstMatch.menuItems["Delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "no Delete item in the row's own menu")
+        XCTAssertTrue(delete.isEnabled, "Delete is disabled on a channel never connected to")
         delete.click()
 
         let deadline = Date().addingTimeInterval(10)
@@ -39,5 +49,14 @@ final class ChannelLifecycleUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.25)
         }
         XCTAssertFalse(row.exists, "the channel was still listed after Delete")
+    }
+
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return condition()
     }
 }

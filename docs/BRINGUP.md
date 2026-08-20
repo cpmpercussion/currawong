@@ -78,7 +78,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test; (1) and (2) are a design question for the maintainer, (3) is an unexplained defect |
+| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test. (1) and (2) answered by the maintainer 2026-08-21 and being implemented; (3) is no longer unexplained — the suspect was disproved 2026-08-21 and the cause is most likely the test's own unscoped menu query, unconfirmed while the automation grant is lapsed |
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 
@@ -664,6 +664,64 @@ channel *is*, and when an edit belongs to it — and answering it by adding a
 `saveDraft()` on quit would make accidental overwrites permanent rather than
 merely possible. That is the maintainer's call. (3) is a bug with no design
 question in it, but no fix found yet.
+
+#### What (3) is *not*, measured 2026-08-21
+
+The account above stands as what was observed. What has changed is that the
+suspect named in it — the row's `contextMenu` not being rebuilt after the
+connection state changes — **has been tested and is not what happens.**
+
+`Tests/CurrawongTests/ChannelListContextMenuTests.swift` hosts `ChannelListView`
+in an `NSHostingView`, inside a `NavigationSplitView` the way `RootView` hosts it
+on macOS, drives a real `connect()` and `disconnect()` through the fake link, and
+reads the `NSMenu` the platform would actually display for each row. It runs
+headless under `make test-macos`, opens no socket and transmits nothing. What it
+establishes:
+
+- SwiftUI **rebuilds** the row's menu on every read. A menu read while the list
+  was locked carries `isEnabled == false` and a `nil` action and keeps them for
+  ever, but the row hands out a fresh, live one once `isMutable` is true again.
+- After a connect/disconnect cycle, Delete is enabled **both** on the channel
+  that was connected to **and** on a row that merely sat in the list while it was
+  locked — and firing the item's action really does remove the channel, which an
+  enabled-but-inert item would not.
+
+So the four things ruled out by hand were all attacking a mechanism that does not
+occur, which is why none of them changed anything. The test is a negative control
+as well as a regression test: forcing `isMutable` to `false` makes it fail on five
+assertions, so it is not passing vacuously.
+
+**The best-supported explanation is now the query, not the app.**
+`app.menuItems["Delete"]` is not scoped to the context menu, and every SwiftUI
+app on macOS carries an always-present, always-greyed `Edit ▸ Delete` in the menu
+bar. An unscoped query matches *that* — it exists, it reports
+`isEnabled == false`, and clicking it does nothing — whether or not the row's own
+menu ever opened. That is the reported signature exactly. What could stop the row
+menu opening while leaving every other symptom intact ("Not connected", no lock
+label, the row enabled) is a **modal alert still standing after the session**:
+`handleLinkLoss` presents one, and so does a failed connect, and only a channel
+that has been connected to reaches a path that ends in one.
+
+⚠️ **Not closed, and this is the honest state of it.** The scoped-query queries
+are fixed in `ChannelLifecycleUITests` and `M17EndOfOverUITests`, and
+`ChannelDeleteAfterConnectUITests` is written to settle it — it arms the lock with
+a connect attempt to `192.0.2.1` (TEST-NET-1, so nothing goes on air), records
+whether an alert is up and what an unscoped query reports while it is, and then
+deletes a bystander channel through a scoped one. **It has never been run:** this
+machine's UI-test automation grant has lapsed, and every run dies with `Timed out
+while enabling automation mode` before the app launches. Restore the grant in
+System Settings → Privacy & Security → Accessibility and run
+
+```sh
+xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
+    -derivedDataPath DerivedData -destination 'platform=macOS' \
+    -only-testing:CurrawongOnAirUITests/ChannelDeleteAfterConnectUITests test
+```
+
+The `=== ` prints in its output are the diagnosis. Until then item 3 has a
+best-supported cause rather than a confirmed one, and **no production code has
+been changed for it** — deliberately, because every candidate fix would have been
+a fifth attempt at a mechanism now measured not to happen.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 

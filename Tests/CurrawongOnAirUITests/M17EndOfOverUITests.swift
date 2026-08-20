@@ -149,15 +149,28 @@ final class M17EndOfOverUITests: XCTestCase {
             return
         }
         row(named: name, in: app).rightClick()
-        let delete = app.menuItems["Delete"].firstMatch
+
+        // Scoped to the menu that just opened. The unscoped
+        // `app.menuItems["Delete"]` this used to run also matches the menu bar's
+        // always-greyed `Edit ▸ Delete`, so it found a disabled Delete whether or
+        // not a context menu had opened — which is how BU-9 item 3 came to be
+        // reported as "the item is disabled" rather than "no menu appeared".
+        // A modal alert left over from the session is enough to produce the
+        // second, and only the scoped query can tell them apart.
+        guard waitUntil(timeout: 5, { app.menus.count > 0 }) else {
+            XCTFail(
+                "no context menu opened on '\(name)' — not a disabled Delete, no menu at all. "
+                + "Check for an alert still up from the session.")
+            return
+        }
+        let delete = app.menus.firstMatch.menuItems["Delete"].firstMatch
         guard delete.waitForExistence(timeout: 5) else {
             XCTFail("no Delete item in the channel's context menu")
             return
         }
-        // Expected to fail today: see the defect note in `ChannelListView`.
-        // Delete is dead on any channel this launch has connected to, so this
-        // test cannot yet tidy up after itself, and says so rather than
-        // pretending the channel is gone.
+        XCTAssertTrue(
+            delete.isEnabled,
+            "Delete is disabled in the channel's own context menu after the link came down")
         delete.click()
         XCTAssertTrue(
             waitUntil(timeout: 10) { !self.row(named: name, in: app).exists },
