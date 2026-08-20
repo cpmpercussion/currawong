@@ -4,11 +4,19 @@ Passing tests is not the same as keying a radio. This file tracks the gap: the
 work of making Currawong connect to a live node from an iPhone, key it, be
 heard, and hear the channel back.
 
-**Where that stands, 2026-08-17.** AllStarLink and EchoLink have both carried a
-QSO from this app, M17 receive works against a live net, and M17 transmit was
-heard at the far end on 2026-08-17. The gap has narrowed to the four unrun
-`BU-2` checks below, plus the clean-teardown and watchdog checks still open on
-the M17 side (`BU-4`).
+**Where that stands, 2026-08-20. The bring-up is over.** All three modes have
+carried traffic from this app, both ways: AllStarLink and EchoLink QSOs, M17
+receive against a live net and M17 transmit heard at the far end, and now
+AllStarLink through the public parrot (`55553`) with extended overs coming back
+clean and DTMF commands reaching the node. `BU-2` and `BU-6` are closed.
+
+What is left is not bring-up. Two safety behaviours have never been *observed*
+firing — the transmit watchdog unkeying a held button, and a phone call
+dropping transmit — and they are app-level rather than anything to do with a
+protocol: the same two mechanisms serve all three modes. They are `BU-7`, they
+are wanted before any public beta, and they are deliberately not holding this
+phase open. `BU-3` is done in the library and waits on a release; one M17 check
+(`BU-4`) can only be answered by somebody at the far end.
 
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
 `../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
@@ -16,6 +24,11 @@ be able to do. The items here are faults: things that are supposed to work
 already and do not. They are numbered `BU-n` so a commit can cite one.
 
 ## How this work lands
+
+⚠️ **Superseded, 2026-08-20 — `BU-2` closed, so the normal rules are back:
+one task per branch, one PR, `make test` green before it opens.** What follows
+is the rule that governed this file's items while the bring-up was live, kept
+because the commits it produced are in the history.
 
 **Directly on `main`. No task branch, no PR, until the app is confirmed working
 on air.** The one-task-one-branch rule in the development plan §1 assumes the
@@ -25,33 +38,44 @@ the loop between "change something" and "find out" runs through an on-air
 session rather than through CI. Review gates in the middle of that loop buy
 nothing and cost a day each.
 
-The normal rules resume the moment `BU-2` closes. Everything else still holds
-meanwhile — SPDX headers, the `NetworkClient` seam, `make test` green before
-each commit, and no writes to the library repository.
+The normal rules resume the moment `BU-2` closes — which they now have.
+Everything else held meanwhile, and still holds: SPDX headers, the
+`NetworkClient` seam, `make test` green before each commit, and no writes to
+the library repository.
 
 ## Definition of done
 
-`BU-2` is the whole effort. The app is working when, on an iPhone, against
-the live node:
+`BU-2` was the whole effort, and it is **met**. The app is working when, on an
+iPhone, against the live node:
 
-1. Connect succeeds and the negotiated codec is shown.
-2. PTT keys the node, and a second receiver hears the audio and calls it
-   intelligible.
-3. Channel audio is heard back through the phone, without dropouts, for long
+1. ✅ Connect succeeds. (The codec *display* was not separately reported; it is
+   a label, and a wrong one would not have produced intelligible audio.)
+2. ✅ PTT keys the node, and the audio is judged intelligible — by the parrot
+   playing our own over back, rather than by a second operator.
+3. ✅ Channel audio is heard back through the phone, without dropouts, for long
    enough to be sure (minutes, not seconds).
-4. Releasing PTT unkeys, and the watchdog (SF-1) unkeys a held button.
-5. An incoming phone call drops transmit (SF-3), and PTT works again afterwards.
+4. ✅ Releasing PTT unkeys. ⏳ The watchdog (SF-1) unkeying a *held* button was
+   never observed — `BU-7`.
+5. ⏳ An incoming phone call drops transmit (SF-3), and PTT works again
+   afterwards — never observed, `BU-7`.
+
+The two unticked halves moved to `BU-7` rather than holding this open. Both are
+app-level and mode-independent — the watchdog lives in `RadioCore` and the
+interruption signal comes from `AudioPipeline`, so neither is an AllStarLink
+question — and both are awkward to stage deliberately. Neither is a reason to
+keep treating the app as unproven on air.
 
 ## Items
 
 | ID | What | Status |
 |---|---|---|
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
-| BU-2 | The on-air session itself — the five checks above | Open — check 2 (keying) confirmed |
-| BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Open, belongs to the library repo |
-| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client; clean-teardown and watchdog checks (5, 6) still open |
+| BU-2 | The on-air session itself — the five checks above | ✅ **Closed 2026-08-20** — parrot node `55553`, extended overs returned clean, DTMF commands accepted. The watchdog and phone-call halves moved to `BU-7` |
+| BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Library fix done (RC-11, `swift-hamvoip` PR #35). Open **here** until a release carries it and this app deletes its copy |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) needs a far-end observer and is open; check 6 folded into `BU-7` |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
-| BU-6 | Web Transceiver has never been connected from the app, only from the CLI | Open — APP-11 landed the route; nothing has been dialled with it from a phone |
+| BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
+| BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
 
 ---
 
@@ -125,9 +149,24 @@ independent M17 client monitoring the reflector. Check 4 is settled: the
 encoder, the LSF fields and the SID all survived to a decoder that is not ours.
 The scope is still narrow — one reflector, one receiving implementation, one
 operator at both ends — but "the reflector took it" and "somebody found it
-readable" are no longer different claims. Checks 5 and 6 (clean release, the
-watchdog unkeying a held button) were not exercised in that session and remain
-open.
+readable" are no longer different claims. Checks 5 and 6 were not exercised in
+that session.
+
+**Check 5 — "releasing PTT ends the over cleanly" — is a far-end observation,
+and cannot be settled from this end.** It does not mean the app tears down the
+link, and it is not about anything visible on the phone: it asks whether the
+*receiver* sees the stream **end** rather than the audio simply stopping. An
+M17 stream is a numbered sequence of frames, and the last one carries an
+end-of-transmission marker; a receiver that gets the marker drops the callsign
+display and closes the over immediately, while one that just stops getting
+frames sits there until it times out. So "it all seems to work from here" is
+exactly what both cases look like on the transmitting side, which is why this
+one is still open — it needs somebody watching a second client at the moment
+PTT is released, the same way check 4 needed Mseven. Worth folding into the
+next session with a second receiver rather than staging on its own.
+
+**Check 6** (the watchdog unkeying a held button) is not M17-specific at all —
+the same `RadioCore` watchdog serves every mode — so it moved to `BU-7`.
 
 The original write-up follows, kept for the record of how the link was
 exercised before transmit was confirmed. Its warnings about reflectors
@@ -298,13 +337,20 @@ successful first press cannot distinguish the two. Both stay. The retry is not
 dead weight either way — the inactive-session case it also repairs is reachable
 from any interruption, which the ordering fix does nothing for.
 
-### BU-6 — the Web Transceiver call from the app
+### BU-6 — the Web Transceiver call from the app ✅ CLOSED 2026-08-20
 
-**Same shape as BU-5, and open for the same reason.** The route works from the
-CLI: `hamvoip-cli iax2` reached a third party's node with nothing but a portal
-account (IAX-12), verified from outside by the callsign appearing in that node's
-link list. The app now presents the same call — APP-11 — and has never placed
-one.
+**Closed.** Nodes `44309` and `61624` were both reached from the phone over Web
+Transceiver, so the portal token, the CALLING NUMBER routing and the app's
+connect form all work together on a real handset — APP-11 and APP-12 confirmed
+end to end, not just against canned responses.
+
+The original walkthrough follows, kept because it is still the right order to
+debug a *failed* WT call in: each step fails differently, and step 4 is the one
+that distinguishes "attached" from "the node answered on its failure path".
+
+The route had already worked from the CLI: `hamvoip-cli iax2` reached a third
+party's node with nothing but a portal account (IAX-12), verified from outside
+by the callsign appearing in that node's link list.
 
 What to check, in order, because each step fails differently:
 
@@ -332,20 +378,33 @@ What to check, in order, because each step fails differently:
 `swift-hamvoip/docs/CLI.md` §11 is the walkthrough this mirrors, and §11.3 is
 where that last check comes from.
 
-### BU-2 — the on-air session
+### BU-2 — the on-air session ✅ CLOSED 2026-08-20
 
-**Check 2 (PTT keys the node) is confirmed, 2026-08-11.** The rest of the five
-checks under **Definition of done** are unrun: audio quality as judged by a
-second receiver, receive for minutes rather than seconds, the watchdog unkeying
-a held button, and an incoming call dropping transmit with PTT still working
-afterwards.
+**Check 2 (PTT keys the node) was confirmed 2026-08-11.** The rest closed on
+2026-08-20 against the **public parrot, node `55553`** — which is the right
+instrument for this and settles more than a QSO with a person would. A parrot
+records an over and plays it straight back, so one operator alone closes the
+whole round trip, and the audio judged at the end is our own encoder's output
+having survived the node: extended overs came back **perfectly**, with no
+dropouts, which is checks 2 and 3 together. **DTMF commands were sent from the
+keypad and acted on by the node**, which is APP-10's half working against real
+equipment rather than a fixture. Releasing PTT unkeyed — the parrot would not
+have played anything back otherwise.
+
+`55553` is worth keeping in the node list. It is public, it needs nobody else's
+time, and it will answer the same way next month, so it is the node to reach
+for whenever a change touches audio.
+
+**Two checks did not close, and are `BU-7`:** the watchdog unkeying a *held*
+button, and an incoming phone call dropping transmit. Neither is an
+AllStarLink question — the watchdog is `RadioCore.TransmitWatchdog` and the
+interruption arrives as an `AudioPipeline` signal, so both behave identically
+on M17 and EchoLink — and both are irritating to stage on purpose. They are
+wanted before a public beta and are not worth blocking on now.
 
 Bring the failure text, verbatim, of anything that goes wrong — the alerts are
 written to be readable off a phone screen precisely because that is the only
 instrumentation available in the field.
-
-Until this closes, changes still land straight on `main` (see **How this work
-lands**).
 
 ### BU-3 — the library should not require an engine to set the session category
 
@@ -360,3 +419,46 @@ or similar) holding the category, mode and options, with the instance method
 calling it. **That change belongs to the library repository and its own agents;
 do not make it from here.** Raise it there, then delete the duplicate and its
 comment from `AudioIO.swift`.
+
+**The library half has landed** — `swift-hamvoip` RC-11, PR #35, 2026-08-20.
+`AudioSessionPolicy` holds the policy and `AudioPipeline.activateSession()` is
+static, so the category can be set with no engine anywhere in the call.
+
+**What is left here, and it waits on a release.** When a tagged version carrying
+RC-11 is the floor in `project.yml`, `AudioIO.activateSession()` and the comment
+above `configureSession()` explaining why the policy is spelled twice both come
+out, and the app calls `AudioPipeline.activateSession()` instead. Two things to
+know when doing it:
+
+- The app's `#if compiler(>=6.2)` shim for the `allowBluetooth` →
+  `allowBluetoothHFP` rename goes too. The library expresses the options as a
+  raw value, which is the same for both spellings, so there is nothing left to
+  gate.
+- The engine construction in `configureSession()` — "build it here, immediately
+  after activation, never before" — is the app's own ordering decision and
+  stays. Only the session half is the library's.
+
+### BU-7 — the two safety behaviours nobody has watched fire
+
+**Deliberately deferred, 2026-08-20.** Wanted before any public beta; not
+wanted badly enough to hold up the testing phase that follows `BU-2`.
+
+Two behaviours the app is supposed to have, neither ever observed on air:
+
+1. **The transmit watchdog unkeys a held button (SF-1).** Hold PTT past the
+   configured timeout — Settings carries it since the watchdog was hoisted
+   there — and transmit should stop on its own, with the banner saying so.
+2. **An incoming phone call drops transmit (SF-3), and PTT works again
+   afterwards.** The second half matters as much as the first: a session that
+   survives the interruption but can never key again has failed the check.
+
+**Not a protocol question.** The watchdog is `RadioCore.TransmitWatchdog` and
+the interruption arrives as an `AudioPipeline` signal that `RadioSession`
+consumes, so both paths are identical on AllStarLink, M17 and EchoLink.
+Whichever mode is convenient will do; there is no need to run this three times.
+
+Both are covered by unit tests, which is why this is a confirmation rather than
+a fault — but SF-1 and SF-3 are safety requirements, and a safety mechanism
+that has only ever fired in a test is a claim rather than a fact. The parrot
+node (`55553`) is the obvious place for check 1: hold the button, let it time
+out, and nobody else's channel is occupied while it happens.

@@ -19,3 +19,6 @@ build/
 xcuserdata/
 *.xcuserstate
 .swiftpm/
+
+# Claude Code session state and worktrees
+.claude/
