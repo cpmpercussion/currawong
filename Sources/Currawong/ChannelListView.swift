@@ -96,26 +96,42 @@ struct ChannelListView: View {
         }
     }
 
-    /// ## ⚠️ Known defect: Delete dies on a channel that has been connected to
+    /// ## BU-9 item 3: the menu this builds is not the defect
     ///
-    /// On macOS, right-click → Delete is greyed out and does nothing for any
-    /// channel this launch has connected to, **even after the link is fully
-    /// down** — the app reads "Not connected", the lock label is gone, the row
-    /// itself is enabled, and the menu item is still disabled. A channel that
-    /// has never been connected to deletes perfectly well, which is what makes
-    /// this easy to miss. macOS has no swipe-to-delete, so on that platform
-    /// there is then no way to remove the channel at all.
+    /// The bring-up report has right-click → Delete greyed out for ever on any
+    /// channel a launch has connected to, **after** the link is fully down. That
+    /// was measured through an XCUITest, and the menu it measured was the wrong
+    /// one.
     ///
-    /// Found by the on-air UI test (BU-8), which could not clean up after
-    /// itself. `ChannelLifecycleUITests` is the passing never-connected case.
+    /// `ChannelListContextMenuTests` looks at the `NSMenu` the platform actually
+    /// displays for a row, driving a real connect and disconnect through the
+    /// session. What it finds:
     ///
-    /// **Ruled out so far:** the item's own `.disabled(!isMutable)` (removing it
-    /// changes nothing), the order of `.disabled` and `.contextMenu` (swapping
-    /// them changes nothing), and the session state itself
-    /// (`RadioSession.deleteChannel(_:)`'s guard is satisfied — the app is
-    /// `.disconnected` when this is attempted). The remaining suspect is the
-    /// row's `contextMenu` content not being rebuilt after the connection
-    /// state changes; `.id()` on the row did not force it either.
+    /// - SwiftUI **rebuilds** this menu on every read of the row's `view.menu`.
+    ///   A menu read while the list was locked carries `isEnabled == false` and a
+    ///   `nil` action, and keeps them for ever — but the row hands out a fresh,
+    ///   live one the moment `isMutable` is true again.
+    /// - After a connect/disconnect cycle, Delete is enabled on the connected
+    ///   channel *and* on a row that merely sat in the list while it was locked,
+    ///   and sending its action deletes the channel. So the `.disabled` below
+    ///   does not leave `isEnabled = false` behind in the row's subtree, which is
+    ///   what the four earlier attempts were all trying to fix.
+    ///
+    /// So nothing here changed. What did change is the test's query:
+    /// `app.menuItems["Delete"]` is not scoped to the context menu, and every
+    /// SwiftUI app on macOS has an always-greyed `Edit ▸ Delete` in the menu bar.
+    /// An unscoped query finds *that* — existing, disabled, and clicking
+    /// nothing — whether or not the row's menu ever opened. A modal alert left
+    /// standing after the session (`handleLinkLoss` presents one, and so does a
+    /// failed connect) is enough to stop the menu opening while leaving every
+    /// other symptom the report lists intact: "Not connected", no lock label, the
+    /// row enabled.
+    ///
+    /// **Unconfirmed end to end.** The scoped-query UI tests
+    /// (`ChannelDeleteAfterConnectUITests`) that would settle it have not been
+    /// run: this machine's UI-test automation grant has lapsed. Until somebody
+    /// runs them, item 3's cause is the best-supported explanation rather than a
+    /// closed one, and the ⚠️ belongs on the *report*, not on this view.
     private var list: some View {
         List {
             ForEach(session.channels.channels) { channel in
