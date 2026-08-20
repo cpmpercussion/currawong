@@ -101,11 +101,18 @@ enum PortalLoginFailure: Error, Equatable, CustomStringConvertible {
 ///
 /// It is cleared on success, and cleared again when the portal says the login
 /// failed. Retaining it would buy a silent re-fetch — and the token is stable
-/// across calls (OQ-10), so there is nothing to re-fetch: a token that has
-/// stopped working is a token the portal has changed its mind about, and asking
-/// again is then the honest thing to do. So the app holds one credential where
-/// it could have held two, and the one it holds is the one that is not a login
-/// to a web account the operator uses elsewhere.
+/// across calls, so there is nothing to re-fetch: a token that has stopped
+/// working is a token the portal has changed its mind about, and asking again is
+/// then the honest thing to do. So the app holds one credential where it could
+/// have held two, and the one it holds is the one that is not a login to a web
+/// account the operator uses elsewhere.
+///
+/// AllStarLink have since confirmed *why* the token is stable, which is worth
+/// having on the record because this decision rests on it: it changes only when
+/// the operator changes their portal password (community thread 24925,
+/// 2026-08-18). So the re-prompt above is honest — the one event that
+/// invalidates a token is an event the operator performed and can be asked
+/// about.
 @MainActor
 final class PortalLoginController: ObservableObject {
     /// Typed into the password field. Cleared by the controller; see the note
