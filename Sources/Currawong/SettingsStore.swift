@@ -8,12 +8,14 @@ import Foundation
 /// defaults database — a unit test that writes to `UserDefaults.standard`
 /// leaks into every later run on the same machine.
 ///
-/// **Two shapes, deliberately.** ``load()``/``save(_:)`` are the single-node
+/// **Three shapes, deliberately.** ``load()``/``save(_:)`` are the single-node
 /// store this app had before APP-4, and they are still here because they are
 /// what the migration reads: an operator updating the app has exactly one node
 /// in that key, and it must come forward as their first channel rather than
 /// vanish. ``loadChannels()``/``saveChannels(_:)`` are the list everything
-/// above this file now uses.
+/// above this file now uses, and ``loadDrafts()``/``saveDrafts(_:)`` are the
+/// unsaved edits to it (BU-9), which are deliberately a third thing rather than
+/// a state the channel list can be in.
 protocol SettingsStore: AnyObject, Sendable {
     func load() -> NodeSettings?
     func save(_ settings: NodeSettings)
@@ -29,6 +31,22 @@ protocol SettingsStore: AnyObject, Sendable {
     /// if the one that was has since been deleted.
     func loadSelectedChannelID() -> UUID?
     func saveSelectedChannelID(_ id: UUID?)
+
+    /// **BU-9.** The unsaved edits, one per channel they belong to, or `nil` if
+    /// none has ever been written.
+    ///
+    /// A draft *is* a channel value — the same ``NodeSettings``, carrying the
+    /// same ``NodeSettings/id`` as the stored channel it was edited from — so
+    /// this is a plain array and each element is its own key. A draft whose id is
+    /// in no channel is a channel that has never been saved, which needs no
+    /// special case here or anywhere above.
+    ///
+    /// Kept apart from ``loadChannels()`` because the whole point is that the
+    /// two disagree: the channel list is what the operator saved, and this is
+    /// what they were in the middle of typing when the app went away. Merging
+    /// them would be the overwrite BU-9 exists to stop.
+    func loadDrafts() -> [NodeSettings]?
+    func saveDrafts(_ drafts: [NodeSettings])
 
     /// The operator — callsign, name and location — which is app-wide rather
     /// than per channel.
@@ -98,6 +116,7 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// operator who downgrades still finds their node where they left it.
     private static let key = "au.charlesmartin.currawong.nodeSettings"
     private static let channelsKey = "au.charlesmartin.currawong.channels"
+    private static let draftsKey = "au.charlesmartin.currawong.channelDrafts"
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
     private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
     private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
@@ -129,6 +148,16 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     func saveChannels(_ channels: [NodeSettings]) {
         guard let data = try? JSONEncoder().encode(channels) else { return }
         defaults.set(data, forKey: Self.channelsKey)
+    }
+
+    func loadDrafts() -> [NodeSettings]? {
+        guard let data = defaults.data(forKey: Self.draftsKey) else { return nil }
+        return try? JSONDecoder().decode([NodeSettings].self, from: data)
+    }
+
+    func saveDrafts(_ drafts: [NodeSettings]) {
+        guard let data = try? JSONEncoder().encode(drafts) else { return }
+        defaults.set(data, forKey: Self.draftsKey)
     }
 
     func loadSelectedChannelID() -> UUID? {

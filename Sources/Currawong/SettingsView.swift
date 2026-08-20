@@ -135,7 +135,11 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.characters)
                     #endif
                     .autocorrectionDisabled()
-                    .onSubmit { session.saveDraft() }
+                    // BU-9: `stashDraft()`, not `saveDraft()`. The callsign is
+                    // app-wide and this persists it, and the settings screen has
+                    // no business overwriting whichever channel happens to be
+                    // selected — which is exactly what the old call did.
+                    .onSubmit { session.stashDraft() }
             }
 
             Text(
