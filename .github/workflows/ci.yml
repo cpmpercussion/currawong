@@ -1,5 +1,15 @@
 name: CI
-on: [push, pull_request]
+# **Push is scoped to `main`.** `on: [push, pull_request]` fires both events for
+# every commit on a branch with an open PR, so the whole matrix ran twice per
+# commit for no extra coverage.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The nightly full run — see the note on the iOS Simulator step.
+  schedule:
+    - cron: '0 16 * * *'  # 02:00 AEST
+  workflow_dispatch:
 
 jobs:
   spdx:
@@ -62,7 +72,22 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
 
+      # **Not on pull requests**, where it was 447s of a 634s run — 71% of the
+      # wall clock a task waits on. It is also the *cheapest* step to move,
+      # because it covers less than the macOS run does: `Tests/` has one
+      # platform gate in 41 files, `#if os(macOS)` in
+      # `ChannelListContextMenuTests`, and no `#if os(iOS)` anywhere. So the
+      # simulator executes the same test code as macOS, minus the macOS-only
+      # test, at four times the cost. The iOS-only source that does exist is
+      # mostly view modifiers, which is compile risk — and `Build (iOS)` above
+      # catches that in 61s. No test references `ActivityKitPresenter`, and
+      # `AudioIO` and `CoreBluetoothCentral` are reached through `Fakes.swift`.
+      #
+      # It still runs on every merge to `main`, nightly, and on demand, so an
+      # iOS-only runtime regression is caught within a day and cannot reach a
+      # release. What it no longer does is gate each PR.
       - name: Test (iOS Simulator)
+        if: github.event_name != 'pull_request'
         run: |
           xcodebuild test \
             -scheme Currawong \
