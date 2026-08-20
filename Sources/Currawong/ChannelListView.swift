@@ -96,6 +96,26 @@ struct ChannelListView: View {
         }
     }
 
+    /// ## ⚠️ Known defect: Delete dies on a channel that has been connected to
+    ///
+    /// On macOS, right-click → Delete is greyed out and does nothing for any
+    /// channel this launch has connected to, **even after the link is fully
+    /// down** — the app reads "Not connected", the lock label is gone, the row
+    /// itself is enabled, and the menu item is still disabled. A channel that
+    /// has never been connected to deletes perfectly well, which is what makes
+    /// this easy to miss. macOS has no swipe-to-delete, so on that platform
+    /// there is then no way to remove the channel at all.
+    ///
+    /// Found by the on-air UI test (BU-8), which could not clean up after
+    /// itself. `ChannelLifecycleUITests` is the passing never-connected case.
+    ///
+    /// **Ruled out so far:** the item's own `.disabled(!isMutable)` (removing it
+    /// changes nothing), the order of `.disabled` and `.contextMenu` (swapping
+    /// them changes nothing), and the session state itself
+    /// (`RadioSession.deleteChannel(_:)`'s guard is satisfied — the app is
+    /// `.disconnected` when this is attempted). The remaining suspect is the
+    /// row's `contextMenu` content not being rebuilt after the connection
+    /// state changes; `.id()` on the row did not force it either.
     private var list: some View {
         List {
             ForEach(session.channels.channels) { channel in

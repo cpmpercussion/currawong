@@ -76,6 +76,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
+| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test; (1) and (2) are a design question for the maintainer, (3) is an unexplained defect |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app half is a UI test that drives a real over — keying and release confirmed — but no audio has reached the reflector yet, so the far-end question is still unanswered |
 
 ---
@@ -485,33 +486,51 @@ xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
   It is a one-time grant in System Settings → Privacy & Security →
   Accessibility, and cannot be scripted: the TCC database is SIP-protected.
 - ✅ **The app keys and unkeys correctly.** `press(forDuration:)` on the
-  `DragGesture`-based PTT control drives a real over, and the transmit banner —
-  which renders only while transmitting — clears within a moment of the
-  release. Read the banner with a narrow query (`app.staticTexts["On air."]`):
-  a `descendants(matching: .any)` predicate takes minutes against this tree and
-  times out. **A snapshot taken immediately after the press still shows the
-  banner**, which reads alarmingly like a stuck key and is not one — it is a
-  frame the app has not re-rendered yet. Wait before believing it.
+  `DragGesture`-based PTT control drives a real over, and afterwards the app
+  reads `Connected. Listening.` with no `On air.` — the transmit banner renders
+  only while transmitting. **A snapshot taken the instant the press returns
+  still shows the banner**, which reads alarmingly like a stuck key and is not
+  one: it is a frame the app has not re-rendered. Wait before believing it.
+- ⚠️ **Match SwiftUI text on `value`, not by subscript.** A SwiftUI `Text`
+  arrives with an empty accessibility *label* and its string in `value`, so
+  `app.staticTexts["On air."]` matches nothing at all and every assertion built
+  on it passes vacuously. An earlier run reported the release as confirmed on
+  exactly that basis, having checked nothing. Use
+  `app.staticTexts.matching(NSPredicate(format: "value == %@", …))` — and keep
+  queries narrow either way: `descendants(matching: .any)` with a predicate ran
+  218 seconds against this tree and timed out.
 - ⏳ **No audio reaches the reflector.** Every over so far has been silent at
-  the observer: link up, PTT keyed, banner shown, and `Inbound streams heard:
-  0`. No microphone prompt ever appeared, which is the suspicious part — an app
-  launched by the test runner does not get to ask. Until that is settled the
-  test cannot answer BU-8, because an over with no frames in it has no final
-  frame either. **Grant Currawong the microphone by running it normally once**,
-  keying it by hand, and answering the prompt; then re-run the test.
-- **The form's fields carry no accessibility labels** — SwiftUI gives a
-  `TextField` its placeholder and nothing else — so `connect.host`,
-  `connect.module` and `connect.callsign` are identifiers on the app side. That
-  is the only production change this needed.
-- **The test leaves the current channel pointed at the reflector.** Restoring it
-  in a teardown block was tried and removed: the runner holds keyboard focus
-  once the body ends, `app.activate()` does not take it back, and a teardown
-  that cannot type fails a test that otherwise passed.
-  `ChannelRestoreUITests` puts a channel back, driven by `TEST_RUNNER_`-prefixed
-  environment variables (the plain names do not reach the runner):
+  the observer: link up, PTT keyed, banner shown, `Inbound streams heard: 0`.
+  No microphone prompt ever appeared, which is the suspicious part — an app
+  launched by a test runner does not get to ask. One run also carried an SF-3
+  banner, *"Transmission stopped: the audio route changed"*, which would drop
+  transmit on its own and is worth ruling in or out before blaming the
+  permission. Until this is settled the test cannot answer BU-8: an over with
+  no frames in it has no final frame either. **Grant Currawong the microphone
+  by running it normally once**, keying it by hand, and answering the prompt.
+- **The form's fields had no accessibility labels at all.** SwiftUI gives a
+  `TextField` its placeholder and nothing else, so VoiceOver announced
+  "node.example.org, text field" with no way to know it was the host. Fixed in
+  `LabelledField`, which now names its content; the fields this test drives
+  also carry identifiers (`connect.host`, `connect.module`,
+  `connect.channelName`). The UI test hitting that wall was the symptom: if a
+  screen reader cannot name the controls, nothing else can either.
+- **The test brings its own channel** — adds one, uses it, and tries to delete
+  it — after an earlier version silently repointed a real channel at the test
+  reflector. The delete does not work: see `BU-9`, which this test found.
+- **macOS asks for a password on most runs.** That is developer-tools
+  authorisation for the runner taking control of the app, and it recurs because
+  the runner is re-signed ad hoc on every build. `sudo DevToolsSecurity -enable`
+  stops the asking. The Accessibility grant lapses the same way, showing up as
+  `Timed out while enabling automation mode`.
+
+  `ChannelRestoreUITests` puts a channel back where it belongs, driven by
+  `TEST_RUNNER_`-prefixed environment variables (the plain names do not reach
+  the runner):
 
 ```sh
-TEST_RUNNER_RESTORE_HOST=<host> TEST_RUNNER_RESTORE_MODULE=<letter> \
+TEST_RUNNER_RESTORE_CHANNEL='<name>' TEST_RUNNER_RESTORE_HOST=<host> \
+  TEST_RUNNER_RESTORE_MODULE=<letter> \
   xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
   -derivedDataPath DerivedData -destination 'platform=macOS' \
   -only-testing:CurrawongOnAirUITests/ChannelRestoreUITests test
@@ -569,6 +588,47 @@ Capturing it costs nothing and settles any later disagreement:
 ```sh
 sudo tcpdump -i any -w ../experiment-data/m17-bu8.pcap 'udp port 17000'
 ```
+
+### BU-9 — the channel model is lossy in both directions
+
+**Found by trying to drive the app, 2026-08-20**, and worth stating plainly:
+these are not test problems. A UI test is just an operator who never gets
+bored, and every one of these is something a person can hit.
+
+**1. Edits are not saved unless you connect or switch channel.** The connect
+form edits a *draft*; the draft reaches the channel list only through
+`connect()`, `select()` or `addChannel()`. There is no save on quit —
+`RootView`'s `scenePhase` handler calls `setForeground(_:)` and nothing else.
+So: open the app, correct a channel's host, quit. The correction is gone, with
+no warning and nothing to undo. This was measured rather than reasoned: fields
+typed and verified on screen, app closed, defaults unchanged.
+
+**2. When an edit *is* saved, it overwrites the selected channel in place, and
+the name does not follow.** `name` is only a fallback for `displayName`, so a
+channel called `M17-432 H` that gets pointed at a different reflector keeps
+calling itself `M17-432 H` for ever. That is how this test repointed a real
+channel while looking like it had done nothing.
+
+Together the two are the bad combination: **the edit is lost when you wanted
+it, and applied when you did not.**
+
+**3. Delete is dead on macOS for any channel connected to this launch.**
+Right-click → Delete is greyed out and does nothing, *after* the link is fully
+down — the app reads `Not connected`, the lock label is gone, the row itself is
+enabled, and the item is still disabled. A channel never connected to deletes
+perfectly well (`ChannelLifecycleUITests` passes), which is what makes this easy
+to miss. macOS has no swipe-to-delete, so there is then **no way at all** to
+remove that channel from that platform. Ruled out: the menu item's own
+`.disabled(!isMutable)`, the order of `.disabled` and `.contextMenu`, `.id()`
+on the row, and the session guard in `RadioSession.deleteChannel(_:)` (which is
+satisfied). The remaining suspect is the row's context menu not being rebuilt
+after the connection state changes.
+
+**Not fixed here, deliberately.** (1) and (2) are one design question — what a
+channel *is*, and when an edit belongs to it — and answering it by adding a
+`saveDraft()` on quit would make accidental overwrites permanent rather than
+merely possible. That is the maintainer's call. (3) is a bug with no design
+question in it, but no fix found yet.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 
