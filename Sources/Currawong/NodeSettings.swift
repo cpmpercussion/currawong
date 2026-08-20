@@ -250,6 +250,30 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// Where this channel actually points, in the terms the mode uses.
+    ///
+    /// The companion to ``displayName``, and deliberately *not* a fallback for
+    /// it: `displayName` prefers the operator's own name, so a channel called
+    /// "Sunday net" says nothing about where it goes. A radio shows the
+    /// frequency it is tuned to whether or not the memory has a name, and this
+    /// is that line. It also makes an unsaved edit visible — the name stays put
+    /// while the address underneath it changes.
+    var addressDescription: String {
+        switch mode {
+        case .allStarLink:
+            let target = host.isEmpty ? "no host" : host
+            return node.isEmpty ? target : "node \(node) at \(target)"
+        case .m17:
+            let target = host.isEmpty ? "no reflector" : host
+            return module.isEmpty ? target : "\(target) · module \(module)"
+        case .echoLink:
+            // The proxy is not a channel field (APP-13), so the peer address is
+            // the whole of where this goes.
+            let target = peer.isEmpty ? "no address" : peer
+            return node.isEmpty ? target : "\(node) · \(target)"
+        }
+    }
+
     /// Decodes settings, **including settings written before this type had a
     /// mode or a module.**
     ///

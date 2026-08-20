@@ -110,7 +110,16 @@ struct PushToTalkButton: View {
                 }
             }
         }
-        .frame(minHeight: 190)
+        // **A touch target on iOS, a pointer target on macOS.** 190 points was
+        // chosen for a thumb, and a Mac has no thumbs — it cost most of a short
+        // window's detail column for a control a mouse hits at any size. The
+        // button stays full-width in both, which is the part that makes it
+        // findable without looking; only the height differs.
+        #if os(macOS)
+            .frame(minHeight: 120)
+        #else
+            .frame(minHeight: 190)
+        #endif
         .accessibilityElement()
         .accessibilityLabel("Push to talk")
         .accessibilityValue(isTransmitting ? "Transmitting" : "Not transmitting")
