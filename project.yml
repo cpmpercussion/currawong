@@ -196,3 +196,33 @@ targets:
         # (Contents/MacOS).
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Currawong.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Currawong"
         BUNDLE_LOADER: "$(TEST_HOST)"
+
+  # On-air UI test (BU-8). NOT in the Currawong scheme's testTargets, and that
+  # omission is the whole point: this target *transmits*, so it must never run
+  # under `make test` or in CI. It runs from its own scheme, deliberately, and
+  # only when somebody means it.
+  CurrawongOnAirUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [macOS]
+    sources:
+      - Tests/CurrawongOnAirUITests
+    dependencies:
+      - target: Currawong
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: au.charlesmartin.currawong.onair-uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Currawong
+
+schemes:
+  # The on-air test's own scheme. `make test` uses the Currawong scheme, which
+  # does not list this target, so the two cannot be run by accident.
+  CurrawongOnAir:
+    build:
+      targets:
+        Currawong: [test]
+        CurrawongOnAirUITests: [test]
+    test:
+      targets:
+        - CurrawongOnAirUITests
+      gatherCoverageData: false
