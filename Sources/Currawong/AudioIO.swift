@@ -5,6 +5,10 @@ import RadioCore
 
 #if os(iOS)
 import AVFAudio
+#else
+// `AVCaptureDevice` is how a macOS app asks for the microphone — see
+// `requestRecordPermission()`.
+import AVFoundation
 #endif
 
 /// The app's view of the audio hardware.
@@ -228,7 +232,30 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             }
         }
         #else
-        return true
+        // macOS never asked, and returning `true` here was a lie that cost the
+        // operator their first over: with nothing having prompted, the *first
+        // capture attempt* is what triggers the system dialog, and that press
+        // puts no audio on air. Observed on 2026-08-20 — press once, nothing;
+        // the microphone indicator appears in the menu bar; press again, and
+        // now there are levels. Asking here moves the prompt to connect time,
+        // where the operator is already waiting and no over is at stake.
+        //
+        // `AVCaptureDevice` rather than `AVAudioApplication`: the latter is
+        // iOS-only, and this app is not sandboxed, so there is no
+        // `com.apple.security.device.audio-input` entitlement in play — only
+        // TCC, which this is the way to ask.
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        default:
+            // Denied or restricted. Answering instantly and identically on
+            // every later connect is the same contract the iOS branch has.
+            return false
+        }
         #endif
     }
 
