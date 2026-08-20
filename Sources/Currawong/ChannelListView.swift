@@ -141,6 +141,12 @@ struct ChannelListView: View {
                     ChannelRow(
                         channel: channel,
                         isSelected: channel.id == session.channels.selectedID,
+                        // BU-9: the row shows the *stored* channel, and an edit
+                        // no longer reaches it on its own — so where the two
+                        // disagree the list has to say so, or the operator is
+                        // reading a description of somewhere they are not about
+                        // to call.
+                        hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
                         isConnected: channel.id == session.channels.selectedID
                             && session.connection != .disconnected,
                         connectionLabel: session.connection.label)
@@ -187,6 +193,11 @@ struct ChannelListView: View {
 private struct ChannelRow: View {
     let channel: NodeSettings
     let isSelected: Bool
+
+    /// **BU-9.** Whether there is an edit to this channel that it does not yet
+    /// contain. Shown, because the alternative is a row that quietly describes
+    /// something other than what pressing Connect would call.
+    let hasUnsavedEdits: Bool
     let isConnected: Bool
     let connectionLabel: String
 
@@ -213,6 +224,12 @@ private struct ChannelRow: View {
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.green)
                     }
+
+                    if hasUnsavedEdits {
+                        Text("Edited")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 Text(destination)
@@ -228,7 +245,8 @@ private struct ChannelRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(channel.displayName), \(channel.mode.displayName), \(destination)"
-            + (isConnected ? ", \(connectionLabel)" : ""))
+            + (isConnected ? ", \(connectionLabel)" : "")
+            + (hasUnsavedEdits ? ", unsaved changes" : ""))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

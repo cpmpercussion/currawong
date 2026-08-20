@@ -371,6 +371,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: NodeSettings?
     private var storedChannels: [NodeSettings]?
+    private var storedDrafts: [NodeSettings]?
     private var storedSelectedID: UUID?
     private var storedIdentity: OperatorIdentity?
     private var storedGain: TransmitGain?
@@ -525,6 +526,21 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// **BU-9.** The unsaved edits. `nil` until something writes them, the same
+    /// way the channel list is, so a test can tell "never stashed" from
+    /// "stashed and then cleared".
+    func loadDrafts() -> [NodeSettings]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedDrafts
+    }
+
+    func saveDrafts(_ drafts: [NodeSettings]) {
+        lock.lock()
+        storedDrafts = drafts
+        lock.unlock()
+    }
+
     func loadSelectedChannelID() -> UUID? {
         lock.lock()
         defer { lock.unlock() }
@@ -540,6 +556,14 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     var saved: NodeSettings? { load() }
 
     var savedChannels: [NodeSettings]? { loadChannels() }
+
+    /// What the last stash wrote, as a dictionary keyed the way the session
+    /// holds it — the order the values come out in is not meaningful.
+    var savedDrafts: [UUID: NodeSettings] {
+        Dictionary((loadDrafts() ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in
+            latest
+        })
+    }
 
     var savedSelectedID: UUID? { loadSelectedChannelID() }
 
@@ -812,13 +836,21 @@ final class SessionHarness {
         gain: TransmitGain? = nil,
         timeout: TransmitTimeout? = nil,
         receiveGain: ReceiveGain? = nil,
-        echoLinkProxy: StoredEchoLinkProxy? = nil
+        echoLinkProxy: StoredEchoLinkProxy? = nil,
+        reusing previous: SessionHarness? = nil
     ) {
-        self.settingsStore = InMemorySettingsStore(
-            initial: settings, channels: channels, selectedID: selectedID, identity: identity,
-            gain: gain, timeout: timeout, receiveGain: receiveGain,
-            echoLinkProxy: echoLinkProxy)
-        self.secretStore = InMemorySecretStore(initial: secrets)
+        // `reusing:` is how a test quits and relaunches the app: a second
+        // session over the store and the Keychain the first one left behind,
+        // with every other argument ignored because the stores already hold
+        // whatever the first session put there. Anything less than a whole new
+        // `RadioSession` would not test the launch path (BU-9).
+        self.settingsStore =
+            previous?.settingsStore
+            ?? InMemorySettingsStore(
+                initial: settings, channels: channels, selectedID: selectedID, identity: identity,
+                gain: gain, timeout: timeout, receiveGain: receiveGain,
+                echoLinkProxy: echoLinkProxy)
+        self.secretStore = previous?.secretStore ?? InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks
         self.session = RadioSession(
