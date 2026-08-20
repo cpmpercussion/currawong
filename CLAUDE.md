@@ -23,7 +23,11 @@ history and its own agents.
   committed** — change `project.yml`, then `make generate`. So is
   `Sources/Currawong/Info.plist`; edit the `info.properties` block in
   `project.yml` instead.
-- Deployment targets iOS 16 / macOS 13, matching the library.
+- Deployment targets **iOS 16.2** / macOS 13. The iOS floor was 16.0, matching
+  the library; APP-3 raised it for ActivityKit — 16.1 for the framework, 16.2
+  for `ActivityContent`, `update(_:)` and `end(_:dismissalPolicy:)`, which are
+  the three that stop the Live Activity from lying. **The library's floor stays
+  at iOS 16.0** and must not be bumped from here.
 
 ## Hard rules (violations get the PR closed)
 

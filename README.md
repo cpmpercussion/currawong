@@ -96,8 +96,21 @@ once and migrated, never written again.
 
 **Panes rather than one long screen.** A sidebar of channels beside the live
 session on macOS and iPad, tabs on iPhone, with the transmit banner outside the
-container so it is visible from every pane (SF-4's stand-in until the Live
-Activity lands).
+container so it is visible from every pane. Its lock-screen counterpart is the
+Live Activity below.
+
+**A Live Activity while transmitting (SF-4).** Transmit state on a locked
+iPhone, because the failure this project is arranged around is a phone in a
+pocket with the microphone open. It names the channel and the mode, says whether
+letting go will unkey, and counts the watchdog down. What it mostly does is
+*end*: on release, on the watchdog, on the accessory link dropping, on an
+interruption, on a route change that cannot be repaired, on disconnection, and —
+because a Live Activity outlives the process that asked for it — on the next
+launch after the app was killed mid-over. An indicator that goes on claiming TX
+after transmission stopped is worse than none, so it is never red unless the
+client is genuinely keyed: through the 300 ms of a route-change recovery it stays
+up and says it is *not* transmitting rather than holding the red banner over a
+shut microphone. iOS only; macOS has no Live Activities.
 
 **Station browser (EchoLink).** Nothing in the library resolves a callsign to an
 address, so the directory listing is how a node is found: browse, search, and
@@ -175,9 +188,13 @@ momentary, and says so wherever it can key the radio.
 | **SF-1** | transmit watchdog | Met. Enforced in the library; the timeout is per node and settable from 5 to 600 seconds, and cannot be switched off. Shown on screen when it fires. |
 | **SF-2** | BLE link loss drops transmit | Met. Unconditional on every disconnection, before the reconnect logic and before anything is awaited, whether or not the accessory was the input holding the key. |
 | **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. A **route change** additionally keys back down if the button is still held — transmission stops either way, but an operator who never let go should not have to press again. Bounded to three resumes per hold, and never applied to an interruption. |
-| **SF-4** | transmit state visible without unlocking | **Not met** — the Live Activity is APP-3. There is a full-bleed banner while the app is on screen, and it names the input that keyed and whether letting go will unkey. |
+| **SF-4** | transmit state visible without unlocking | Met (iOS). A Live Activity while keyed, plus the full-bleed banner while the app is on screen; both name the input that keyed and whether letting go will unkey. It ends on all six paths that end transmit and clears anything a terminated launch left behind. **Not yet observed on a locked device** — `docs/BRINGUP.md` `BU-10`. |
 
-Not yet: the Live Activity (SF-4, APP-3).
+**The safety table is what the code does; `docs/BRINGUP.md` is what anyone has
+watched happen.** SF-4's row above went from "not met" to "met" on 2026-08-20 on
+the strength of the implementation and its tests, and SF-4 is the one of the four
+whose whole point is a screen nobody was looking at. `BU-10` is open until
+somebody has looked.
 
 **On the air.** Currawong keyed a live AllStarLink node from an iPhone for the
 first time on 2026-08-11. All three modes have since been used from the app,

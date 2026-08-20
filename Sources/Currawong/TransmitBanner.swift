@@ -12,7 +12,10 @@ import SwiftUI
 /// operator would learn that the banner is sometimes absent while transmitting —
 /// which is the one thing SF-4 exists to prevent.
 ///
-/// (The lock-screen half of SF-4 is APP-3's Live Activity.)
+/// (The lock-screen half of SF-4 is the Live Activity, APP-3 — see
+/// ``TransmitActivityController``. This is still the half that matters when the
+/// app *is* on screen, and it is the whole of SF-4 on macOS and for an operator
+/// who has turned Live Activities off.)
 ///
 /// The second line is PT-4's requirement: it names the input that keyed the
 /// radio and says whether letting go will stop it. A latched transmission that

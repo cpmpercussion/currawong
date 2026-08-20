@@ -230,6 +230,15 @@ final class RadioSessionTransmitTests: XCTestCase {
 
         harness.audio.emit(.routeChanged)
 
+        // **The stop is waited for first, and that is not belt and braces.**
+        // Waiting straight for `isTransmitting` waits for a condition that is
+        // still true from the key-down above, so it returns before the session
+        // has even seen the route change: the assertions then pass without the
+        // recovery having happened. Found while writing APP-3's SF-4 tests,
+        // which had the same shape and the same vacuous pass.
+        await waitUntil("the route change drops transmit") {
+            !harness.client.isTransmitting
+        }
         await waitUntil("transmit comes back on its own") {
             harness.client.isTransmitting
         }

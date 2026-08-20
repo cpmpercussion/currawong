@@ -594,12 +594,92 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
 
 // MARK: - Harness
 
+/// **SF-4.** A ``TransmitActivityPresenting`` that records instead of touching
+/// ActivityKit.
+///
+/// ``calls`` is what the six end-path tests assert on. `isShowing` is derived
+/// from the calls rather than tracked separately, so a presenter that was ended
+/// twice, or started without being ended, shows up as the sequence it really was
+/// rather than as a tidy boolean.
+@MainActor
+final class RecordingActivityPresenter: TransmitActivityPresenting {
+    enum Call: Equatable {
+        case start(TransmitActivityRequest)
+        case update(TransmitActivityState)
+        case end
+        case endOrphans
+    }
+
+    private(set) var calls: [Call] = []
+
+    /// Whether an activity is on screen as far as this presenter is concerned.
+    var isShowing: Bool {
+        for call in calls.reversed() {
+            switch call {
+            case .start: return true
+            case .end: return false
+            case .update, .endOrphans: continue
+            }
+        }
+        return false
+    }
+
+    /// The state most recently shown, whether by a start or an update. `nil`
+    /// when nothing has been shown at all.
+    var shownState: TransmitActivityState? {
+        for call in calls.reversed() {
+            switch call {
+            case .start(let request): return request.state
+            case .update(let state): return state
+            case .end, .endOrphans: continue
+            }
+        }
+        return nil
+    }
+
+    /// The state on screen *now* — `nil` once the activity has ended.
+    ///
+    /// Distinct from ``shownState``, which is the last state ever shown and goes
+    /// on reporting a red banner after the banner has been taken down. An
+    /// assertion about what the operator can see wants this one.
+    var visibleState: TransmitActivityState? { isShowing ? shownState : nil }
+
+    /// The states shown, in order — the sequence a flicker would appear in.
+    var shownStates: [TransmitActivityState] {
+        calls.compactMap { call in
+            switch call {
+            case .start(let request): return request.state
+            case .update(let state): return state
+            case .end, .endOrphans: return nil
+            }
+        }
+    }
+
+    /// How many times an activity was started. A route change that took the
+    /// banner down and put it back up would make this 2.
+    var startCount: Int {
+        calls.filter { if case .start = $0 { return true } else { return false } }.count
+    }
+
+    var endCount: Int { calls.filter { $0 == .end }.count }
+
+    func start(_ request: TransmitActivityRequest) async { calls.append(.start(request)) }
+    func update(_ state: TransmitActivityState) async { calls.append(.update(state)) }
+    func end() async { calls.append(.end) }
+    func endOrphans() async { calls.append(.endOrphans) }
+}
+
 /// A ``RadioSession`` wired to fakes, plus the handles a test needs to drive
 /// the streams the composition root would otherwise own.
 @MainActor
 final class SessionHarness {
     let client = FakeNetworkClient()
     let audio = FakeAudioIO()
+
+    /// **SF-4.** What the app asked the lock screen for. Installed on every
+    /// harness, not just the SF-4 tests, so an activity left behind by some
+    /// other path shows up wherever that path is tested.
+    let activityPresenter = RecordingActivityPresenter()
     let settingsStore: InMemorySettingsStore
     let secretStore: InMemorySecretStore
 
@@ -782,7 +862,8 @@ final class SessionHarness {
             // `tearDownLink()`, which the session reaches while the harness is
             // being torn down at the end of a test.
             releaseProxyLease: { [weak self] in self?.proxyLeaseReleases += 1 },
-            resolver: resolver)
+            resolver: resolver,
+            activity: TransmitActivityController(presenter: activityPresenter))
     }
 
     /// Connects with settings that validate, so PTT tests can start from a
@@ -797,6 +878,15 @@ final class SessionHarness {
     func keyDown() async {
         session.beginTransmit()
         await session.settle()
+        await session.settleActivity()
+    }
+
+    /// Waits for the transmit chain **and** the lock-screen indicator. The two
+    /// are separate queues, and an SF-4 assertion made after only the first one
+    /// reads a banner that has not been drawn yet.
+    func settleAll() async {
+        await session.settle()
+        await session.settleActivity()
     }
 }
 

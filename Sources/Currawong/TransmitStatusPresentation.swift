@@ -11,6 +11,11 @@ import RadioCore
 /// today, the TX banner in APP-2, the Live Activity in APP-3 — should go
 /// through this, so they cannot disagree with one another about what the radio
 /// is doing.
+///
+/// APP-3's Live Activity holds to the same rule from one step further out: it is
+/// handed strings rather than a `TransmitState`, so the widget process cannot
+/// form its own opinion about what "transmitting" looks like. See
+/// ``RadioSession/desiredActivity``.
 struct TransmitStatusPresentation: Equatable {
     /// Short label, e.g. for a status line.
     let label: String
