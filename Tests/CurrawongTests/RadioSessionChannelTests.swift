@@ -90,18 +90,24 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertEqual(harness.session.secret, "")
     }
 
-    /// The draft is saved on the way out, so typing in the form and then
-    /// switching channels does not lose the typing. Unvalidated on purpose —
-    /// `connect()` is where the gate is.
-    func testSelectingSavesTheDraftItIsLeaving() {
+    /// **BU-9.** The draft is *kept* on the way out, not saved: switching
+    /// channels does not lose the typing, and does not apply it to the channel
+    /// either. It used to do the second, which is how this app repointed a named
+    /// channel while looking like it had done nothing.
+    func testSelectingKeepsTheDraftWithoutWritingItToTheList() {
         let harness = SessionHarness(
             settings: nil, channels: [allStar, other], selectedID: allStar.id)
         harness.session.settings.host = "half-typed.exam"
 
         harness.session.select(other.id)
 
-        XCTAssertEqual(harness.session.channels.channels.first?.host, "half-typed.exam")
-        XCTAssertEqual(harness.settingsStore.savedChannels?.first?.host, "half-typed.exam")
+        XCTAssertEqual(
+            harness.session.channels.channels.first?.host, allStar.host,
+            "the channel being left keeps describing where it actually goes")
+        XCTAssertEqual(harness.settingsStore.savedChannels?.first?.host, allStar.host)
+        XCTAssertEqual(
+            harness.settingsStore.savedDrafts[allStar.id]?.host, "half-typed.exam",
+            "and the edit is kept, on disk, as a draft")
     }
 
     /// **Refused while a link is up.** Changing the destination under a live
@@ -158,10 +164,11 @@ final class RadioSessionChannelTests: XCTestCase {
 
     // MARK: - Connecting
 
-    /// **Connecting is what turns a draft into a saved channel.** An operator
-    /// who typed a node into an empty app and pressed Connect has said "this is
-    /// a place I go"; making them press a separate Save as well would be a
-    /// second step for a decision they already made.
+    /// **Connecting adds a draft that is in no channel.** An operator who typed
+    /// a node into an empty app and pressed Connect has said "this is a place I
+    /// go"; making them press a separate Save as well would be a second step for
+    /// a decision they already made. This is the one thing BU-9 deliberately
+    /// *kept*: adding is not overwriting, and there is nothing here to lose.
     func testConnectingAddsAnUnsavedDraftToTheList() async {
         let harness = SessionHarness(settings: nil, channels: [])
         harness.session.settings = allStar
@@ -176,10 +183,15 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertEqual(harness.settingsStore.savedSelectedID, allStar.id)
     }
 
-    /// The other half of it: a channel that is already in the list is updated
-    /// in place, not added a second time. The id is what makes that possible,
-    /// and `validated()` preserving the id is what makes the id useful.
-    func testConnectingUpdatesAnExistingChannelInPlace() async {
+    /// **The other half of it, and the half BU-9 changed: connecting never
+    /// overwrites a channel that is already in the list.**
+    ///
+    /// The call goes where the form says — that is what the operator pressed the
+    /// button for — but the stored channel is left describing where it goes, and
+    /// the edit waits as a draft until Save is asked for. Connecting used to
+    /// write it back, which is how a channel called `M17-432 H` ended up pointed
+    /// at a different reflector with its name and its row unchanged.
+    func testConnectingDoesNotOverwriteAnExistingChannel() async {
         let harness = SessionHarness(
             settings: nil, channels: [other, allStar], selectedID: allStar.id)
         harness.session.settings.host = "  moved.example.org "
@@ -187,11 +199,20 @@ final class RadioSessionChannelTests: XCTestCase {
 
         await harness.session.connect()
 
+        XCTAssertEqual(harness.session.connection, .connected)
+        XCTAssertEqual(
+            harness.settingsSeen.map(\.host), ["moved.example.org"],
+            "the call goes where the form says")
         XCTAssertEqual(
             harness.session.channels.channels.map(\.id), [other.id, allStar.id],
-            "an edit must not reorder the list")
-        XCTAssertEqual(harness.session.channels.channels[1].host, "moved.example.org")
-        XCTAssertEqual(harness.settingsStore.savedChannels?[1].host, "moved.example.org")
+            "no second copy, and no reordering")
+        XCTAssertEqual(
+            harness.session.channels.channels[1].host, allStar.host,
+            "the stored channel is untouched")
+        XCTAssertEqual(harness.settingsStore.savedChannels?[1].host, allStar.host)
+        XCTAssertEqual(
+            harness.settingsStore.savedDrafts[allStar.id]?.host, "moved.example.org",
+            "the edit is kept as a draft — validated, since that is what went on the air")
     }
 
     /// The single-node key is written too, so an operator who downgrades — or
@@ -392,7 +413,8 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertEqual(harness.session.settings, before)
     }
 
-    /// Unsaved edits to a real channel must survive being pointed elsewhere.
+    /// Unsaved edits to a real channel must survive being pointed elsewhere —
+    /// and, since BU-9, must not be written into that channel on the way out.
     func testChoosingKeepsUnsavedEditsToTheChannelItLeaves() {
         let existing = SessionHarness.goodSettings
         let harness = SessionHarness(
@@ -404,8 +426,337 @@ final class RadioSessionChannelTests: XCTestCase {
                 module: "H", basedOn: NodeSettings()))
 
         XCTAssertEqual(
-            harness.settingsStore.savedChannels?.first?.name, "Renamed",
-            "the channel being left keeps what was typed into it")
+            harness.settingsStore.savedDrafts[existing.id]?.name, "Renamed",
+            "what was typed is kept")
+        XCTAssertEqual(
+            harness.settingsStore.savedChannels?.first?.name, existing.name,
+            "and the channel itself is not renamed by being navigated away from")
+
+        // And it is there again on the way back.
+        harness.session.select(existing.id)
+        XCTAssertEqual(harness.session.settings.name, "Renamed")
+    }
+
+    // MARK: - BU-9: the draft is a working copy
+
+    /// **The report, in one test.** Correct a channel's host, quit, come back:
+    /// the correction is still in the form, and the channel still describes where
+    /// it actually goes. Both halves matter — BU-9 is one fault with two faces,
+    /// the edit lost when you wanted it and applied when you did not.
+    ///
+    /// The relaunch is a second `RadioSession` over the same store and Keychain,
+    /// which is the only way to exercise the launch path that chooses between a
+    /// stored channel and a stashed draft.
+    func testAnEditSurvivesAQuitAndLeavesTheStoredChannelAlone() {
+        let first = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        first.session.settings.host = "corrected.example.org"
+
+        // What `RootView`'s scene-phase hook does when the app goes away.
+        first.session.stashDraft()
+
+        let second = SessionHarness(reusing: first)
+
+        XCTAssertEqual(
+            second.session.settings.host, "corrected.example.org",
+            "the correction is still in the form after a relaunch")
+        XCTAssertEqual(
+            second.session.channels.channels.first?.host, allStar.host,
+            "and the stored channel was never overwritten")
+        XCTAssertTrue(second.session.isDraftDirty)
+        XCTAssertTrue(second.session.hasUnsavedEdits(for: allStar.id))
+    }
+
+    /// A draft belonging to no channel — a directory browse — is **not**
+    /// restored across a quit, and does not accumulate in the defaults either.
+    ///
+    /// The limit of the mechanism, written down rather than left to be
+    /// discovered: a draft is found again by selecting the channel it belongs
+    /// to, and nothing stored says which draft was on screen, so one with no
+    /// channel behind it cannot be reached after a relaunch. That is consistent
+    /// with the rule browsing already has — looking around leaves nothing
+    /// behind — and the launch prunes it rather than keeping an entry no code
+    /// can read. A draft made by `Add channel` is a different case and does
+    /// survive: adding puts the channel in the list.
+    func testADraftBelongingToNoChannelIsPrunedAtLaunch() {
+        let first = SessionHarness(settings: nil, channels: [])
+        first.session.chooseChannel(
+            M17Reflector.fake(designator: "M17-432", host: "m17-432.example.org")
+                .channel(module: "H", basedOn: NodeSettings()))
+        first.session.stashDraft()
+        XCTAssertEqual(first.settingsStore.savedDrafts.count, 1, "kept for this run")
+
+        let second = SessionHarness(reusing: first)
+
+        XCTAssertEqual(second.session.settings.host, "")
+        XCTAssertTrue(
+            second.session.channels.channels.isEmpty,
+            "looking around still leaves nothing behind")
+        XCTAssertTrue(
+            second.settingsStore.savedDrafts.isEmpty,
+            "and nothing unreachable is left in the defaults")
+    }
+
+    /// The `Add channel` case, which does survive: adding puts the channel in
+    /// the list, so a form filled in and never saved is still found next launch.
+    func testAnEditToAnAddedChannelSurvivesAQuit() {
+        let first = SessionHarness(settings: nil, channels: [])
+        let added = first.session.addChannel()
+        first.session.settings.host = "half-typed.exam"
+        first.session.settings.name = "New one"
+        first.session.stashDraft()
+
+        let second = SessionHarness(reusing: first)
+
+        XCTAssertEqual(second.session.channels.selectedID, added)
+        XCTAssertEqual(second.session.settings.host, "half-typed.exam")
+        XCTAssertEqual(
+            second.session.channels.channels.first?.host, "",
+            "the channel itself is still the blank one that was added")
+    }
+
+    /// Tapping the highlighted row after a directory browse goes back to that
+    /// channel. It is the same id as the selection, so the old guard treated it
+    /// as a no-op — the one tap in the list that did nothing.
+    func testSelectingTheAlreadySelectedChannelReturnsToItAfterABrowse() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+
+        harness.session.chooseChannel(
+            M17Reflector.fake(designator: "M17-432", host: "m17-432.example.org")
+                .channel(module: "H", basedOn: NodeSettings()))
+        XCTAssertEqual(harness.session.channels.selectedID, allStar.id)
+        XCTAssertNotEqual(harness.session.settings.id, allStar.id)
+
+        harness.session.select(allStar.id)
+
+        XCTAssertEqual(harness.session.settings, allStar)
+    }
+
+    /// Away and back, within one run. `select(_:)` stashes on the way out and
+    /// reads the stash on the way in, so the form is where the operator left it.
+    func testAnEditComesBackAfterSelectingAwayAndBack() {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        harness.session.settings.name = "Sunday net"
+        harness.session.settings.host = "half-typed.exam"
+
+        harness.session.select(other.id)
+        XCTAssertEqual(harness.session.settings, other, "the other channel arrives clean")
+
+        harness.session.select(allStar.id)
+
+        XCTAssertEqual(harness.session.settings.name, "Sunday net")
+        XCTAssertEqual(harness.session.settings.host, "half-typed.exam")
+        XCTAssertEqual(
+            harness.session.channels.channels.first, allStar,
+            "and none of that reached the list")
+    }
+
+    /// **Save is the only path that changes a stored channel.** Everything else
+    /// an operator can do while a draft is dirty is tried here first, and the
+    /// stored channel is the same after all of them.
+    func testOnlySavingChangesAStoredChannel() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        harness.session.settings.host = "moved.example.org"
+        harness.session.secret = "hunter2"
+
+        harness.session.stashDraft()
+        harness.session.select(other.id)
+        harness.session.select(allStar.id)
+        harness.session.chooseChannel(other)
+        harness.session.select(allStar.id)
+        harness.session.addChannel()
+        harness.session.select(allStar.id)
+        await harness.session.connect()
+        await harness.session.disconnect()
+        harness.session.restoreLastConnectedChannel()
+
+        XCTAssertEqual(
+            harness.session.channels.channels.first, allStar,
+            "not one of those may write an edit into a channel")
+        XCTAssertEqual(harness.settingsStore.savedChannels?.first, allStar)
+
+        harness.session.select(allStar.id)
+        harness.session.saveDraft()
+
+        XCTAssertEqual(harness.session.channels.channels.first?.host, "moved.example.org")
+        XCTAssertEqual(harness.settingsStore.savedChannels?.first?.host, "moved.example.org")
+    }
+
+    /// Saving drops the pending draft with it: there is no longer a difference
+    /// to remember, and a leftover entry would leave the list marking a row that
+    /// matches what the form shows.
+    func testSavingClearsThePendingDraft() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        harness.session.settings.host = "moved.example.org"
+        harness.session.stashDraft()
+        XCTAssertEqual(harness.settingsStore.savedDrafts.count, 1)
+
+        harness.session.saveDraft()
+
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+        XCTAssertFalse(harness.session.isDraftDirty)
+        XCTAssertFalse(harness.session.hasUnsavedEdits(for: allStar.id))
+    }
+
+    /// Saving a draft that is in no channel **adds** it. Save is the operator
+    /// saying "keep this", and a Save that silently did nothing on a channel
+    /// picked out of a directory would be the same class of fault BU-9 reports.
+    func testSavingADraftThatIsInNoChannelAddsIt() {
+        let harness = SessionHarness(settings: nil, channels: [])
+        harness.session.chooseChannel(
+            M17Reflector.fake(designator: "M17-432", host: "m17-432.example.org")
+                .channel(module: "H", basedOn: NodeSettings()))
+
+        harness.session.saveDraft()
+
+        XCTAssertEqual(harness.session.channels.channels.count, 1)
+        XCTAssertEqual(harness.session.channels.channels.first?.host, "m17-432.example.org")
+        XCTAssertEqual(harness.session.channels.selectedID, harness.session.settings.id)
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+    }
+
+    /// `Add channel` is a fresh start — which means the edit that was on screen
+    /// is neither carried into the new channel nor lost.
+    func testAddingAChannelGivesABlankDraftAndKeepsThePreviousEdit() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        harness.session.settings.host = "half-typed.exam"
+
+        let added = harness.session.addChannel()
+
+        XCTAssertNotNil(added)
+        XCTAssertEqual(harness.session.settings.host, "", "a blank form to fill in")
+        XCTAssertEqual(harness.session.settings.name, "")
+        XCTAssertEqual(
+            harness.session.channels.channels.first, allStar,
+            "and the channel that was on screen is unchanged")
+        XCTAssertEqual(
+            harness.settingsStore.savedDrafts[allStar.id]?.host, "half-typed.exam",
+            "with its edit kept")
+    }
+
+    /// An untouched blank form is not an unsaved change. The app opens on one
+    /// when there are no channels at all, and an indicator that is lit on a form
+    /// nobody has typed into is an indicator nobody reads.
+    func testABlankFormIsNotDirty() {
+        let harness = SessionHarness(settings: nil, channels: [])
+
+        XCTAssertFalse(harness.session.isDraftDirty)
+
+        harness.session.settings.host = "a"
+        XCTAssertTrue(harness.session.isDraftDirty)
+    }
+
+    /// A draft equal to its channel is not dirty either, so typing something and
+    /// undoing it puts the indicator out — and clears the stash rather than
+    /// leaving a draft that says nothing.
+    func testUndoingAnEditClearsTheDirtyState() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        harness.session.settings.host = "typo.example.org"
+        harness.session.stashDraft()
+        XCTAssertEqual(harness.settingsStore.savedDrafts.count, 1)
+
+        harness.session.settings.host = allStar.host
+        XCTAssertFalse(harness.session.isDraftDirty)
+
+        harness.session.stashDraft()
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+    }
+
+    /// The list marks the row an edit belongs to, and only that row: the whole
+    /// point of the marker is that the row is describing the *stored* channel.
+    func testTheListKnowsWhichRowHasUnsavedEdits() {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        harness.session.settings.host = "moved.example.org"
+
+        XCTAssertTrue(harness.session.hasUnsavedEdits(for: allStar.id))
+        XCTAssertFalse(harness.session.hasUnsavedEdits(for: other.id))
+
+        // Still marked once the operator has moved to a different channel — that
+        // is exactly when they cannot see it in the form.
+        harness.session.select(other.id)
+        XCTAssertTrue(harness.session.hasUnsavedEdits(for: allStar.id))
+        XCTAssertFalse(harness.session.hasUnsavedEdits(for: other.id))
+    }
+
+    /// A pending draft is dropped with the channel it belongs to. It is only ever
+    /// reached by selecting that channel, so one for a channel that no longer
+    /// exists could never surface again — and deleting is the operator saying
+    /// they do not want it, unsaved edits included.
+    func testDeletingAChannelDropsItsPendingDraft() {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        harness.session.settings.host = "moved.example.org"
+        harness.session.select(other.id)
+        XCTAssertEqual(harness.settingsStore.savedDrafts.count, 1)
+
+        harness.session.deleteChannel(allStar.id)
+
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+        XCTAssertFalse(harness.session.hasUnsavedEdits(for: allStar.id))
+    }
+
+    /// Connecting to a draft that is not in the list clears the draft with it —
+    /// the list now holds what it said, so there is nothing left over to mark a
+    /// row with.
+    func testConnectingToANewChannelClearsItsDraft() async {
+        let harness = SessionHarness(settings: nil, channels: [])
+        harness.session.settings = allStar
+        harness.session.secret = "hunter2"
+        harness.session.stashDraft()
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.session.channels.channels, [allStar])
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+        XCTAssertFalse(harness.session.isDraftDirty)
+    }
+
+    /// Connecting normalises what it dials — `validated()` trims and uppercases
+    /// — so the channel it adds is the *trimmed* one. If the draft kept the raw
+    /// text it would differ from the channel by whitespace alone, and the app
+    /// would report unsaved edits on a channel the operator had just made by
+    /// connecting to it. Claiming an edit nobody made is the same class of lie
+    /// as BU-9 itself.
+    func testConnectingLeavesNoEditsClaimedOverWhitespaceAlone() async {
+        let harness = SessionHarness(settings: nil, channels: [])
+        harness.session.settings = NodeSettings(
+            name: "  Sunday net  ", mode: .m17, host: "  m17.example.org  ", module: "a")
+        harness.session.secret = "hunter2"
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.session.connection, .connected)
+        XCTAssertEqual(harness.session.channels.channels.first?.host, "m17.example.org")
+        XCTAssertEqual(harness.session.channels.channels.first?.module, "A")
+        XCTAssertFalse(
+            harness.session.isDraftDirty,
+            "the form claims unsaved edits over trimming the operator never did")
+        XCTAssertTrue(harness.settingsStore.savedDrafts.isEmpty)
+    }
+
+    /// The form has to describe the rule correctly in both directions, and the
+    /// two directions are opposite: connecting *adds* a draft that is in no
+    /// channel, and *does not touch* one that is.
+    func testTheDraftKnowsWhetherItIsInTheChannelListAtAll() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        XCTAssertFalse(
+            harness.session.isDraftAnUnsavedChannel, "a stored channel is in the list")
+
+        harness.session.settings.host = "half-typed.exam"
+        XCTAssertFalse(
+            harness.session.isDraftAnUnsavedChannel,
+            "editing a stored channel does not make it a new one — its id is unchanged")
+
+        XCTAssertTrue(harness.session.chooseChannel(other))
+        XCTAssertTrue(
+            harness.session.isDraftAnUnsavedChannel,
+            "a directory browse points the draft somewhere the list does not hold")
+
+        harness.session.saveDraft()
+        XCTAssertFalse(harness.session.isDraftAnUnsavedChannel, "and saving puts it there")
     }
 
     func testReorderingIsPersisted() {

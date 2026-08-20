@@ -78,7 +78,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test. (1) and (2) answered by the maintainer 2026-08-21 and being implemented; (3) ✅ **closed 2026-08-21, not a defect** — a failed connect leaves a modal sheet up and no context menu can open while it stands; the "greyed out" was the menu bar's own `Edit ▸ Delete`, matched by an unscoped query. No production code changed |
+| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | ✅ **closed 2026-08-21.** (1) and (2) fixed to the maintainer's decision of the same day — the connect form is a working copy, Save is the only thing that overwrites, Connect may add but never overwrite, and an unsaved edit survives a quit as a draft. (3) was never a defect — a failed connect leaves a modal sheet up and no context menu can open while it stands; the "greyed out" was the menu bar's own `Edit ▸ Delete`, matched by an unscoped query |
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 
@@ -645,6 +645,82 @@ channel while looking like it had done nothing.
 Together the two are the bad combination: **the edit is lost when you wanted
 it, and applied when you did not.**
 
+#### Fixed 2026-08-21, to the maintainer's decision of the same day
+
+The design question — what a channel *is*, and when an edit belongs to it — was
+answered rather than worked around, and the answer is one sentence: **you start
+from a channel and edit from there, and the channel list does not change unless
+you ask it to. "Add channel" gives a fresh start.** Three consequences were
+settled explicitly, and they are what the code now does:
+
+- **Save is the only thing that overwrites a stored channel.** The connect form
+  has its own Save, enabled only while the draft differs from the channel it came
+  from, beside a line saying there are unsaved changes.
+- **Connect may add, but never overwrite.** A draft that is in no channel yet — a
+  node typed into an empty app, a reflector picked out of the directory — is
+  added by connecting, because pressing Connect on somewhere new plainly says it
+  is a place you go. A draft that *is* an existing channel connects, and the
+  stored channel is left describing where it goes. That is the half that
+  repointed `M17-432 H`, and it is gone.
+- **Unsaved edits survive a quit**, kept as a draft with the list untouched, and
+  the channel's row in the list is marked `Edited` so it is honest about showing
+  the stored channel rather than what the form holds.
+
+**The representation is the whole trick.** A dirty draft *is* a `NodeSettings`
+carrying the id of the channel it came from — `ChannelSet.update` matches by id
+and `validated()` preserves it — so the pending state is `[UUID: NodeSettings]`,
+persisted as a plain `[NodeSettings]` under its own defaults key
+(`SettingsStore.loadDrafts()`/`saveDrafts(_:)`). A draft whose id is in no
+channel is a channel that has never been saved and needs no special case.
+
+`RadioSession.saveDraft()` is now the explicit Save and nothing calls it
+implicitly. The five places that used to — `select(_:)`, `addChannel(_:)`,
+`chooseChannel(_:)`, `restoreLastConnectedChannel()`, and the settings screen's
+callsign field — call `stashDraft()` instead, which keeps the edit and touches
+nothing in the list. `RootView`'s `scenePhase` handler calls it too, which is the
+save-on-quit that was missing. Fourteen new unit tests in
+`RadioSessionChannelTests` and three rewritten ones, including a
+quit-and-relaunch built as a second `RadioSession` over the same store.
+
+Three smaller decisions were taken along the way, none of them in the brief:
+
+- **Save on a draft that is in no channel adds it.** Save is the operator saying
+  "keep this", and a Save button that did nothing on a channel picked out of a
+  directory would be the same class of fault as the one being fixed.
+- **A deleted channel's pending draft goes with it** — the opposite of the rule
+  for its Keychain secret, and for the opposite reason: a draft is only ever
+  reached by selecting its channel, so one for a deleted channel is unreachable.
+- **A draft belonging to no channel is pruned at launch.** Within a run it works
+  (a directory browse is exactly that), but nothing stored says which draft was
+  on screen, so after a relaunch it cannot be found again and would sit in the
+  defaults for ever. It is consistent with the rule browsing already has — looking
+  around leaves nothing behind — but it does mean a browse-then-quit loses the
+  draft. Restoring that too would need a stored "current draft" id, which is new
+  persistent state and was not asked for.
+
+⚠️ **That third one is the one decision here that is still the maintainer's**,
+because it is the last case where something is lost: browse a reflector, edit it,
+quit, and the draft is gone. It was left as it is rather than answered by adding
+persistent state nobody asked for. If the answer is that it should survive too,
+the change is a stored "current draft" id and nothing else.
+
+One user-visible wart fell out of the fix and was fixed with it: `select(_:)`
+returned early when the id was already the selected one, so after a directory
+browse — which repoints the draft without moving the selection — tapping the
+highlighted row was the one tap in the list that did nothing.
+
+**The form says two different things, because the rule has two halves.** With
+edits to a stored channel it says the saved channel is unchanged until you save;
+with a draft the list does not hold it says connecting will add it. One sentence
+covering both would have been false half the time, which is the fault this whole
+item is about — see `RadioSession.isDraftAnUnsavedChannel`.
+
+**One thing that looks like a fault and is not**, pinned by a test so it stays
+that way: `connect()` normalises what it dials (`validated()` trims and
+uppercases the module) and the draft is normalised with it, so connecting with
+untrimmed text does not leave the app reporting unsaved edits over whitespace the
+operator never typed.
+
 **3. Delete is dead on macOS for any channel connected to this launch.**
 Right-click → Delete is greyed out and does nothing, *after* the link is fully
 down — the app reads `Not connected`, the lock label is gone, the row itself is
@@ -658,11 +734,11 @@ satisfied). The remaining suspect was the row's context menu not being rebuilt
 after the connection state changes — **and it was wrong; read on before acting on
 any of this paragraph.**
 
-**Not fixed here, deliberately.** (1) and (2) are one design question — what a
-channel *is*, and when an edit belongs to it — and answering it by adding a
-`saveDraft()` on quit would make accidental overwrites permanent rather than
-merely possible. That is the maintainer's call. (3) turned out not to be a bug at all — see
-below, where it is measured and closed.
+**Not fixed when this was written, deliberately.** (1) and (2) were one design
+question — answering it by adding a `saveDraft()` on quit would have made
+accidental overwrites permanent rather than merely possible — and that was the
+maintainer's call, taken on 2026-08-21 and recorded above. (3) turned out not to
+be a bug at all; it is measured and closed below.
 
 #### What (3) is *not*, measured 2026-08-21
 

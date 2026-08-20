@@ -91,6 +91,15 @@ struct RootView: View {
         .task { session.start() }
         .onChange(of: scenePhase) { phase in
             session.setForeground(phase == .active)
+
+            // **BU-9.** The app going away is the last chance to keep what the
+            // operator typed, and it used to be a chance nobody took: this hook
+            // called `setForeground(_:)` and nothing else, so a corrected host
+            // went with the process. Stashing rather than saving is the point —
+            // quitting is not the operator asking for the channel to be
+            // rewritten, so the edit comes back next launch with the stored
+            // channel still describing where it actually goes.
+            if phase != .active { session.stashDraft() }
         }
         .onDisappear { session.viewDisappeared() }
         .sheet(isPresented: $isShowingAccessorySheet) {
@@ -462,6 +471,11 @@ struct RootView: View {
             connectTitle: connectTitle,
             isBusy: session.connection.isBusy || proxyPicker.isSearching,
             connectAction: { Task { await connectOrDisconnect() } },
+            // BU-9: the form's own Save, which is the only thing that writes an
+            // edit over the channel it came from.
+            hasUnsavedChanges: session.isDraftDirty,
+            draftIsUnsavedChannel: session.isDraftAnUnsavedChannel,
+            saveAction: { session.saveDraft() },
             proxyPicker: proxyPicker,
             privateProxy: session.echoLinkProxy,
             nodeLocator: nodeLocator)

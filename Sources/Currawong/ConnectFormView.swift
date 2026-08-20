@@ -6,10 +6,15 @@ import SwiftUI
 /// that opens and closes the connection.
 ///
 /// This edits *one channel* — the draft `RadioSession` holds — and the list of
-/// them is `ChannelListView`'s job. The one thing that would have been painful
-/// to change later, and so was never deferred, is *where the secret goes*: it
-/// is in the Keychain from the first commit, so there is never a migration out
-/// of `UserDefaults` to write.
+/// them is `ChannelListView`'s job. **The draft is a working copy** (BU-9): what
+/// is typed here reaches the channel list when Save is pressed, and otherwise
+/// waits, including across a quit. Connecting will call whatever the form says,
+/// and will add it to the list if it is not there yet, but will not rewrite a
+/// channel that is.
+///
+/// The one thing that would have been painful to change later, and so was never
+/// deferred, is *where the secret goes*: it is in the Keychain from the first
+/// commit, so there is never a migration out of `UserDefaults` to write.
 ///
 /// ## Three modes, three sets of live fields
 ///
@@ -54,6 +59,23 @@ struct ConnectFormView: View {
     let isBusy: Bool
     let connectAction: () -> Void
 
+    /// **BU-9.** Whether this channel differs from what is stored under it.
+    ///
+    /// Drives both the Save button and the line above it. The line matters as
+    /// much as the button: the app deliberately no longer writes an edit back on
+    /// its own, so an operator has to be able to see that what they are looking
+    /// at is not what the channel list holds.
+    let hasUnsavedChanges: Bool
+
+    /// Whether the draft is somewhere not in the channel list yet, which changes
+    /// what ``unsavedChangesNotice`` can honestly say — connecting *adds* one of
+    /// these, and leaves a stored channel alone.
+    let draftIsUnsavedChannel: Bool
+
+    /// Saves the draft over its channel — the one action in the app that
+    /// overwrites one.
+    let saveAction: () -> Void
+
     /// The public-proxy finder's state. Only read when the mode uses a proxy,
     /// which is EchoLink alone.
     @ObservedObject var proxyPicker: ProxyPicker
@@ -84,16 +106,30 @@ struct ConnectFormView: View {
 
             proxySourcingStatus
 
-            Button(action: connectAction) {
-                HStack {
-                    if isBusy { ProgressView().controlSize(.small) }
-                    Text(connectTitle)
-                        .frame(maxWidth: .infinity)
+            unsavedChangesNotice
+
+            HStack(spacing: 10) {
+                // Save is beside Connect rather than in place of it because they
+                // are different questions — "keep this" and "go there" — and
+                // BU-9 is what happens when one is quietly answered by the
+                // other. Not prominent: connecting is still the action an
+                // operator came here for.
+                Button("Save", action: saveAction)
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(!hasUnsavedChanges || !isEditable)
+
+                Button(action: connectAction) {
+                    HStack {
+                        if isBusy { ProgressView().controlSize(.small) }
+                        Text(connectTitle)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isBusy)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(isBusy)
         }
         .onAppear {
             portText = String(settings.port)
@@ -110,6 +146,28 @@ struct ConnectFormView: View {
         // channel behind the form's back. Nothing does that any more (APP-13):
         // the proxy is not a channel field, and the only writer of `settings.port`
         // is the field above.
+    }
+
+    /// **BU-9.** Says that the form and the channel list disagree, and which way
+    /// round.
+    ///
+    /// Worth a whole line because the previous behaviour was the opposite fault:
+    /// an edit was applied to the channel by connecting or by switching away, so
+    /// nobody had to be told anything and a channel could be repointed by
+    /// accident. Now the edit waits, which is only safe if it is visible.
+    @ViewBuilder
+    private var unsavedChangesNotice: some View {
+        if hasUnsavedChanges {
+            Label(
+                draftIsUnsavedChannel
+                    ? "Not saved. Connecting will add this to your channels."
+                    : "Unsaved changes. Connecting will call this, but the saved channel is "
+                        + "unchanged until you save.",
+                systemImage: "pencil.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// What the Connect button is doing before it connects.
