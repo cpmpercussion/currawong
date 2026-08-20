@@ -208,6 +208,7 @@ struct ConnectFormView: View {
                 settings.displayName.isEmpty ? "New channel" : settings.displayName,
                 text: $settings.name
             )
+            .accessibilityIdentifier("connect.channelName")
             .textFieldStyle(.roundedBorder)
         }
     }

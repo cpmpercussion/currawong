@@ -21,7 +21,20 @@ struct LabelledField<Content: View>: View {
             Label(label, systemImage: systemImage)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                // Decorative once the field below carries the same name:
+                // without this VoiceOver reads the label, then the field, and
+                // says the word twice.
+                .accessibilityHidden(true)
+
+            // A `Label` above a `TextField` is a visual association and not an
+            // accessible one — SwiftUI gives the field its *placeholder* and
+            // nothing else, so VoiceOver announced "node.example.org, text
+            // field" with no way to know it was the host. Found while writing
+            // the on-air UI test (BU-8), which could not find a field called
+            // "Host" either, for exactly the same reason: if a screen reader
+            // cannot name the controls, nothing else can either.
             content
+                .accessibilityLabel(label)
         }
     }
 }
