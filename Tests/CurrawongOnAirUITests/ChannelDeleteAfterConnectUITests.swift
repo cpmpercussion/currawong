@@ -88,6 +88,9 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
         addChannel(named: bystanderName, in: app)
         addChannel(named: dialledName, in: app)
         pointAtNowhere(in: app)
+        // Committed before Connect on purpose: under the fixed model Connect may
+        // *add* a channel for an unsaved edit, and this test counts rows by name.
+        saveIfPossible(in: app)
 
         // MARK: Arm the lock
 
@@ -154,6 +157,16 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
 
         delete(channelNamed: bystanderName, in: app)
         delete(channelNamed: dialledName, in: app)
+
+        // MARK: Leave the operator's list as it was found
+
+        for name in [bystanderName, dialledName] {
+            let extra = removeEveryRow(named: name, in: app)
+            if extra > 0 {
+                print("=== swept \(extra) extra '\(name)' row(s) the run had created")
+            }
+            XCTAssertEqual(rowCount(named: name, in: app), 0, "left '\(name)' rows behind")
+        }
     }
 
     // MARK: - Deleting, with every query scoped
@@ -280,14 +293,27 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
 
     // MARK: - Driving the app
 
-    /// Adds a channel and names it. `addChannel` saves the draft first, so the
-    /// name typed for the previous channel is committed by the next add — which
-    /// is how "Bystander" ends up named in the list.
+    /// Adds a channel and names it, under either channel model.
+    ///
+    /// Before BU-9 items 1 and 2 were fixed, the name typed here reached the
+    /// list only when the *next* add committed the draft. After the fix, Save is
+    /// the one thing that overwrites a channel — so the name is committed here,
+    /// by pressing it if it is there. Naming a channel is not what this test is
+    /// about, and it should not have to know which model it is running against.
     private func addChannel(named name: String, in app: XCUIApplication) {
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
         add.click()
         replace(name, in: field("connect.channelName", in: app))
+        saveIfPossible(in: app)
+    }
+
+    /// Presses Save if the form has one and it is enabled. Nothing to do on a
+    /// build from before the fix, which has no Save button at all.
+    private func saveIfPossible(in app: XCUIApplication) {
+        let save = app.buttons["Save"].firstMatch
+        guard save.exists, save.isEnabled else { return }
+        save.click()
     }
 
     /// Points the selected channel at TEST-NET-1 over M17, and makes sure there
