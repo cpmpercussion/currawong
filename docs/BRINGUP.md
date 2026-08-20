@@ -15,8 +15,10 @@ firing — the transmit watchdog unkeying a held button, and a phone call
 dropping transmit — and they are app-level rather than anything to do with a
 protocol: the same two mechanisms serve all three modes. They are `BU-7`, they
 are wanted before any public beta, and they are deliberately not holding this
-phase open. `BU-3` is done in the library and waits on a release, and `BU-8` is one
-self-contained M17 test against our own reflector.
+phase open. `BU-3` is done in the library and waits on a release. `BU-8` closed the same
+day — four overs from the app, each seen to *end* by an independent observer —
+and `BU-9` records what trying to automate that turned up about the channel
+model.
 
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
 `../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
@@ -72,12 +74,12 @@ keep treating the app as unproven on air.
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | ✅ **Closed 2026-08-20** — parrot node `55553`, extended overs returned clean, DTMF commands accepted. The watchdog and phone-call halves moved to `BU-7` |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Library fix done (RC-11, `swift-hamvoip` PR #35). Open **here** until a release carries it and this app deletes its copy |
-| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) is now `BU-8`; check 6 folded into `BU-7` |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) ✅ **closed 2026-08-20** as `BU-8`; check 6 folded into `BU-7` |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
 | BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test; (1) and (2) are a design question for the maintainer, (3) is an unexplained defect |
-| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app half is a UI test that drives a real over — keying and release confirmed — but no audio has reached the reflector yet, so the far-end question is still unanswered |
+| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 
 ---
 
@@ -431,13 +433,35 @@ know when doing it:
   after activation, never before" — is the app's own ordering decision and
   stays. Only the session half is the library's.
 
-### BU-8 — watch an M17 over end, at the far end ✅ LIBRARY HALF CONFIRMED 2026-08-20
+### BU-8 — watch an M17 over end, at the far end ✅ CLOSED 2026-08-20
 
 **A specific test, and a cheap one.** Split out of `BU-4` check 5 on
 2026-08-20, because "clean teardown" reads like a link question and is not one.
 
-✅ **The library half is confirmed, 2026-08-20**, two `hamvoip-cli` instances
-against `m17-cbr.charlesmartin.au` module A. The observer printed:
+✅ **Closed 2026-08-20, both halves.** The app was driven by hand against
+`m17-cbr.charlesmartin.au` module A with a CLI observer linked to the same
+module, and every over ended cleanly at the far end:
+
+```
+RX VK1CPM (stream 0x7668)
+RX VK1CPM ended — end of over
+RX VK1CPM (stream 0x0B87)
+RX VK1CPM ended — end of over
+RX VK1CPM (stream 0x74DD)
+RX VK1CPM ended — end of over
+RX VK1CPM (stream 0xC1AF)
+RX VK1CPM ended — end of over
+```
+
+Four overs, four `.lastFrame` ends read by a client that is not the one that
+sent them. That is `BU-4` check 5 as well: the app's release path, confirmed
+from outside.
+
+⚠️ **The first press of the session put nothing on air**, and that was a real
+fault rather than an artefact — see the microphone note below. Fixed.
+
+The library half was confirmed earlier the same day, with two `hamvoip-cli`
+instances against the same module. The observer printed:
 
 ```
 RX VK1CPM (stream 0xC9E9)
@@ -499,18 +523,23 @@ xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
   `app.staticTexts.matching(NSPredicate(format: "value == %@", …))` — and keep
   queries narrow either way: `descendants(matching: .any)` with a predicate ran
   218 seconds against this tree and timed out.
-- ⏳ **No audio reaches the reflector.** Every over so far has been silent at
-  the observer: link up, PTT keyed, banner shown, `Inbound streams heard: 0`.
-  No microphone prompt ever appeared, which is the suspicious part — an app
-  launched by a test runner does not get to ask. One run also carried an SF-3
-  banner, *"Transmission stopped: the audio route changed"* — that one is now
-  **fixed rather than merely diagnosed**: a route change under a held button
-  keys back down once the graph settles instead of ending the over and telling
-  the operator to press a button they are still pressing. It did not make audio
-  appear, so the microphone is a separate and still-open problem. Until it is
-  settled the test cannot answer BU-8: an over with no frames in it has no
-  final frame either. **Grant Currawong the microphone by running it normally
-  once**, keying it by hand, and answering the prompt.
+- ✅ **The silent overs were two faults, both now fixed.**
+
+  **The route change.** A run carried the SF-3 banner *"Transmission stopped:
+  the audio route changed"*. Rebuilding the app reconfigures the audio graph,
+  the configuration-change notification arrives as a route change, and SF-3
+  ended the over about 40 ms in — so the first transmission after installing a
+  new build was reliably dead, for an operator as much as for a test. A route
+  change under a held button now keys back down once the graph settles.
+
+  **The microphone, on macOS.** `AudioIO.requestRecordPermission()` returned
+  `true` on macOS without asking anybody, so nothing prompted until the *first
+  capture attempt* — and that press put no audio on air. Observed by hand on
+  2026-08-20: press once, nothing; the microphone indicator appears in the menu
+  bar; press again, and there are levels. It now asks via `AVCaptureDevice` at
+  connect time, where the operator is already waiting and no over is at stake.
+  A test runner still cannot answer the prompt, so grant it once by running the
+  app normally.
 - **The form's fields had no accessibility labels at all.** SwiftUI gives a
   `TextField` its placeholder and nothing else, so VoiceOver announced
   "node.example.org, text field" with no way to know it was the host. Fixed in

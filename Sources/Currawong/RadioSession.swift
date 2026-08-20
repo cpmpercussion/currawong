@@ -876,8 +876,7 @@ final class RadioSession: ObservableObject {
             present(
                 title: "Microphone access is off",
                 message:
-                    "Currawong cannot transmit without the microphone. Turn it on in Settings → "
-                    + "Currawong → Microphone, then connect again.")
+                    micPermissionAdvice)
             return
         }
 
@@ -1216,6 +1215,19 @@ final class RadioSession: ObservableObject {
             guard let self, self.heldSource == source, self.connection.isConnected else { return }
             self.beginTransmit(from: source)
         }
+    }
+
+    /// Where to turn the microphone back on, which is not the same place on
+    /// the two platforms — and telling a macOS operator to look in Settings →
+    /// Currawong sends them somewhere that does not exist.
+    private var micPermissionAdvice: String {
+        #if os(iOS)
+        return "Currawong cannot transmit without the microphone. Turn it on in Settings → "
+            + "Currawong → Microphone, then connect again."
+        #else
+        return "Currawong cannot transmit without the microphone. Turn it on in System Settings "
+            + "→ Privacy & Security → Microphone, then connect again."
+        #endif
     }
 
     private func noteSafetyStop(_ reason: TransmitStopReason) {
