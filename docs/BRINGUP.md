@@ -698,11 +698,12 @@ Three smaller decisions were taken along the way, none of them in the brief:
   draft. Restoring that too would need a stored "current draft" id, which is new
   persistent state and was not asked for.
 
-⚠️ **That third one is the one decision here that is still the maintainer's**,
-because it is the last case where something is lost: browse a reflector, edit it,
-quit, and the draft is gone. It was left as it is rather than answered by adding
-persistent state nobody asked for. If the answer is that it should survive too,
-the change is a stored "current draft" id and nothing else.
+**That third one was the last open decision here, and it is settled: the pruning
+stays** (maintainer, 2026-08-21). Browse a reflector, edit it, quit, and the draft
+is gone — accepted, as the case consistent with the rule browsing already has:
+looking around leaves nothing behind. Making it survive would have meant a stored
+"current draft" id, which is persistent state nobody asked for, and BU-9 is not
+that. **BU-9 has no open questions left.**
 
 One user-visible wart fell out of the fix and was fixed with it: `select(_:)`
 returned early when the id was already the selected one, so after a directory
