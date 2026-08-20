@@ -65,8 +65,19 @@ final class M17EndOfOverUITests: XCTestCase {
         app.launch()
 
         selectM17Mode(in: app)
-        type(reflector, intoFieldLabelled: "Host", in: app)
-        type(module, intoFieldLabelled: "Module", in: app)
+
+        let host = field("connect.host", in: app)
+        let moduleField = field("connect.module", in: app)
+
+        // ⚠️ This leaves the current channel pointed at the reflector below,
+        // in M17 mode. Restoring it was tried and removed: the runner holds
+        // keyboard focus once the test body ends, `app.activate()` does not
+        // take it back, and a teardown that cannot type is a teardown that
+        // fails a test which otherwise passed. Point the channel back by hand,
+        // or give this test a channel of its own.
+
+        replace(reflector, in: host)
+        replace(module, in: moduleField)
 
         let connect = app.buttons["Connect"]
         XCTAssertTrue(connect.waitForExistence(timeout: 5), "no Connect button")
@@ -81,7 +92,24 @@ final class M17EndOfOverUITests: XCTestCase {
             waitUntil(timeout: 30) { ptt.isEnabled && ptt.isHittable },
             "the link never came up — PTT stayed disabled")
 
+        // A microphone prompt is a system dialog, and it appears the first time
+        // the app captures — which is the moment PTT is pressed. Report it
+        // rather than timing out mysteriously behind it.
+        if app.dialogs.count > 0 {
+            print("=== DIALOG BEFORE PTT: \(app.dialogs.firstMatch.debugDescription)")
+        }
+
         ptt.press(forDuration: overDuration)
+
+        // The banner renders only while transmitting, so its disappearance is
+        // the app's own statement that the over ended. Give SwiftUI a moment
+        // to re-render before believing either answer.
+        // Narrow, and deliberately so: a `descendants(matching: .any)` query
+        // with a predicate takes minutes against this tree and times out.
+        let banner = app.staticTexts["On air."].firstMatch
+        let stopped = waitUntil(timeout: 5) { !banner.exists }
+        print("=== TRANSMIT BANNER CLEARED AFTER RELEASE: \(stopped)")
+        XCTAssertTrue(stopped, "the app still shows a transmit banner after PTT was released")
 
         // Nothing here can see the far end. Hold the session open long enough
         // for a human or an observer process to read its output, then hang up
@@ -107,22 +135,34 @@ final class M17EndOfOverUITests: XCTestCase {
         fallback.click()
     }
 
-    /// Replaces a field's contents rather than appending to them: these fields
-    /// come back from the app's saved settings, so they are rarely empty.
-    private func type(_ text: String, intoFieldLabelled label: String, in app: XCUIApplication) {
-        let field = app.textFields[label].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field labelled \(label)")
-        field.click()
-        field.typeKey("a", modifierFlags: .command)
-        field.typeText(text)
+    /// The form's fields carry no accessibility labels — SwiftUI gives a
+    /// `TextField` its placeholder and nothing else — so the app names the
+    /// three this test drives with identifiers. Placeholders would have worked
+    /// today and broken the first time somebody reworded one.
+    private func field(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let field = app.textFields[identifier].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
+        return field
     }
 
-    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+    fileprivate func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
             Thread.sleep(forTimeInterval: 0.25)
         }
         return condition()
+    }
+}
+
+/// Replaces a field's contents rather than appending to them: these come back
+/// from the app's saved settings, so they are rarely empty.
+private func replace(_ text: String, in field: XCUIElement) {
+    field.click()
+    field.typeKey("a", modifierFlags: .command)
+    if text.isEmpty {
+        field.typeKey(.delete, modifierFlags: [])
+    } else {
+        field.typeText(text)
     }
 }

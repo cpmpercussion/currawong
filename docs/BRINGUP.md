@@ -76,7 +76,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app half is written as a UI test and waits on a one-time macOS Accessibility grant |
+| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app half is a UI test that drives a real over — keying and release confirmed — but no audio has reached the reflector yet, so the far-end question is still unanswered |
 
 ---
 
@@ -478,15 +478,44 @@ xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
     -derivedDataPath DerivedData -destination 'platform=macOS' test
 ```
 
-⚠️ **It needs two macOS permissions, and both are one-time and human-only.**
-The first attempt, 2026-08-20, failed with `Timed out while enabling automation
-mode` — macOS UI testing requires the process running the tests to be allowed
-to control the computer, which is granted in **System Settings → Privacy &
-Security → Accessibility** and cannot be granted from a script, because the TCC
-database is SIP-protected by design. The second is **microphone access for
-Currawong itself**, prompted on the first over; without it the app keys up and
-sends no frames, exactly as `--no-audio` does in the CLI. Approve both once by
-hand and the test is repeatable after that.
+**What the first sessions established, 2026-08-20.**
+
+- **Accessibility must be granted** to whatever runs the tests, or the run dies
+  with `Timed out while enabling automation mode` before the app ever launches.
+  It is a one-time grant in System Settings → Privacy & Security →
+  Accessibility, and cannot be scripted: the TCC database is SIP-protected.
+- ✅ **The app keys and unkeys correctly.** `press(forDuration:)` on the
+  `DragGesture`-based PTT control drives a real over, and the transmit banner —
+  which renders only while transmitting — clears within a moment of the
+  release. Read the banner with a narrow query (`app.staticTexts["On air."]`):
+  a `descendants(matching: .any)` predicate takes minutes against this tree and
+  times out. **A snapshot taken immediately after the press still shows the
+  banner**, which reads alarmingly like a stuck key and is not one — it is a
+  frame the app has not re-rendered yet. Wait before believing it.
+- ⏳ **No audio reaches the reflector.** Every over so far has been silent at
+  the observer: link up, PTT keyed, banner shown, and `Inbound streams heard:
+  0`. No microphone prompt ever appeared, which is the suspicious part — an app
+  launched by the test runner does not get to ask. Until that is settled the
+  test cannot answer BU-8, because an over with no frames in it has no final
+  frame either. **Grant Currawong the microphone by running it normally once**,
+  keying it by hand, and answering the prompt; then re-run the test.
+- **The form's fields carry no accessibility labels** — SwiftUI gives a
+  `TextField` its placeholder and nothing else — so `connect.host`,
+  `connect.module` and `connect.callsign` are identifiers on the app side. That
+  is the only production change this needed.
+- **The test leaves the current channel pointed at the reflector.** Restoring it
+  in a teardown block was tried and removed: the runner holds keyboard focus
+  once the body ends, `app.activate()` does not take it back, and a teardown
+  that cannot type fails a test that otherwise passed.
+  `ChannelRestoreUITests` puts a channel back, driven by `TEST_RUNNER_`-prefixed
+  environment variables (the plain names do not reach the runner):
+
+```sh
+TEST_RUNNER_RESTORE_HOST=<host> TEST_RUNNER_RESTORE_MODULE=<letter> \
+  xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
+  -derivedDataPath DerivedData -destination 'platform=macOS' \
+  -only-testing:CurrawongOnAirUITests/ChannelRestoreUITests test
+```
 
 **What is actually being asked.** An M17 stream is a numbered sequence of
 frames and the final one sets the last-frame flag, `FN & 0x8000`. A receiver
