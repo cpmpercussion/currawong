@@ -275,57 +275,62 @@ struct RootView: View {
         }
     }
 
-    /// The pane picker, the session pane, and whichever pane is chosen.
+    /// The session pane and whichever pane is chosen. **On macOS the picker
+    /// that chooses is in the window toolbar, not in this column** — see below.
     ///
-    /// **The picker is at the top, and that is load-bearing.** It used to sit
-    /// between the session pane and the pane content, next to the thing it
-    /// chooses, which reads better and is wrong. The session pane is a fixed
-    /// column — status, meters, a PTT button with a `minHeight` — so it needs
-    /// something like 620 points and cannot give any of them back. In a window
-    /// shorter than the three regions together, a `VStack` does not shrink the
-    /// rigid child; it overflows past the bottom edge. The picker was the first
-    /// thing to go over that edge, which left an operator who had opened
-    /// Stations on the Stations pane with nothing on screen that could take
-    /// them off it — no back button, as reported.
+    /// ## Why the picker left the column
     ///
-    /// At the top it is laid out before anything can push it away — but being
-    /// first is not on its own enough, and the first version of this fix was
-    /// wrong in M17. **A `VStack` centres content it could not fit**, so a
-    /// column that overflows spills in *both* directions, and the picker went
-    /// off the top instead of the bottom. The Reflectors pane is taller than
-    /// Stations — the same 200-point list, plus the attribution line under it —
-    /// so M17 overflowed by enough to reach the top edge and EchoLink did not.
+    /// The session pane is rigid — status, meters, a PTT button with a
+    /// `minHeight`, and since APP-3's sibling work a link button too — so it
+    /// needs something like 620 points and cannot give any of them back. In a
+    /// window shorter than the column, a `VStack` does not shrink the rigid
+    /// child: it **centres** what it could not fit, so the column spills off
+    /// *both* edges. Whatever is first in the stack goes off the top.
     ///
-    /// `alignment: .top` is what actually pins it: the content's top edge is
-    /// held against the frame's, and everything that does not fit goes off the
-    /// bottom, where the pane's own list is already scrollable. Whatever a
-    /// future pane's height turns out to be, the picker is still there.
+    /// That cost an operator the only way out of a pane. The picker sat first,
+    /// went over the top edge, and someone on Reflectors had nothing on screen
+    /// that could take them off it — no back button, twice reported.
     ///
-    /// The `minHeight` is the other half: it stops the window shrinking to
-    /// where the chosen pane has no room left to draw in, which the picker
-    /// being visible would otherwise hide rather than fix.
+    /// It was fixed twice inside the column and regressed both times, because
+    /// the fix was always a number or an alignment holding a rigid column
+    /// against a window that can be any height:
+    ///
+    /// 1. Moving the picker to the top of the stack (it then went off the top
+    ///    instead of the bottom, in M17 only, because the Reflectors pane is
+    ///    taller than Stations).
+    /// 2. `alignment: .top` on the stack's frame, plus `minHeight: 620` — which
+    ///    held until `SessionLinkControl` added a button row to the session
+    ///    pane and nobody re-measured the 620. The button only renders once
+    ///    there is a `lastConnectedName`, so a fresh launch fit and a launch
+    ///    that had connected to anything did not. That is the worst shape a
+    ///    layout bug can take: invisible until the app has been used.
+    ///
+    /// **The toolbar is not a third number.** A toolbar item cannot be laid out
+    /// off-screen by the column's overflow, at any window height, with any
+    /// future session-pane content — so the class of bug is gone rather than
+    /// this instance of it. It is also where macOS puts a view switcher.
+    ///
+    /// iPad keeps the inline picker: it uses this same split layout, but its
+    /// windows do not get short enough to overflow, and `.principal` in a
+    /// toolbar there competes with the navigation title.
+    ///
+    /// ## What is left in the column
+    ///
+    /// The column is still not a scroll view, and that is deliberate: the
+    /// status panel and the button that ends a transmission must not be
+    /// scrollable away while one is running. `minHeight` is still a request —
+    /// a window may be made smaller than it — but with the picker out of the
+    /// stack, overflow can no longer cost the operator their way out.
     private var detailColumn: some View {
         VStack(spacing: 0) {
-            // Bound to the *resolved* selection, so that a mode change which
-            // takes the selected pane away moves the picker and the content
-            // below it together rather than leaving the picker showing nothing.
-            Picker(
-                "Pane",
-                selection: Binding(
-                    get: { effectiveDetailPane },
-                    set: { detailPane = $0 })
-            ) {
-                ForEach(visibleDetailPanes) { pane in
-                    Text(pane.title).tag(pane)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .paneColumn()
+            #if !os(macOS)
+                panePicker
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .paneColumn()
 
-            Divider()
+                Divider()
+            #endif
 
             sessionPane(showsHeader: false)
                 .padding(20)
@@ -336,16 +341,40 @@ struct RootView: View {
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // See the note above: `.top` is what keeps the picker on screen when
-        // the column cannot fit, and it has to be here rather than on the
-        // picker itself — it is the *stack's* overflow that needs a direction.
+        // Overflow still goes off the bottom rather than being shared between
+        // both edges. Nothing load-bearing is down there any more, but a pane
+        // clipped symmetrically reads as a rendering fault.
         .frame(maxHeight: .infinity, alignment: .top)
-        // What the three regions actually need: the picker, a session pane that
-        // cannot compress, and enough of the tallest pane to be worth showing.
-        // A window may be made smaller than this on a small screen — a minimum
-        // is a request, not a guarantee — which is exactly why the alignment
-        // above matters more than the number does.
+        // What the session pane and a usable amount of the tallest pane need.
         .frame(minHeight: 620)
+        #if os(macOS)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    panePicker
+                }
+            }
+        #endif
+    }
+
+    /// The Connect / Reflectors / Settings switcher.
+    ///
+    /// Bound to the *resolved* selection, so that a mode change which takes the
+    /// selected pane away moves the picker and the content below it together
+    /// rather than leaving the picker showing nothing.
+    private var panePicker: some View {
+        Picker(
+            "Pane",
+            selection: Binding(
+                get: { effectiveDetailPane },
+                set: { detailPane = $0 })
+        ) {
+            ForEach(visibleDetailPanes) { pane in
+                Text(pane.title).tag(pane)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityIdentifier("detail.panePicker")
     }
 
     @ViewBuilder
