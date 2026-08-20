@@ -76,7 +76,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | Open — a specific, self-contained test against `m17-cbr.charlesmartin.au` |
+| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app's own release path is still unobserved |
 
 ---
 
@@ -430,10 +430,38 @@ know when doing it:
   after activation, never before" — is the app's own ordering decision and
   stays. Only the session half is the library's.
 
-### BU-8 — watch an M17 over end, at the far end
+### BU-8 — watch an M17 over end, at the far end ✅ LIBRARY HALF CONFIRMED 2026-08-20
 
 **A specific test, and a cheap one.** Split out of `BU-4` check 5 on
 2026-08-20, because "clean teardown" reads like a link question and is not one.
+
+✅ **The library half is confirmed, 2026-08-20**, two `hamvoip-cli` instances
+against `m17-cbr.charlesmartin.au` module A. The observer printed:
+
+```
+RX VK1CPM (stream 0xC9E9)
+RX VK1CPM ended — end of over
+```
+
+`end of over` is `.lastFrame` and not `.preempted`, so the flag was set, sent
+and read — and it arrived on the release rather than being cleaned up by a
+later stream, since no later stream existed. 75 datagrams for a three-second
+over is exactly 3000 ms ÷ 40. **The short-tap edge behaved as predicted**: a
+20 ms key-up produced no stream at all at the observer (`Inbound streams heard:
+1` across two key-ups), so the `nextSequenceNumber > 0` guard leaves nothing
+hanging.
+
+⚠️ **`--no-audio` does not send silence, despite saying it will.** The first
+attempt keyed up with `--no-audio` on both ends and transmitted *nothing* —
+`Datagrams transmitted: 0`, and the observer heard no stream. The only frame
+source is `pipeline.startCapture`, inside the `useAudioDevices` branch, so with
+no devices open PTT changes state and feeds no PCM. The banner says "PTT will
+send silence". A test that keys up unattended needs the real microphone until
+that is fixed, which is why the run above used `--audio` on the transmitting
+side. It is a library-repo problem, not one to fix from here.
+
+**The app half is still open** — that is what `BU-4` check 5 actually wants,
+and it is the half a UI test can drive.
 
 **What is actually being asked.** An M17 stream is a numbered sequence of
 frames and the final one sets the last-frame flag, `FN & 0x8000`. A receiver
