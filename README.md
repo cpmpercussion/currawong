@@ -174,7 +174,7 @@ momentary, and says so wherever it can key the radio.
 |---|---|---|
 | **SF-1** | transmit watchdog | Met. Enforced in the library; the timeout is per node and settable from 5 to 600 seconds, and cannot be switched off. Shown on screen when it fires. |
 | **SF-2** | BLE link loss drops transmit | Met. Unconditional on every disconnection, before the reconnect logic and before anything is awaited, whether or not the accessory was the input holding the key. |
-| **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. |
+| **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. A **route change** additionally keys back down if the button is still held — transmission stops either way, but an operator who never let go should not have to press again. Bounded to three resumes per hold, and never applied to an interruption. |
 | **SF-4** | transmit state visible without unlocking | **Not met** — the Live Activity is APP-3. There is a full-bleed banner while the app is on screen, and it names the input that keyed and whether letting go will unkey. |
 
 Not yet: the Live Activity (SF-4, APP-3).

@@ -503,11 +503,14 @@ xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
   the observer: link up, PTT keyed, banner shown, `Inbound streams heard: 0`.
   No microphone prompt ever appeared, which is the suspicious part — an app
   launched by a test runner does not get to ask. One run also carried an SF-3
-  banner, *"Transmission stopped: the audio route changed"*, which would drop
-  transmit on its own and is worth ruling in or out before blaming the
-  permission. Until this is settled the test cannot answer BU-8: an over with
-  no frames in it has no final frame either. **Grant Currawong the microphone
-  by running it normally once**, keying it by hand, and answering the prompt.
+  banner, *"Transmission stopped: the audio route changed"* — that one is now
+  **fixed rather than merely diagnosed**: a route change under a held button
+  keys back down once the graph settles instead of ending the over and telling
+  the operator to press a button they are still pressing. It did not make audio
+  appear, so the microphone is a separate and still-open problem. Until it is
+  settled the test cannot answer BU-8: an over with no frames in it has no
+  final frame either. **Grant Currawong the microphone by running it normally
+  once**, keying it by hand, and answering the prompt.
 - **The form's fields had no accessibility labels at all.** SwiftUI gives a
   `TextField` its placeholder and nothing else, so VoiceOver announced
   "node.example.org, text field" with no way to know it was the host. Fixed in
