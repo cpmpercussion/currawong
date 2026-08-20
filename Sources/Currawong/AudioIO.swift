@@ -261,14 +261,6 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
 
     /// Puts the shared session into the category a half-duplex radio needs, and
     /// activates it.
-    ///
-    /// This duplicates `AudioPipeline.configureSession()`, three lines of it,
-    /// and does so knowingly. That method is an *instance* method, so reaching
-    /// it means owning a pipeline, and owning a pipeline means having built an
-    /// engine — which is the one thing that must not happen before this call
-    /// (see the type note). The library should expose the session policy without
-    /// requiring an engine; until it does, the category lives in both places and
-    /// the two must be kept in step.
     func configureSession() throws {
         try activateSession()
 
@@ -280,45 +272,24 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         _ = pipeline()
     }
 
-    #if os(iOS)
-    /// Route audio to a paired Bluetooth headset's **hands-free profile**,
-    /// which is the one that carries a microphone — the half that matters for
-    /// PTT. A2DP is the other profile and is output only.
-    ///
-    /// **Spelled twice, and the `#if` is not about the OS version.** The iOS 26
-    /// SDK renamed `allowBluetooth` to `allowBluetoothHFP`; both are the same
-    /// option with the same raw value (`0x4`), and the new name is annotated
-    /// available from iOS 1.0, so this is purely a question of *which SDK is
-    /// compiling* and never of what the device supports. There is nothing to
-    /// gate at runtime, and no `#available` here would be correct.
-    ///
-    /// The old name is deprecated under the new SDK and the new name is absent
-    /// from the old one, so either spelling alone breaks somebody: this repo's
-    /// CI runs `macos-15` without pinning an Xcode, and pinning one is the
-    /// change that would let this collapse to a single line. `#if compiler` is
-    /// the available proxy for an SDK check — Xcode 26 ships Swift 6.2, Xcode
-    /// 16.4 shipped 6.1 — and an inactive `#if` branch is parsed but not
-    /// type-checked, which is what makes naming an absent symbol safe.
-    private static var bluetoothHFP: AVAudioSession.CategoryOptions {
-        #if compiler(>=6.2)
-        .allowBluetoothHFP
-        #else
-        .allowBluetooth
-        #endif
-    }
-    #endif
-
     /// The session half of ``configureSession()``, on its own so the repair path
     /// in ``startCapture(onFrame:)`` can reach it without building an engine.
+    ///
+    /// **The policy is the library's** (RC-11, v0.5.3):
+    /// `AudioPipeline.activateSession()` is static, so reaching it does not mean
+    /// owning a pipeline and therefore having built an engine — which is the
+    /// ordering that must not be violated (see the type note). The app kept a
+    /// copy of the category while that static did not exist; it no longer does,
+    /// and with it went the `allowBluetooth` → `allowBluetoothHFP` shim, because
+    /// the library states the options as a raw value.
+    ///
+    /// What is left here is the platform guard: `AVAudioSession` does not exist
+    /// on macOS, where input and output device selection is the user's, via
+    /// System Settings, and there is nothing for the app to configure.
     private func activateSession() throws {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord, mode: .voiceChat, options: [Self.bluetoothHFP, .defaultToSpeaker])
-        try session.setActive(true)
+        try AudioPipeline.activateSession()
         #endif
-        // macOS has no AVAudioSession. Device selection there is the user's,
-        // via System Settings, and there is nothing for the app to configure.
     }
 
     /// Opens the microphone, repairing the audio stack once if the first attempt
