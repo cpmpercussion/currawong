@@ -463,6 +463,40 @@ final class NodeSettingsTests: XCTestCase {
         XCTAssertEqual(again.id, decoded.id)
     }
 
+    /// What the status panel shows under the name. Unlike ``displayName`` this
+    /// never defers to the operator's own name: a channel called "Sunday net"
+    /// still has to say where it goes, the way a radio shows its frequency
+    /// whether or not the memory is named.
+    func testTheAddressDescriptionIgnoresTheNameAndNamesThePlace() {
+        var named = good
+        named.name = "Sunday net"
+        XCTAssertEqual(named.addressDescription, "node 55553 at node.example.org")
+
+        var namedM17 = m17
+        namedM17.name = "M17-432 H"
+        XCTAssertEqual(namedM17.addressDescription, "ref.example.org · module A")
+
+        // An edit in progress is the case this exists for: the name stays put
+        // while the address underneath it changes.
+        namedM17.host = "112.213.34.65"
+        XCTAssertEqual(namedM17.displayName, "M17-432 H")
+        XCTAssertEqual(namedM17.addressDescription, "112.213.34.65 · module A")
+    }
+
+    /// A half-filled channel still describes itself rather than going blank.
+    func testTheAddressDescriptionSaysWhatIsMissing() {
+        var empty = m17
+        empty.name = "Draft"
+        empty.host = ""
+        empty.module = ""
+        XCTAssertEqual(empty.addressDescription, "no reflector")
+
+        var hostless = good
+        hostless.host = ""
+        hostless.node = ""
+        XCTAssertEqual(hostless.addressDescription, "no host")
+    }
+
     /// What the channel list shows. The operator's own name wins; without one,
     /// each mode describes itself with the field that identifies it.
     func testTheDisplayNameFallsBackToWhicheverFieldIdentifiesTheChannel() {
