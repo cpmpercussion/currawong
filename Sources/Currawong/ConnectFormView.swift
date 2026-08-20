@@ -296,6 +296,7 @@ struct ConnectFormView: View {
     private var hostAndPortFields: some View {
         LabelledField(label: "Host", systemImage: "network") {
             TextField("node.example.org", text: $settings.host)
+                .accessibilityIdentifier("connect.host")
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -426,6 +427,7 @@ struct ConnectFormView: View {
     private var moduleField: some View {
         LabelledField(label: "Module", systemImage: "square.grid.2x2") {
             TextField("C", text: $settings.module)
+                .accessibilityIdentifier("connect.module")
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .textInputAutocapitalization(.characters)
@@ -531,6 +533,7 @@ struct ConnectFormView: View {
     private var callsignField: some View {
         LabelledField(label: "Callsign", systemImage: "person.wave.2") {
             TextField("VK1XYZ", text: $identity.callsign)
+                .accessibilityIdentifier("connect.callsign")
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .textInputAutocapitalization(.characters)
