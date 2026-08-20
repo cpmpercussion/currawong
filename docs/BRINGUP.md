@@ -76,7 +76,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app's own release path is still unobserved |
+| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Library half confirmed 2026-08-20** (`ended — end of over`, two CLIs on `m17-cbr.charlesmartin.au` A). The app half is written as a UI test and waits on a one-time macOS Accessibility grant |
 
 ---
 
@@ -460,8 +460,33 @@ send silence". A test that keys up unattended needs the real microphone until
 that is fixed, which is why the run above used `--audio` on the transmitting
 side. It is a library-repo problem, not one to fix from here.
 
-**The app half is still open** — that is what `BU-4` check 5 actually wants,
-and it is the half a UI test can drive.
+**The app half is written and blocked on one click.**
+`Tests/CurrawongOnAirUITests/M17EndOfOverUITests.swift` drives the real app:
+picks M17, fills the reflector and module, connects, holds PTT for three
+seconds with `press(forDuration:)`, then hangs up. It has its own target and
+its own scheme, `CurrawongOnAir`, and is deliberately **not** in the
+`Currawong` scheme's `testTargets` — it transmits, so it must never run under
+`make test` or in CI.
+
+```sh
+# terminal 1 — the observer
+cd ../swift-hamvoip
+swift run hamvoip-cli m17 --host m17-cbr.charlesmartin.au --module A \
+    --callsign <yours-with-a-suffix> --no-audio --duration 150
+# terminal 2 — the app, driven
+xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
+    -derivedDataPath DerivedData -destination 'platform=macOS' test
+```
+
+⚠️ **It needs two macOS permissions, and both are one-time and human-only.**
+The first attempt, 2026-08-20, failed with `Timed out while enabling automation
+mode` — macOS UI testing requires the process running the tests to be allowed
+to control the computer, which is granted in **System Settings → Privacy &
+Security → Accessibility** and cannot be granted from a script, because the TCC
+database is SIP-protected by design. The second is **microphone access for
+Currawong itself**, prompted on the first over; without it the app keys up and
+sends no frames, exactly as `--no-audio` does in the CLI. Approve both once by
+hand and the test is repeatable after that.
 
 **What is actually being asked.** An M17 stream is a numbered sequence of
 frames and the final one sets the last-frame flag, `FN & 0x8000`. A receiver
