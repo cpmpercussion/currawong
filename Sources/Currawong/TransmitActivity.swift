@@ -108,7 +108,17 @@ final class TransmitActivityController {
 
     /// Clears anything a previous run of the app left behind. Call once, at
     /// launch. See ``TransmitActivityPresenting/endOrphans()``.
+    ///
+    /// **Clears ``showing`` too**, because `endOrphans()` ends *every* activity
+    /// including one this controller started — so not clearing it would leave
+    /// this object believing a banner is up that it has just had taken down, and
+    /// the next ``show(_:)`` with the same content would then do nothing at all.
+    /// In practice this is called once, at launch, before anything can key up,
+    /// so the case is unreachable; making it correct anyway is cheaper than
+    /// relying on that staying true, and the reachability of a stale-indicator
+    /// bug is not the kind of thing this class should be betting on.
     func adopt() {
+        showing = nil
         enqueue { [presenter] in await presenter.endOrphans() }
     }
 

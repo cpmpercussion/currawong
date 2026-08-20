@@ -601,6 +601,14 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
 /// from the calls rather than tracked separately, so a presenter that was ended
 /// twice, or started without being ended, shows up as the sequence it really was
 /// rather than as a tidy boolean.
+///
+/// **`endOrphans` ends things, and this fake has to agree.** It reads as a
+/// launch-time housekeeping call, but the contract is "end every activity this
+/// app has left running" — and the real presenter nils its own handle too, so it
+/// ends *ours* along with any leftover. A fake that treated it as a no-op would
+/// report `isShowing == true` after a sequence that had really taken the banner
+/// down, which is exactly the kind of ordering bug these tests exist to catch.
+/// Caught in review of the APP-3 PR.
 @MainActor
 final class RecordingActivityPresenter: TransmitActivityPresenting {
     enum Call: Equatable {
@@ -617,8 +625,8 @@ final class RecordingActivityPresenter: TransmitActivityPresenting {
         for call in calls.reversed() {
             switch call {
             case .start: return true
-            case .end: return false
-            case .update, .endOrphans: continue
+            case .end, .endOrphans: return false
+            case .update: continue
             }
         }
         return false
@@ -631,7 +639,7 @@ final class RecordingActivityPresenter: TransmitActivityPresenting {
             switch call {
             case .start(let request): return request.state
             case .update(let state): return state
-            case .end, .endOrphans: continue
+            case .end, .endOrphans: continue  // the state shown, not whether it still is
             }
         }
         return nil
@@ -662,6 +670,11 @@ final class RecordingActivityPresenter: TransmitActivityPresenting {
     }
 
     var endCount: Int { calls.filter { $0 == .end }.count }
+
+    /// Ends of either kind. `endCount` counts only the ordinary one, because the
+    /// route-change tests are asserting that *no* teardown happened and an
+    /// `adopt()` at launch would otherwise count against them.
+    var anyEndCount: Int { calls.filter { $0 == .end || $0 == .endOrphans }.count }
 
     func start(_ request: TransmitActivityRequest) async { calls.append(.start(request)) }
     func update(_ state: TransmitActivityState) async { calls.append(.update(state)) }

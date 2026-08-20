@@ -174,6 +174,33 @@ final class TransmitActivityControllerTests: XCTestCase {
         XCTAssertEqual(presenter.calls, [.endOrphans])
     }
 
+    /// `endOrphans()` ends *every* activity, this controller's included, so both
+    /// the controller's own bookkeeping and the recording presenter's have to
+    /// agree that nothing is showing afterwards. A fake that treated it as
+    /// housekeeping, or a controller that kept `showing` set, would each hide the
+    /// same class of ordering bug — and the next `show(_:)` of identical content
+    /// would then be deduplicated away, leaving no banner at all. Both halves
+    /// caught in review of the APP-3 PR.
+    func testAdoptEndsAnActivityThisControllerStarted() async {
+        let presenter = RecordingActivityPresenter()
+        let controller = TransmitActivityController(presenter: presenter)
+
+        controller.show(request())
+        controller.adopt()
+        await controller.settle()
+
+        XCTAssertFalse(presenter.isShowing, "endOrphans ends this controller's activity too")
+        XCTAssertNil(controller.showing, "the controller must not believe a banner it just ended")
+
+        // And the banner can be put back up, rather than being deduplicated
+        // against a stale `showing`.
+        controller.show(request())
+        await controller.settle()
+
+        XCTAssertTrue(presenter.isShowing)
+        XCTAssertEqual(presenter.startCount, 2)
+    }
+
     func testAdoptRunsBeforeAnythingThisLaunchStarts() async {
         let presenter = RecordingActivityPresenter()
         let controller = TransmitActivityController(presenter: presenter)
