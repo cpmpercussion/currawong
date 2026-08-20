@@ -15,8 +15,8 @@ firing — the transmit watchdog unkeying a held button, and a phone call
 dropping transmit — and they are app-level rather than anything to do with a
 protocol: the same two mechanisms serve all three modes. They are `BU-7`, they
 are wanted before any public beta, and they are deliberately not holding this
-phase open. `BU-3` is done in the library and waits on a release; one M17 check
-(`BU-4`) can only be answered by somebody at the far end.
+phase open. `BU-3` is done in the library and waits on a release, and `BU-8` is one
+self-contained M17 test against our own reflector.
 
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
 `../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
@@ -72,10 +72,11 @@ keep treating the app as unproven on air.
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | ✅ **Closed 2026-08-20** — parrot node `55553`, extended overs returned clean, DTMF commands accepted. The watchdog and phone-call halves moved to `BU-7` |
 | BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Library fix done (RC-11, `swift-hamvoip` PR #35). Open **here** until a release carries it and this app deletes its copy |
-| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) needs a far-end observer and is open; check 6 folded into `BU-7` |
+| BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) is now `BU-8`; check 6 folded into `BU-7` |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
+| BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | Open — a specific, self-contained test against `m17-cbr.charlesmartin.au` |
 
 ---
 
@@ -153,17 +154,8 @@ readable" are no longer different claims. Checks 5 and 6 were not exercised in
 that session.
 
 **Check 5 — "releasing PTT ends the over cleanly" — is a far-end observation,
-and cannot be settled from this end.** It does not mean the app tears down the
-link, and it is not about anything visible on the phone: it asks whether the
-*receiver* sees the stream **end** rather than the audio simply stopping. An
-M17 stream is a numbered sequence of frames, and the last one carries an
-end-of-transmission marker; a receiver that gets the marker drops the callsign
-display and closes the over immediately, while one that just stops getting
-frames sits there until it times out. So "it all seems to work from here" is
-exactly what both cases look like on the transmitting side, which is why this
-one is still open — it needs somebody watching a second client at the moment
-PTT is released, the same way check 4 needed Mseven. Worth folding into the
-next session with a second receiver rather than staging on its own.
+and cannot be settled from this end.** It is now its own item, `BU-8`, with a
+method that needs nobody else's cooperation.
 
 **Check 6** (the watchdog unkeying a held button) is not M17-specific at all —
 the same `RadioCore` watchdog serves every mode — so it moved to `BU-7`.
@@ -437,6 +429,64 @@ know when doing it:
 - The engine construction in `configureSession()` — "build it here, immediately
   after activation, never before" — is the app's own ordering decision and
   stays. Only the session half is the library's.
+
+### BU-8 — watch an M17 over end, at the far end
+
+**A specific test, and a cheap one.** Split out of `BU-4` check 5 on
+2026-08-20, because "clean teardown" reads like a link question and is not one.
+
+**What is actually being asked.** An M17 stream is a numbered sequence of
+frames and the final one sets the last-frame flag, `FN & 0x8000`. A receiver
+that gets it closes the over immediately; a receiver that does not simply stops
+being fed, and there is **no timeout path** — `StreamEndReason` has exactly two
+cases, `.lastFrame` and `.preempted` — so a lost final frame leaves the last
+station displayed until somebody else transmits. None of that is visible from
+the transmitting side, which is why "it all seems to work" cannot settle it.
+
+**Both halves are implemented**, which is why this is a confirmation rather
+than a suspicion. `M17Client.stopTransmit()` pads the leftover half frame and
+sends it with `isLast: true`; `M17StreamReceiver` reads the flag and the client
+emits `.streamEnded(reason: .lastFrame)`. The pair has just never been observed
+working against a real reflector.
+
+**The method: two `hamvoip-cli` instances against `m17-cbr.charlesmartin.au`**,
+which is ours — no shared channel, nobody else's session to interrupt, and it
+can be repeated as often as it takes.
+
+```sh
+cd ../swift-hamvoip
+# terminal 1 — the observer, transmitting nothing
+swift run hamvoip-cli m17 --host m17-cbr.charlesmartin.au --module <m> --callsign <yours>
+# terminal 2 — the transmitter, a different callsign or SSID
+swift run hamvoip-cli m17 --host m17-cbr.charlesmartin.au --module <m> --callsign <yours-2>
+```
+
+**What passes.** Key terminal 2, say something, release. Terminal 1 should
+print `RX <callsign> ended — end of over` **within a moment of the release**,
+not seconds later and not only when the next over starts.
+
+**What failure looks like**, and the two are worth telling apart:
+
+- **No `ended` line at all** — the final frame never arrived or never left. The
+  observer will sit on the last station indefinitely.
+- **`ended — cut off by another station`** — a `.preempted` end, meaning a new
+  stream ID began before this one finished. On a two-client test that means the
+  flag was missed and the *next* over cleaned up after it.
+
+**Then the same again with the app transmitting** and one CLI observing. That
+is the check `BU-4` actually wants — the app's release path, not the library's
+— and it is the same setup with terminal 2 replaced by a phone.
+
+**One edge worth trying while set up:** a very short tap. Under 40 ms no packet
+is sent at all (`stopTransmit` guards on `nextSequenceNumber > 0`), so the
+observer should show no stream rather than a stream that never ends. A brief
+over that *does* start must still end.
+
+Capturing it costs nothing and settles any later disagreement:
+
+```sh
+sudo tcpdump -i any -w ../experiment-data/m17-bu8.pcap 'udp port 17000'
+```
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 
