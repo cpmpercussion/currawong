@@ -392,6 +392,31 @@ final class RadioSession: ObservableObject {
     private var transmitWork: Task<Void, Never>?
     private var transmitWorkGeneration = 0
 
+    /// Where the *hold* came from, as distinct from ``activeSource``, which is
+    /// where the current transmission came from.
+    ///
+    /// They differ for exactly as long as it takes to recover from a route
+    /// change: transmission has stopped (SF-3) but the operator has not let go,
+    /// so there is still a hold to key back down. Cleared by every stop reason
+    /// but that one — see `TransmitStopReason.leavesTheHoldAlive`.
+    private var heldSource: PTTSource?
+
+    /// Automatic key-downs used by the current hold. Reset by a press the
+    /// operator makes; never by one this class makes.
+    private var automaticResumes = 0
+
+    private var resumeWork: Task<Void, Never>?
+
+    /// How many times one hold may be keyed back down after a route change.
+    /// A route that flaps is a broken audio path, not something to key a
+    /// transmitter into repeatedly.
+    private static let maximumAutomaticResumes = 3
+
+    /// How long to let the audio graph settle before asking for the microphone
+    /// again. The route-change notification says the graph is *being* rebuilt,
+    /// not that it is finished.
+    private static let routeSettleNanoseconds: UInt64 = 300_000_000
+
     private var signalTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
@@ -999,6 +1024,10 @@ final class RadioSession: ObservableObject {
         guard !transmitDesired else { return }
 
         safetyNotice = nil
+        // A press the operator made, rather than one this class made for them,
+        // starts a fresh hold — and a fresh allowance of automatic resumes.
+        if heldSource == nil { automaticResumes = 0 }
+        heldSource = source
         transmitDesired = true
         isKeyDown = true
         activeSource = source
@@ -1011,13 +1040,14 @@ final class RadioSession: ObservableObject {
     /// The microphone is closed **synchronously, first**, before the task
     /// chain is touched: an interruption or a watchdog must not wait behind a
     /// key-up that is still in flight to an actor.
-    func endTransmit(reason: TransmitStopReason) {
+    func endTransmit(reason: TransmitStopReason, explain: Bool = true) {
         audio.stopCapture()
 
         if transmitDesired || isTransmitting {
             lastStopReason = reason
-            if reason.isUnexpected { noteSafetyStop(reason) }
+            if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }
+        if !reason.leavesTheHoldAlive { heldSource = nil }
         transmitDesired = false
         isKeyDown = false
         activeSource = nil
@@ -1140,13 +1170,51 @@ final class RadioSession: ObservableObject {
         case .interruptionBegan:
             endTransmit(reason: .audioInterrupted)
         case .routeChanged:
-            endTransmit(reason: .routeChanged)
+            resumeAcrossRouteChange()
         case .interruptionEnded:
             // Deliberately does not resume. `shouldResume` is a hint about
             // *playback*; keying a transmitter because a phone call ended is
             // not a thing a radio should do on its own. The stop is repeated
             // for safety and records no reason, because nothing new happened.
             endTransmit(reason: .audioInterrupted)
+        }
+    }
+
+    /// SF-3 for a route change, with the recovery the operator would
+    /// otherwise have to perform by hand.
+    ///
+    /// Transmission stops — that part is not negotiable, and the audio graph
+    /// has just been rebuilt underneath us in any case. What changes is what
+    /// happens next: if the button is still down, this keys back down once the
+    /// route has settled instead of leaving a banner that says "press and hold
+    /// to transmit again" to somebody who never stopped holding.
+    ///
+    /// The banner is kept for the cases that cannot be repaired — no hold, no
+    /// link, or a route that will not stop changing. Then it is telling the
+    /// operator something they can act on, which is the only reason to show it.
+    ///
+    /// **Bounded on purpose.** A flapping route must not become an unbounded
+    /// series of key-downs: after ``maximumAutomaticResumes`` in one hold this
+    /// gives up and says so. Each resume is a real key-down and starts its own
+    /// SF-1 watchdog, and the watchdog firing ends the hold outright, so this
+    /// cannot be used to hold a transmitter open past the timeout.
+    private func resumeAcrossRouteChange() {
+        let resumable = heldSource.flatMap { source in
+            connection.isConnected && automaticResumes < Self.maximumAutomaticResumes
+                ? source : nil
+        }
+
+        endTransmit(reason: .routeChanged, explain: resumable == nil)
+        guard let source = resumable else { return }
+
+        automaticResumes += 1
+        resumeWork = Task { @MainActor [weak self] in
+            // Let the graph settle before asking for the microphone again:
+            // the route change is the notification that it is *being* rebuilt,
+            // not that it is finished.
+            try? await Task.sleep(nanoseconds: Self.routeSettleNanoseconds)
+            guard let self, self.heldSource == source, self.connection.isConnected else { return }
+            self.beginTransmit(from: source)
         }
     }
 

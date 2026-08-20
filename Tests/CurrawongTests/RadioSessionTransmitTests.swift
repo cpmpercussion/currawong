@@ -204,8 +204,8 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertEqual(harness.session.safetyNotice?.kind, .audioInterruption)
     }
 
-    /// SF-3.
-    func testARouteChangeDropsTransmitAndSaysWhy() async {
+    /// SF-3: transmission stops on a route change, without exception.
+    func testARouteChangeDropsTransmit() async {
         let harness = SessionHarness()
         harness.session.start()
         await harness.connect()
@@ -216,9 +216,97 @@ final class RadioSessionTransmitTests: XCTestCase {
         await waitUntil("the route change drops transmit") {
             !harness.client.isTransmitting
         }
-        XCTAssertFalse(harness.audio.isCapturing)
         XCTAssertEqual(harness.session.lastStopReason, .routeChanged)
+    }
+
+    /// SF-3's other half, and the one an operator actually feels: they never
+    /// let go, so the app keys back down rather than telling them to press a
+    /// button they are already pressing.
+    func testARouteChangeUnderAHeldButtonResumesTransmit() async {
+        let harness = SessionHarness()
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+
+        harness.audio.emit(.routeChanged)
+
+        await waitUntil("transmit comes back on its own") {
+            harness.client.isTransmitting
+        }
+        XCTAssertTrue(harness.audio.isCapturing)
+        XCTAssertNil(
+            harness.session.safetyNotice,
+            "a repaired route change is not something to explain to anybody")
+    }
+
+    /// The same signal with nobody holding the button is a non-event: plugging
+    /// a headset in while listening is not a safety stop, and there is nothing
+    /// to key back down.
+    func testARouteChangeWithNoHoldNeitherResumesNorComplains() async {
+        let harness = SessionHarness()
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+        harness.session.endTransmit(reason: .released)
+        await harness.session.settle()
+
+        harness.audio.emit(.routeChanged)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(harness.client.isTransmitting)
+        XCTAssertNil(harness.session.safetyNotice)
+    }
+
+    /// A route that will not settle must not become an unbounded series of
+    /// key-downs. After the allowance is spent the app gives up and says so.
+    func testAFlappingRouteStopsResumingAndSaysSo() async {
+        let harness = SessionHarness()
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+
+        for _ in 0..<5 {
+            harness.audio.emit(.routeChanged)
+            await waitUntil("transmit stops") { !harness.client.isTransmitting }
+            // Let any resume land before provoking the next change.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+
+        XCTAssertFalse(harness.client.isTransmitting)
         XCTAssertEqual(harness.session.safetyNotice?.kind, .routeChange)
+    }
+
+    /// SF-1 is not negotiable: the watchdog ends the hold, so a route change
+    /// afterwards has nothing to key back down. Otherwise a held button plus a
+    /// flapping route would transmit for ever.
+    func testTheWatchdogEndsTheHoldSoNothingResumes() async {
+        let harness = SessionHarness()
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+
+        harness.session.endTransmit(reason: .watchdogExpired)
+        await harness.session.settle()
+
+        harness.audio.emit(.routeChanged)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(harness.client.isTransmitting)
+    }
+
+    /// An interruption is something else wanting the microphone — a phone call,
+    /// typically. Never resumed, held button or not.
+    func testAnInterruptionUnderAHeldButtonDoesNotResume() async {
+        let harness = SessionHarness()
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+
+        harness.audio.emit(.interruptionBegan)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(harness.client.isTransmitting)
+        XCTAssertEqual(harness.session.safetyNotice?.kind, .audioInterruption)
     }
 
     /// SF-3, the other edge. `shouldResume` is a hint about playback; nothing
@@ -429,7 +517,9 @@ final class RadioSessionTransmitTests: XCTestCase {
         harness.session.start()
         await harness.connect()
         await harness.keyDown()
-        harness.audio.emit(.routeChanged)
+        // An interruption rather than a route change: a route change under a
+        // held button now repairs itself and leaves no notice to clear.
+        harness.audio.emit(.interruptionBegan)
         await waitUntil("the notice appears") { harness.session.safetyNotice != nil }
 
         await harness.keyDown()

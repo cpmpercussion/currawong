@@ -129,6 +129,33 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// operator has to make a fresh, deliberate press.
     case transmitFailed
 
+    /// Whether the operator's finger (or fob, or headset button) is still
+    /// down after this stop.
+    ///
+    /// **Only a route change leaves a hold alive.** Everything else either is
+    /// the release, or is a reason the hold must not survive: an interruption
+    /// means something else wants the microphone, the watchdog means the hold
+    /// has run too long already and auto-resuming would defeat SF-1, and
+    /// backgrounding or disconnecting means there is nothing to hold on to.
+    ///
+    /// A route change is different in kind. The operator did not let go, and
+    /// nothing is competing for the audio path — a device appeared or vanished
+    /// and the graph had to be rebuilt underneath them. Telling them to press
+    /// again is asking them to do the app's work, so ``RadioSession`` keys back
+    /// down instead. SF-3 still holds: transmission *does* stop, and the
+    /// resume is a fresh key-down with its own watchdog.
+    var leavesTheHoldAlive: Bool {
+        switch self {
+        case .routeChanged:
+            return true
+        case .released, .accessoryReleased, .remoteCommandToggled,
+            .draggedOffButton, .disconnecting, .gestureCancelled,
+            .viewDisappeared, .appBackgrounded, .audioInterrupted,
+            .watchdogExpired, .transmitFailed, .accessoryLinkLost:
+            return false
+        }
+    }
+
     /// Whether this stop happened *to* the operator rather than because of
     /// them. These are the ones worth explaining on screen — an operator who
     /// does not know why they were unkeyed will simply key up again.
