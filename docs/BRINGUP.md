@@ -73,7 +73,7 @@ keep treating the app as unproven on air.
 |---|---|---|
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |
 | BU-2 | The on-air session itself — the five checks above | ✅ **Closed 2026-08-20** — parrot node `55553`, extended overs returned clean, DTMF commands accepted. The watchdog and phone-call halves moved to `BU-7` |
-| BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | Library fix done (RC-11, `swift-hamvoip` PR #35). Open **here** until a release carries it and this app deletes its copy |
+| BU-3 | `RadioCore` should expose the audio-session policy without requiring an engine | ✅ **Closed 2026-08-20** — library fix RC-11 (`swift-hamvoip` PR #35) shipped in v0.5.3, which is now the floor; the app's copy of the policy is gone |
 | BU-4 | M17 has never been transmitted to a reflector, by this app or anything else | **Transmit confirmed heard 2026-08-17** — receive proven 2026-08-16, transmit from this app to M17-434 B heard via Mseven, an independent client. Check 5 (the far end sees the stream *end*) ✅ **closed 2026-08-20** as `BU-8`; check 6 folded into `BU-7` |
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
@@ -402,7 +402,7 @@ Bring the failure text, verbatim, of anything that goes wrong — the alerts are
 written to be readable off a phone screen precisely because that is the only
 instrumentation available in the field.
 
-### BU-3 — the library should not require an engine to set the session category
+### BU-3 — the library should not require an engine to set the session category ✅ CLOSED 2026-08-20
 
 `AudioPipeline.configureSession()` is an instance method, so reaching the audio
 session policy means owning an `AudioPipeline`, and owning one means having built
@@ -420,19 +420,21 @@ comment from `AudioIO.swift`.
 `AudioSessionPolicy` holds the policy and `AudioPipeline.activateSession()` is
 static, so the category can be set with no engine anywhere in the call.
 
-**What is left here, and it waits on a release.** When a tagged version carrying
-RC-11 is the floor in `project.yml`, `AudioIO.activateSession()` and the comment
-above `configureSession()` explaining why the policy is spelled twice both come
-out, and the app calls `AudioPipeline.activateSession()` instead. Two things to
-know when doing it:
+**The app half landed with v0.5.3**, which carries RC-11 and is now the floor in
+`project.yml`. Gone from `AudioIO.swift`: the category, mode and options; the
+comment above `configureSession()` apologising for spelling them twice; and the
+`#if compiler(>=6.2)` shim for the `allowBluetooth` → `allowBluetoothHFP`
+rename, which had nothing left to gate once the library stated the options as a
+raw value. `AudioIO.activateSession()` survives as two lines around
+`AudioPipeline.activateSession()`, and the deviation is deliberate: the library's
+static is inside `#if os(iOS)`, so deleting the wrapper outright would have put
+that guard at both call sites — `configureSession()` and the repair path in
+`startCapture(onFrame:)` — and left nowhere to say why macOS needs nothing. What
+is left in the app is the platform guard, not the policy.
 
-- The app's `#if compiler(>=6.2)` shim for the `allowBluetooth` →
-  `allowBluetoothHFP` rename goes too. The library expresses the options as a
-  raw value, which is the same for both spellings, so there is nothing left to
-  gate.
-- The engine construction in `configureSession()` — "build it here, immediately
-  after activation, never before" — is the app's own ordering decision and
-  stays. Only the session half is the library's.
+The engine construction in `configureSession()` — "build it here, immediately
+after activation, never before" — is the app's own ordering decision and
+**stays**. Only the session half was the library's.
 
 ### BU-8 — watch an M17 over end, at the far end ✅ CLOSED 2026-08-20
 

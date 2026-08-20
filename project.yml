@@ -29,10 +29,12 @@ packages:
   # Versioned git dependency. v0.3.0 added EchoLink (`EchoLinkKit`) and made
   # `NetworkClient` a seam an app can be written against (RC-10); v0.4.0 added
   # public proxy discovery (`EchoLinkProxySelector`, EL-12), which is what
-  # ``EchoLinkProxyFinder`` is built on; **v0.5.2 is the floor** — v0.5.0 added the
+  # ``EchoLinkProxyFinder`` is built on; **v0.5.3 is the floor** — v0.5.0 added the
   # Web Transceiver fields `IAX2Destination.callingNumber` and `callingName`
-  # (IAX-12), v0.5.1 carries an SF-1 reentrancy fix, and v0.5.2 adds the portal
-  # token fetch (IAX-13). `from:` accepts any 0.5.x — the library
+  # (IAX-12), v0.5.1 carries an SF-1 reentrancy fix, v0.5.2 adds the portal
+  # token fetch (IAX-13), and v0.5.3 adds the static
+  # `AudioPipeline.activateSession()` (RC-11) that let this app delete its own
+  # copy of the audio-session policy — `BU-3`. `from:` accepts any 0.5.x — the library
   # is 0.x, so its own changelog warns the API may change in any release;
   # `Currawong.xcodeproj/…/Package.resolved` is what actually pins the build,
   # and it is generated, so a fresh `make generate` resolves forward. Pin
@@ -45,7 +47,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.5.2
+    from: 0.5.3
 
 settings:
   base:
