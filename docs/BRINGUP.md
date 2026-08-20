@@ -78,7 +78,7 @@ keep treating the app as unproven on air.
 | BU-5 | EchoLink has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-16** — `*ECHOTEST*` QSO from the app, and VK1RBM heard live off-air |
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
-| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test. (1) and (2) answered by the maintainer 2026-08-21 and being implemented; (3) is no longer unexplained — the suspect was disproved 2026-08-21 and the cause is most likely the test's own unscoped menu query, unconfirmed while the automation grant is lapsed |
+| BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test. (1) and (2) answered by the maintainer 2026-08-21 and being implemented; (3) ✅ **closed 2026-08-21, not a defect** — a failed connect leaves a modal sheet up and no context menu can open while it stands; the "greyed out" was the menu bar's own `Edit ▸ Delete`, matched by an unscoped query. No production code changed |
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 
@@ -656,14 +656,15 @@ to miss. macOS has no swipe-to-delete, so there is then **no way at all** to
 remove that channel from that platform. Ruled out: the menu item's own
 `.disabled(!isMutable)`, the order of `.disabled` and `.contextMenu`, `.id()`
 on the row, and the session guard in `RadioSession.deleteChannel(_:)` (which is
-satisfied). The remaining suspect is the row's context menu not being rebuilt
-after the connection state changes.
+satisfied). The remaining suspect was the row's context menu not being rebuilt
+after the connection state changes — **and it was wrong; read on before acting on
+any of this paragraph.**
 
 **Not fixed here, deliberately.** (1) and (2) are one design question — what a
 channel *is*, and when an edit belongs to it — and answering it by adding a
 `saveDraft()` on quit would make accidental overwrites permanent rather than
-merely possible. That is the maintainer's call. (3) is a bug with no design
-question in it, but no fix found yet.
+merely possible. That is the maintainer's call. (3) turned out not to be a bug at all — see
+below, where it is measured and closed.
 
 #### What (3) is *not*, measured 2026-08-21
 
@@ -702,26 +703,58 @@ label, the row enabled) is a **modal alert still standing after the session**:
 `handleLinkLoss` presents one, and so does a failed connect, and only a channel
 that has been connected to reaches a path that ends in one.
 
-⚠️ **Not closed, and this is the honest state of it.** The scoped-query queries
-are fixed in `ChannelLifecycleUITests` and `M17EndOfOverUITests`, and
-`ChannelDeleteAfterConnectUITests` is written to settle it — it arms the lock with
-a connect attempt to `192.0.2.1` (TEST-NET-1, so nothing goes on air), records
-whether an alert is up and what an unscoped query reports while it is, and then
-deletes a bystander channel through a scoped one. **It has never been run:** this
-machine's UI-test automation grant has lapsed, and every run dies with `Timed out
-while enabling automation mode` before the app launches. Restore the grant in
-System Settings → Privacy & Security → Accessibility and run
+#### (3) is closed, 2026-08-21: there is no defect in Delete
 
-```sh
-xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
-    -derivedDataPath DerivedData -destination 'platform=macOS' \
-    -only-testing:CurrawongOnAirUITests/ChannelDeleteAfterConnectUITests test
-```
+`ChannelDeleteAfterConnectUITests` ran, and it passes. The automation grant came
+back, and what the test was written to settle it settled — **Delete works, and the
+report was two things at once, neither of them the menu.**
 
-The `=== ` prints in its output are the diagnosis. Until then item 3 has a
-best-supported cause rather than a confirmed one, and **no production code has
-been changed for it** — deliberately, because every candidate fix would have been
-a fifth attempt at a mechanism now measured not to happen.
+1. **A failed connect leaves a modal alert standing, and it arrives as a *sheet*.**
+   With it up, the row is still in the tree and still reads as enabled, the lock
+   label is gone, and the app says it is disconnected — but **no context menu can
+   open at all**: `=== with the alert up, a context menu opened: false`. Only a
+   channel that has been connected to reaches a path that ends in an alert, which
+   is the entire asymmetry with the never-connected case that made this look like
+   it was about *having been connected to*.
+2. **The unscoped query supplies the "greyed out".** With the alert up,
+   `app.menuItems["Delete"]` matches and reports `isEnabled: false` — the menu
+   bar's own `Edit ▸ Delete`. Existence passes, the item is disabled, the click
+   does nothing.
+
+Dismiss the alert and the row's menu opens, Delete is enabled, and clicking it
+removes the channel — on the dialled channel and on the bystander alike. So
+**there is no production bug here and no production code was changed for item 3**,
+which is the reason all four hand-tried fixes did nothing: three mechanisms were
+never happening, and the fourth was the measurement.
+
+What is left is a UX point rather than a fault, and it is worth writing down:
+after a failed connect the operator is looking at an app where right-click does
+nothing at all until the alert is dismissed. Nothing in BU-9 requires a change for
+it.
+
+#### Two traps this cost a morning to
+
+Both are in the test tooling, and both produce a confident false positive.
+
+- **`app.menus` holds every menu-bar menu**, open or not. Its count is about
+  **thirteen** before anything has been right-clicked, and `app.menus.firstMatch`
+  is the Apple menu — so `app.menus.count > 0` is not "a context menu opened", and
+  the guard written to be the *scoped* alternative to `app.menuItems["Delete"]`
+  was itself unscoped. The row's menu is told apart by holding exactly one item,
+  which is its whole contents: Delete.
+- **A run that dies before its cleanup edits the operator's real app.** The app
+  writes its channel list to the real defaults. Five runs left four rows behind,
+  the next run deleted one of two identically-named rows, and the existence check
+  reported "Delete did nothing" when it had worked perfectly — which is what kept
+  item 3 looking alive for a morning after it was already dead. The test now
+  removes every row of its own two names *before* it adds anything, asserts on the
+  **count** of matching rows rather than on whether one exists, and keeps
+  `continueAfterFailure = true` so an early failure cannot skip its own cleanup.
+
+Also settled in passing: `app.buttons["OK"].firstMatch` clicks the macOS test
+host's **Touch Bar** proxy of the default button and throws *"cannot be called
+with Touch Bar elements"*. Scope alert buttons to `app.sheets` — a SwiftUI
+`alert` on macOS is a sheet, not an `alert`.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 
