@@ -407,6 +407,35 @@ final class RadioSession: ObservableObject {
 
     private var resumeWork: Task<Void, Never>?
 
+    /// **SF-4.** The lock-screen half of the transmit indicator (APP-3).
+    ///
+    /// Driven from exactly one place — ``refreshActivity()``, called from every
+    /// transition that could change whether the radio is keyed — rather than
+    /// from each release path in turn. A per-path teardown is a teardown
+    /// somebody eventually forgets to add, and the thing they would be
+    /// forgetting is an activity that goes on claiming TX.
+    private let activity: TransmitActivityController
+
+    /// Whether a route-change recovery is between the stop and the key-down.
+    ///
+    /// The one state in which there is a live hold, nothing on air, and an
+    /// activity that must *stay up* — ending and restarting it around a 300 ms
+    /// gap would flicker the lock screen off and back on under a button the
+    /// operator never released. Tracked explicitly rather than inferred from
+    /// ``heldSource``, because a route change that cannot be recovered from also
+    /// leaves the hold alive and must **not** keep the activity.
+    private var routeResumeInFlight = false
+
+    /// When the current hold began, for the activity's elapsed clock. Survives
+    /// a route-change resume, so the clock measures the over rather than the
+    /// key-down.
+    private var holdBegan: Date?
+
+    /// When the library's watchdog will unkey the current key-down (SF-1).
+    /// Re-set on every key-down, including an automatic resume, because each one
+    /// starts its own watchdog.
+    private var watchdogDeadline: Date?
+
     /// How many times one hold may be keyed back down after a route change.
     /// A route that flaps is a broken audio path, not something to key a
     /// transmitter into repeatedly.
@@ -430,7 +459,13 @@ final class RadioSession: ObservableObject {
         makeLink: @escaping LinkFactory,
         releaseProxyLease: @escaping @MainActor () -> Void = {},
         resolver: any HostResolver = SystemHostResolver(),
-        now: @escaping @MainActor () -> Date = { Date() }
+        now: @escaping @MainActor () -> Date = { Date() },
+        // Not a default argument expression like the two above: the controller
+        // is `@MainActor` and a default argument is evaluated in a nonisolated
+        // context. `nil` means "no lock-screen indicator", which is what macOS,
+        // a preview and most of the tests want; `CompositionRoot` passes a real
+        // one on iOS.
+        activity: TransmitActivityController? = nil
     ) {
         self.audio = audio
         self.settingsStore = settingsStore
@@ -439,6 +474,7 @@ final class RadioSession: ObservableObject {
         self.releaseProxyLease = releaseProxyLease
         self.resolver = resolver
         self.now = now
+        self.activity = activity ?? .disabled
 
         let loaded = ChannelSet.loaded(from: settingsStore)
         self.channels = loaded
@@ -730,6 +766,11 @@ final class RadioSession: ObservableObject {
     /// stream is created once.
     func start() {
         guard signalTask == nil else { return }
+        // **SF-4, the app-termination path.** A Live Activity outlives the
+        // process that requested it, so a Currawong killed mid-over leaves a
+        // banner claiming TX with nothing behind it. This is the launch that
+        // clears it, and it runs before anything can key up.
+        activity.adopt()
         let signals = audio.signals
         signalTask = Task { @MainActor [weak self] in
             for await signal in signals {
@@ -997,6 +1038,8 @@ final class RadioSession: ObservableObject {
         tearDownLink()
         connection = .disconnected
         transmitState = .idle
+        routeResumeInFlight = false
+        refreshActivity()
     }
 
     // MARK: - PTT (PT-1)
@@ -1026,6 +1069,9 @@ final class RadioSession: ObservableObject {
         // A press the operator made, rather than one this class made for them,
         // starts a fresh hold — and a fresh allowance of automatic resumes.
         if heldSource == nil { automaticResumes = 0 }
+        // SF-4's elapsed clock measures the *hold*, so an automatic resume
+        // under a button that was never released keeps the original stamp.
+        if holdBegan == nil { holdBegan = now() }
         heldSource = source
         transmitDesired = true
         isKeyDown = true
@@ -1046,10 +1092,25 @@ final class RadioSession: ObservableObject {
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }
-        if !reason.leavesTheHoldAlive { heldSource = nil }
+        if !reason.leavesTheHoldAlive {
+            heldSource = nil
+            holdBegan = nil
+        }
         transmitDesired = false
         isKeyDown = false
         activeSource = nil
+        watchdogDeadline = nil
+        // Only a route change may leave a repair pending; every other reason
+        // settles the question, so anything left over from an earlier route
+        // change is stale and must not keep the indicator up.
+        if reason != .routeChanged { routeResumeInFlight = false }
+        // **Synchronously, with the microphone, and not behind the task
+        // chain.** This is the call that takes the lock-screen banner down, and
+        // it must not queue behind a key-down that is still in flight to the
+        // client — an indicator that lags an unkey is the stale state SF-4
+        // cannot afford. `routeResumeInFlight` is what keeps a route-change
+        // recovery's banner up across this; every other reason ends it.
+        refreshActivity()
         scheduleTransmitWork()
     }
 
@@ -1089,6 +1150,9 @@ final class RadioSession: ObservableObject {
             isTransmitting = false
             isKeyDown = false
             transmitDesired = false
+            routeResumeInFlight = false
+            watchdogDeadline = nil
+            refreshActivity()
             return
         }
 
@@ -1120,13 +1184,30 @@ final class RadioSession: ObservableObject {
                 transmitDesired = false
                 isKeyDown = false
                 isTransmitting = false
+                // **The hold ends here too**, which it did not before APP-3.
+                // `.transmitFailed` says the operator "must make a fresh,
+                // deliberate press", and `leavesTheHoldAlive` is false for it —
+                // but this path does not go through `endTransmit`, so the hold
+                // used to survive a failed key-down. That left an automatic
+                // resume able to fire off a hold nobody had renewed, and a
+                // lock-screen indicator with no way down.
+                heldSource = nil
+                holdBegan = nil
+                routeResumeInFlight = false
+                watchdogDeadline = nil
                 lastStopReason = .transmitFailed
                 transmitState = link.transmitState()
+                refreshActivity()
                 present(title: "Could not transmit", message: "\(error)")
                 return
             }
             isTransmitting = true
+            // Each key-down starts its own watchdog, including one this class
+            // made after a route change.
+            watchdogDeadline = now().addingTimeInterval(transmitTimeout.seconds)
+            routeResumeInFlight = false
             transmitState = link.transmitState()
+            refreshActivity()
         } else {
             // Unconditional rather than guarded by `isTransmitting`. Both
             // calls are documented as safe when nothing is running, and the
@@ -1136,6 +1217,7 @@ final class RadioSession: ObservableObject {
             await link.stopTransmit()
             isTransmitting = false
             transmitState = link.transmitState()
+            refreshActivity()
         }
     }
 
@@ -1203,6 +1285,13 @@ final class RadioSession: ObservableObject {
                 ? source : nil
         }
 
+        // Set **before** the stop, because `endTransmit` is what refreshes the
+        // lock-screen indicator (SF-4) and this is the flag that tells it the
+        // hold is being repaired rather than ended. A route change that cannot
+        // be recovered from leaves this false and the activity ends with the
+        // transmission, which is the honest answer: nothing is going to key
+        // back down.
+        routeResumeInFlight = resumable != nil
         endTransmit(reason: .routeChanged, explain: resumable == nil)
         guard let source = resumable else { return }
 
@@ -1212,7 +1301,15 @@ final class RadioSession: ObservableObject {
             // the route change is the notification that it is *being* rebuilt,
             // not that it is finished.
             try? await Task.sleep(nanoseconds: Self.routeSettleNanoseconds)
-            guard let self, self.heldSource == source, self.connection.isConnected else { return }
+            guard let self else { return }
+            guard self.heldSource == source, self.connection.isConnected else {
+                // The hold ended, or the link did, while the graph settled.
+                // Nothing will key back down, so the indicator must not go on
+                // saying otherwise.
+                self.routeResumeInFlight = false
+                self.refreshActivity()
+                return
+            }
             self.beginTransmit(from: source)
         }
     }
@@ -1255,6 +1352,84 @@ final class RadioSession: ObservableObject {
         default:
             break
         }
+    }
+
+    // MARK: - SF-4 (APP-3)
+
+    /// What the lock screen should be showing right now, or `nil` for nothing.
+    ///
+    /// A pure function of the state above it, which is the point: there is one
+    /// answer to "is the radio keyed?", every path that changes it calls
+    /// ``refreshActivity()``, and no path has its own idea of how to take the
+    /// banner down.
+    ///
+    /// **The `isOnAir` flag follows ``isTransmitting`` and nothing else.** Not
+    /// ``isKeyDown``, which leads the client by a round trip, and not
+    /// ``transmitDesired``. An indicator that goes red before the far end is
+    /// keyed is a small lie, and it is the same kind of lie as one that stays red
+    /// after the microphone shuts.
+    private var desiredActivity: TransmitActivityRequest? {
+        guard connection.isConnected else { return nil }
+        let channel = lastConnectedChannel ?? settings
+
+        if isTransmitting, let source = activeSource {
+            return TransmitActivityRequest(
+                channel: channel.displayName,
+                mode: channel.mode.displayName,
+                state: TransmitActivityState(
+                    isOnAir: true,
+                    headline: "ON AIR",
+                    detail: source.holdDescription,
+                    holdBegan: holdBegan ?? now(),
+                    watchdogDeadline: watchdogDeadline))
+        }
+
+        // A route-change recovery, mid-gap. Nothing is on air and the activity
+        // says so — but it stays up, because the operator has not let go and a
+        // banner that blinks off and back on teaches them to disbelieve it.
+        if routeResumeInFlight, let source = heldSource {
+            return TransmitActivityRequest(
+                channel: channel.displayName,
+                mode: channel.mode.displayName,
+                state: TransmitActivityState(
+                    isOnAir: false,
+                    headline: "NOT TRANSMITTING",
+                    detail: source.isMomentary
+                        ? "The audio route changed. Keying back down — keep holding."
+                        : "The audio route changed. Keying back down.",
+                    holdBegan: holdBegan ?? now(),
+                    watchdogDeadline: nil))
+        }
+
+        // Nothing is keyed, so nothing is shown. **This is also the one shape
+        // decision in APP-3 with an open question behind it** (`BU-10`): the
+        // activity is scoped to a *transmission*, which is what the plan asked
+        // for — it must "end on every path that ends transmit" — and it means
+        // the activity is requested at key-down, which for an accessory keying a
+        // backgrounded app is a request made from the background. Apple
+        // documents `Activity.request` as a foreground operation; Currawong is
+        // *running* in that moment rather than suspended (PD-2's `audio` mode),
+        // which is not the same thing, and no simulator will settle it.
+        //
+        // If a device says no, the fix is here and nowhere else: return a
+        // not-on-air state whenever `connection.isConnected`, so the activity is
+        // created by the operator tapping Connect — unambiguously foreground —
+        // and merely goes red here. `TransmitActivityController` neither knows
+        // nor cares which of the two it is being handed.
+        return nil
+    }
+
+    /// Hands ``desiredActivity`` to the controller. Cheap and idempotent, so it
+    /// is called from every transition rather than from the ones that were
+    /// thought to matter.
+    private func refreshActivity() {
+        activity.show(desiredActivity)
+    }
+
+    /// Waits for the lock-screen indicator to catch up. Test support only —
+    /// nothing in the app needs to know when a banner has been drawn.
+    func settleActivity() async {
+        await activity.settle()
     }
 
     // MARK: - Link events
@@ -1320,6 +1495,8 @@ final class RadioSession: ObservableObject {
         tearDownLink()
         connection = .disconnected
         transmitState = .idle
+        routeResumeInFlight = false
+        refreshActivity()
         lastDisconnectReason = reason
         present(
             title: "Disconnected",

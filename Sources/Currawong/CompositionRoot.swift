@@ -164,7 +164,12 @@ final class CompositionRoot {
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
-        portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin()
+        portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin(),
+        // `nil` rather than a default expression, again because the controller is
+        // `@MainActor`. A test that passes one gets to read what the app asked
+        // the lock screen for; a test that passes nothing gets the real thing on
+        // iOS and nothing on macOS, which is what the app itself gets.
+        activity: TransmitActivityController? = nil
     ) {
         // Before the session, so the session can be handed its release hook
         // (APP-13). The order is load-bearing rather than tidy: a closure
@@ -197,7 +202,11 @@ final class CompositionRoot {
                         proxy: proxy, transmitTimeout: transmitTimeout)
                 }
             },
-            releaseProxyLease: { proxyPicker.releaseLease() })
+            releaseProxyLease: { proxyPicker.releaseLease() },
+            // **APP-3 (SF-4).** The lock-screen transmit indicator. Built here
+            // and nowhere else, for the same reason the clients are: this is the
+            // one file that names a platform framework's concrete type.
+            activity: activity ?? CompositionRoot.makeActivityController())
         let accessory = accessory ?? BLEPTTController()
         let remoteCommand = remoteCommand ?? RemoteCommandPTTController()
 
@@ -229,6 +238,20 @@ final class CompositionRoot {
         session.start()
         accessory.activateIfConfigured()
         remoteCommand.activateIfEnabled()
+    }
+
+    /// **APP-3 (SF-4).** The transmit Live Activity's controller.
+    ///
+    /// iOS only. macOS has no Live Activities, so the macOS app gets a disabled
+    /// controller rather than a compile-time hole: `RadioSession` then calls a
+    /// controller that does nothing, and every SF-4 code path is still exercised
+    /// by `make test-macos`.
+    private static func makeActivityController() -> TransmitActivityController {
+        #if os(iOS)
+        return TransmitActivityController(presenter: ActivityKitPresenter())
+        #else
+        return .disabled
+        #endif
     }
 
     /// **AU-4.** The received-audio leveller every mode is built with.

@@ -4,6 +4,7 @@
 *.xcodeproj
 *.xcworkspace
 Sources/Currawong/Info.plist
+Sources/CurrawongLiveActivity/Info.plist
 
 # Build products
 .build/

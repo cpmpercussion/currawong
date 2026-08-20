@@ -9,7 +9,18 @@ options:
   bundleIdPrefix: au.charlesmartin
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "16.0"
+    # **iOS 16.2, raised for APP-3 (SF-4).** The maintainer's call of 2026-08-16
+    # was to raise the floor for ActivityKit rather than scatter availability
+    # guards, and to make it whatever the implementation actually calls.
+    # ActivityKit itself is 16.1; `ActivityContent` (stale dates),
+    # `Activity.update(_:)` taking one, and `end(_:dismissalPolicy:)` are 16.2,
+    # and all three are what stop the Live Activity from lying — see
+    # `Sources/Currawong/ActivityKitPresenter.swift`.
+    #
+    # **The library's floor stays at iOS 16.0.** Nothing in `swift-hamvoip`
+    # needs ActivityKit, and an app-driven bump to a protocol library would be
+    # the tail wagging the dog.
+    iOS: "16.2"
     macOS: "13.0"
   minimumXcodeGenVersion: "2.42.0"
   xcodeVersion: "16.0"
@@ -61,6 +72,12 @@ targets:
           - Info.plist
           # Consumed by the signing phase, not copied into the bundle.
           - Currawong.entitlements
+      # Compiled into the app *and* into the widget extension, which are two
+      # processes that have to agree on the archived shape of the Live Activity's
+      # state. A shared source directory rather than a framework target: it is
+      # two small value types with no behaviour, and a framework for them would
+      # be a signing and embedding problem in exchange for nothing.
+      - path: Sources/LiveActivityShared
     dependencies:
       # The app depends on the library products only. It talks to IAX2Kit and
       # M17Kit through RadioCore's `NetworkClient`; the concrete `IAX2Client`
@@ -92,6 +109,13 @@ targets:
       - framework: Codec2.xcframework
         embed: true
         codeSign: true
+
+      # **APP-3.** The Live Activity's widget extension, embedded in the app.
+      # `platformFilter: iOS` is load-bearing: this is one multiplatform target
+      # and macOS has no Live Activities, so without the filter the macOS build
+      # tries to embed an iOS-only appex and fails.
+      - target: CurrawongLiveActivity
+        platformFilter: iOS
     info:
       path: Sources/Currawong/Info.plist
       properties:
@@ -131,6 +155,11 @@ targets:
         # services either, so there is no NSBonjourServices list.
         NSLocalNetworkUsageDescription:
           "Currawong needs to reach AllStarLink nodes on your local network, such as a node running on your own computer or a Raspberry Pi."
+
+        # **APP-3 (SF-4).** Without this key ActivityKit reports Live
+        # Activities as unavailable and `Activity.request` throws, which
+        # presents as a lock screen that simply never shows a transmitter.
+        NSSupportsLiveActivities: true
 
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
@@ -178,6 +207,36 @@ targets:
       testTargets:
         - CurrawongTests
       gatherCoverageData: true
+
+  # **APP-3 (SF-4).** The Live Activity, in its own process because that is what
+  # a widget extension is. Bundle identifier reserved by the OQ-3b resolution.
+  #
+  # iOS only, and that is not a limitation to work around: macOS has no Live
+  # Activities at all, so there is nothing here to build for it. The app's macOS
+  # build and `make test-macos` are part of APP-3's definition of done and see
+  # none of this.
+  CurrawongLiveActivity:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: Sources/CurrawongLiveActivity
+      - path: Sources/LiveActivityShared
+    info:
+      path: Sources/CurrawongLiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Currawong Transmit
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: au.charlesmartin.currawong.liveactivity
+        PRODUCT_NAME: CurrawongLiveActivity
+        GENERATE_INFOPLIST_FILE: NO
+        # No entitlements: the extension reads nothing, stores nothing and
+        # reaches no network. It draws the state the app hands it.
+        SKIP_INSTALL: YES
 
   CurrawongTests:
     type: bundle.unit-test

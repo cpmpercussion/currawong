@@ -79,6 +79,7 @@ keep treating the app as unproven on air.
 | BU-6 | Web Transceiver has never been connected from the app, only from the CLI | ✅ **Closed 2026-08-20** — nodes `44309` and `61624` reached from the phone over WT |
 | BU-7 | The watchdog unkeying a held button (SF-1) and a phone call dropping transmit (SF-3) have never been observed on air | Open, deliberately deferred — wanted before public beta, not before more of this testing |
 | BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | Open — found 2026-08-20 by the on-air UI test; (1) and (2) are a design question for the maintainer, (3) is an unexplained defect |
+| BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 
 ---
@@ -686,3 +687,41 @@ a fault — but SF-1 and SF-3 are safety requirements, and a safety mechanism
 that has only ever fired in a test is a claim rather than a fact. The parrot
 node (`55553`) is the obvious place for check 1: hold the button, let it time
 out, and nobody else's channel is occupied while it happens.
+
+### BU-10 — nobody has seen the Live Activity
+
+**Opened 2026-08-20 with APP-3.** The code is there and every path that ends
+transmission is unit-tested against a recording presenter, on both platforms.
+Nobody has locked a phone and looked at one.
+
+Two checks, and the second is the one that matters:
+
+1. **It appears, and it goes.** Key up with the app on screen, lock the phone,
+   and the activity is on the lock screen; release, and it is gone — *dismissed*,
+   not left sitting there in its final state. Then each of the interesting ends
+   in turn: the watchdog (which `BU-7` also wants), a phone call, unplugging a
+   headset mid-over, hanging up. The one to try twice is a **route change under a
+   held button**, which must not blink the activity off and back on — it goes
+   honest for about 300 ms (`NOT TRANSMITTING`, "keying back down") and then red
+   again, without a new activity.
+2. **⚠️ An accessory keying a *backgrounded* app.** This is the case SF-4 was
+   written for — a phone in a pocket, screen locked, a fob on the steering wheel
+   — and it is the one with a known risk attached: Apple documents
+   `Activity.request` as something an app does **while in the foreground**.
+   Currawong is *running* rather than suspended when this happens (PD-2 gives it
+   the `audio` background mode), which is a different thing from being in the
+   foreground, and whether ActivityKit accepts the request in that state is not
+   something the documentation settles or a simulator will answer. If it is
+   refused, the fix is a design change and not a bug fix — see the note at the
+   end of `RadioSession.desiredActivity`: the activity would start when the
+   *connection* comes up, which is always a foreground action, and go red on
+   transmit rather than being created by it. `TransmitActivityController` does not
+   care which of the two it is driving, so the change is confined to
+   `desiredActivity`.
+
+**Also unobserved, and deliberately not handled:** an operator who has turned
+Live Activities off, for the app or for the device. `ActivityKitPresenter` checks
+`areActivitiesEnabled` and quietly does nothing, so SF-4's lock-screen half is
+absent and nothing says so. Telling them would mean a new `SafetyNotice` kind and
+a settings row, which is a bigger change than APP-3 was asked for; the on-screen
+banner is unaffected either way. Worth deciding before public beta, with `BU-7`.
