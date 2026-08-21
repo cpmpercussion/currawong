@@ -88,7 +88,8 @@ struct SessionPane: View {
             // that end a transmission and end a call sit together.
             if let control = SessionLinkControl(
                 connection: session.connection,
-                lastConnectedName: session.lastConnectedChannel?.displayName)
+                destinationName: session.settings.displayName,
+                isReturningToLastConnected: session.lastConnectedChannel?.id == session.settings.id)
             {
                 SessionLinkButton(control: control, action: linkAction)
             }
@@ -124,6 +125,30 @@ struct SessionLinkButton: View {
     let action: () -> Void
 
     var body: some View {
+        // Prominent for the affirmative action only. Choosing a channel and then
+        // hunting for the way to call it was the complaint this answers — a
+        // bordered button under a large PTT slab did not read as the next step.
+        // Disconnect stays bordered: it is findable because it is red and in a
+        // fixed place, and a second filled slab under the PTT would compete with
+        // it for the glance SF-3 wants spent on the transmit state.
+        //
+        // Written as a branch over the whole button rather than a conditional
+        // modifier, because `buttonStyle` takes different concrete types and
+        // there is no eraser for them.
+        Group {
+            if control.isProminent {
+                button.buttonStyle(.borderedProminent)
+            } else {
+                button.buttonStyle(.bordered)
+            }
+        }
+        .controlSize(.large)
+        .tint(control.isDestructive ? .red : .accentColor)
+        .disabled(!control.isEnabled)
+        .accessibilityLabel(control.title)
+    }
+
+    private var button: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: control.systemImage)
@@ -136,11 +161,6 @@ struct SessionLinkButton: View {
             .font(.subheadline.weight(.medium))
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .tint(control.isDestructive ? .red : .accentColor)
-        .disabled(!control.isEnabled)
-        .accessibilityLabel(control.title)
     }
 }
 

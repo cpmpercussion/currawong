@@ -484,7 +484,11 @@ struct RootView: View {
         case .disconnecting:
             break
         case .disconnected:
-            guard session.restoreLastConnectedChannel() else { return }
+            // The channel the button names is the selected one, which is also
+            // the one the status panel above it is showing — so this is the
+            // ordinary connect, not a restore. It used to call
+            // `restoreLastConnectedChannel()` first, which silently changed the
+            // selection out from under the operator. See `SessionLinkControl`.
             await connectOrDisconnect()
         }
     }
