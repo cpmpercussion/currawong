@@ -90,7 +90,7 @@ keep treating the app as unproven on air.
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
-| BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduces with an empty channel list, or a blank AllStarLink one selected, because that form is the tallest thing in the app | Open, **measured but not diagnosed**. The SwiftUI root is offered 1293.5 points in an 866-point window; pinning the scrolling pane's height does not change it, so the demand is not the `ScrollView`'s ideal. Real for a first launch |
+| BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
 | BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | Open, undiagnosed, 2026-08-21. First question is *which input it arrives on*: BLE GATT (PT-2/3) or `MPRemoteCommandCenter` (PT-4), which stops working silently the moment another app takes now-playing |
 
@@ -1047,7 +1047,7 @@ button is being fought with.
 overs, with the app backgrounded and the phone locked for at least one of them,
 and the operator can tell from the screen whether letting go will unkey them.
 
-### BU-12 — the app is taller than its window, and the overflow is centred 📏 MEASURED 2026-08-21
+### BU-12 — the app is taller than its window, and the overflow is centred ✅ FIXED 2026-08-21
 
 **What an operator sees.** On a 1440×900 display, with **no channels** — a first
 launch — or with a blank AllStarLink channel selected, the connect pane opens with
@@ -1105,6 +1105,57 @@ hosting view is being given `fittingSize` once and kept — and the window-resto
 path (the frame is restored from defaults, which is also how the *stale* 866
 arrives). Reproducing on a taller display would say whether it is the display
 bound or the sizing.
+
+---
+
+#### What it actually was: the sidebar ✅ 2026-08-21
+
+**`ChannelListView`'s empty state, and one modifier on it.** Both texts in the
+sidebar carried `.fixedSize(horizontal: false, vertical: true)` — the usual
+spelling of "wrap, do not truncate". A `NavigationSplitView` measures its
+sidebar's natural height against an **unspecified width**, wrapping text asked
+for its height at no width answers with the height it would need *with one word
+per line*, and `fixedSize` turns that answer into a **minimum the layout must
+satisfy**. Measured, at 881×866:
+
+| | Natural height |
+|---|---|
+| `ChannelListView`, hosted on its own | **67** |
+| the same view as a split view's sidebar | **1237.5** |
+| the whole app | **1249.5**, at y = −175.5 in an 866-point window |
+| a bare `Text(…).fixedSize(…)` as a sidebar | **1199** |
+| the same `Text` without `fixedSize` | **16** |
+
+Removing both calls puts the split view back at the window's own height, and
+nothing is truncated by their absence: a sidebar proposes a real width and
+hundreds of points of height, so both texts wrap exactly as they did. The
+difference is only in what they *demand* when asked to measure at no width at
+all.
+
+**Every one of the four ruled-out theories above was right to be ruled out.**
+The connect form is not the cause, which is why pinning the scrolling pane's
+height changed nothing, and the sidebar was indeed 105 points tall on screen —
+it was *demanding* 1237.5 while being *given* 105. What was wrong was the last
+paragraph's conclusion: nothing above the SwiftUI root proposes the height. The
+root's child asks for it, from the bottom of the tree.
+
+**One wrong fix, recorded because it passed a test.** Capping the *ask* —
+`.frame(idealHeight: 700)` on the root — makes `NSHostingView.fittingSize`
+report 700 and stops the hosting view growing, and a test asserting on
+`fittingSize` goes green. The split view *inside* it still laid out at 1249.5
+and y = −175.5, and the app on screen was unchanged. `fixedSize` publishes a
+minimum, and **no ideal caps a minimum**. `WindowSizingTests` therefore asserts
+on the frames the hosting view's subtree actually got, not on what it asked for,
+and it carries a canary that fails if SwiftUI ever stops measuring a sidebar
+this way — at which point the modifier could come back.
+
+**The sidebar's top alignment shipped with the fix**, having been held back for
+it: an empty channel list now sits at the top of its column instead of centred
+in it.
+
+**Confirmed on screen**, not only in a test: an 881×866 window, an empty channel
+list, status panel at the top where APP-18 says it stays, "Channels" and `Add
+channel` at the top of the sidebar, and the caption wrapping to three lines.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 

@@ -292,8 +292,17 @@ struct RootView: View {
             // not a `List` row; the top padding is the column's, because a
             // sidebar's first element sits under the window's title bar area and
             // only this side knows that.
+            //
+            // **BU-12: the top alignment.** Written while the app was still
+            // taller than its window, and held back for it — under that overflow
+            // it moved the "Channels" header off the top edge instead of merely
+            // down the column, which was worse. With the cause gone (a
+            // `fixedSize` in `ChannelListView`; the note there says why) an empty
+            // list sits at the top of the column, where a sidebar's contents
+            // belong, rather than centred in it.
             ChannelListView(session: session)
                 .padding(.top, 12)
+                .frame(maxHeight: .infinity, alignment: .top)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
         } detail: {
             detailColumn

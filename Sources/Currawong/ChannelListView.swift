@@ -40,12 +40,13 @@ struct ChannelListView: View {
                 .padding(.horizontal, Self.inset)
 
             if !isMutable {
+                // No `.fixedSize(horizontal: false, vertical: true)` here or in
+                // the empty state, and that is BU-12's fix — see the note below.
                 Label(
                     "Disconnect to switch, add or delete channels.",
                     systemImage: "lock")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, Self.inset)
             }
 
@@ -99,6 +100,26 @@ struct ChannelListView: View {
     /// Shown before the operator has ever connected. Deliberately not a call to
     /// action: the way to get a first channel is to fill the form in and
     /// connect, and saying that is more useful than an empty list with a button.
+    ///
+    /// ## **BU-12.** Why neither text carries `fixedSize`
+    ///
+    /// It used to, on the caption here and on the lock label above — the usual
+    /// spelling of "wrap, do not truncate". In a `NavigationSplitView` sidebar
+    /// that made the **whole app taller than its window**: the split view
+    /// measures its sidebar's height against an **unspecified width**, wrapping
+    /// text asked for its height at no width answers with one word per line, and
+    /// `fixedSize` turns that answer into a *minimum* the layout must satisfy.
+    /// This view is 67 points tall on its own and demanded **1237.5** in the
+    /// sidebar; the app was laid out at 1249.5 points in an 866-point window and
+    /// macOS centred the overflow, which put the status panel above the top edge
+    /// of the window on a first launch. `WindowSizingTests` is the regression,
+    /// and it carries a canary for the platform behaviour.
+    ///
+    /// Nothing is truncated by their absence: a sidebar proposes a real width
+    /// and hundreds of points of height, so both texts wrap exactly as before —
+    /// the difference is only in what they *demand* when asked to measure
+    /// themselves at no width at all. **If a `fixedSize` is ever wanted in this
+    /// view, measure the sidebar's height before and after.**
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No saved channels")
@@ -108,7 +129,6 @@ struct ChannelListView: View {
                 + "coming back to it later is one tap.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
