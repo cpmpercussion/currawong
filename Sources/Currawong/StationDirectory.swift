@@ -198,6 +198,18 @@ final class StationBrowser: ObservableObject {
 
     /// Fetches the listing. A second call while one is in flight replaces it —
     /// the operator has changed something and wants the new answer.
+    /// The same load, from the session's own ``RadioSession/DirectoryRequest``.
+    ///
+    /// **APP-14.** The view used to assemble the arguments itself and reached for
+    /// `session.secret` — the channel's secret — instead of the app-wide account
+    /// password. Taking the request whole leaves nothing for a call site to pick
+    /// wrongly.
+    func load(_ request: RadioSession.DirectoryRequest, proxy: EchoLinkProxyRoute?) {
+        load(
+            for: request.settings, identity: request.identity,
+            accountPassword: request.accountPassword, proxy: proxy)
+    }
+
     func load(
         for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
         proxy: EchoLinkProxyRoute?

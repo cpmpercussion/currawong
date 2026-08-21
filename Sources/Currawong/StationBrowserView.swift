@@ -112,9 +112,13 @@ struct StationBrowserView: View {
                 privatePassword: session.echoLinkProxyPassword)
         else { return }
 
-        browser.load(
-            for: session.settings, identity: session.identity,
-            accountPassword: session.secret, proxy: proxy)
+        // **APP-14: the session says what to send.** This used to assemble the
+        // arguments here and passed `session.secret` — the *channel's* secret,
+        // which for an EchoLink channel is the empty string. So the ordinary
+        // case, typing the password in Settings and then coming here, sent the
+        // directory server nothing, and this pane reported "Enter your EchoLink
+        // account password" while Settings said "Stored in the Keychain."
+        browser.load(session.directoryRequest, proxy: proxy)
     }
 
     private var searchField: some View {
@@ -190,10 +194,16 @@ struct StationBrowserView: View {
         }
     }
 
-    /// What the operator needs before Refresh can work at all. Named as fields
-    /// on the connect form rather than as protocol steps, because that is where
-    /// the fix is; `StationBrowser` reports the same three as failures once a
-    /// fetch is attempted, and this is the version that is shown first.
+    /// What the operator needs before Refresh can work at all. Named as the
+    /// places those things are *set* rather than as protocol steps, because that
+    /// is where the fix is; `StationBrowser` reports the same three as failures
+    /// once a fetch is attempted, and this is the version that is shown first.
+    ///
+    /// **APP-14 corrected the copy.** It sent the operator to the connect form
+    /// for a callsign and a password that APP-12 had already moved to the
+    /// settings screen — so the one instruction on screen named a field that no
+    /// longer exists, which is a poor thing to read while wondering why a
+    /// listing is empty.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(browser.search.isEmpty ? "No listing yet" : "Nothing matches that")
@@ -201,9 +211,10 @@ struct StationBrowserView: View {
 
             if browser.search.isEmpty {
                 Text(
-                    "Refresh reads the EchoLink directory. It needs your callsign and account "
-                    + "password from the connect form, and the channel has to be an EchoLink "
-                    + "one; if the channel has no proxy yet, Refresh finds a public one first.")
+                    "Refresh reads the EchoLink directory. It needs your callsign and EchoLink "
+                    + "account password, both on the Settings screen, and the channel has to be "
+                    + "an EchoLink one; if the channel has no proxy yet, Refresh finds a public "
+                    + "one first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

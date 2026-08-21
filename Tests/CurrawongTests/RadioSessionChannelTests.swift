@@ -72,7 +72,13 @@ final class RadioSessionChannelTests: XCTestCase {
 
         XCTAssertEqual(harness.session.settings, echo)
         XCTAssertEqual(harness.session.channels.selectedID, echo.id)
-        XCTAssertEqual(harness.session.secret, "account-password")
+
+        // **APP-14: an EchoLink channel's password is not loaded into `secret`.**
+        // It is app-wide, the settings screen owns it, and it lives in
+        // `echoLinkAccountPassword` — one copy, so that connecting cannot write
+        // one over the other and the station browser cannot read the wrong one.
+        XCTAssertEqual(harness.session.secret, "")
+        XCTAssertEqual(harness.session.echoLinkAccountPassword, "account-password")
     }
 
     /// A channel whose account has no stored secret clears the field rather
@@ -347,7 +353,10 @@ final class RadioSessionChannelTests: XCTestCase {
             harness.secretStore.all[echo.secretAccount(for: vk1xyz)], "account-password",
             "the surviving channel still needs the password it shares")
         XCTAssertEqual(harness.session.settings.id, otherEcho.id)
-        XCTAssertEqual(harness.session.secret, "account-password")
+        // APP-14: the password is still there for the surviving channel — in the
+        // app-wide field, which is the only place it is now held.
+        XCTAssertEqual(harness.session.echoLinkAccountPassword, "account-password")
+        XCTAssertEqual(harness.session.secret, "")
     }
 
     /// Deleting mid-call would take the connected channel out from under the

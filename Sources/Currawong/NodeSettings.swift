@@ -367,6 +367,50 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// **APP-14.** Whose secret a channel connects with, if anyone's.
+    ///
+    /// The question `connect()` used to ask was "is this Web Transceiver?", and
+    /// the `else` arm wrote the form's in-memory secret to
+    /// ``secretAccount(for:)`` for everything else. That was wrong twice over,
+    /// and both faults were live:
+    ///
+    /// * **M17 has no secret.** The form says so on screen — "M17 reflectors are
+    ///   unauthenticated. Your callsign identifies you." — and connecting wrote
+    ///   an empty string to `m17:…` anyway, a slot nothing reads, which on a
+    ///   build that could not reach the Keychain raised "the secret was not
+    ///   stored" on the happy path of a mode that has no secrets.
+    /// * **EchoLink's password is not the channel's.** It is one password for the
+    ///   whole app, which the settings screen owns (APP-12), and connecting wrote
+    ///   the form's `secret` over it. Switch a draft from AllStarLink to EchoLink
+    ///   and the node secret would have been written into the account slot; leave
+    ///   the field empty and the account password was *deleted*, because
+    ///   ``SecretStore`` treats an empty value as a removal.
+    ///
+    /// So the question is "does this channel have a secret, and whose is it?",
+    /// and it is a property of the mode, which is why it lives here beside the
+    /// account strings rather than inline in `connect()`.
+    enum SecretOwnership: Equatable {
+        /// The channel's own, filed per destination: an AllStarLink node secret.
+        case channel(account: String)
+        /// One password for the whole app, which **only the settings screen
+        /// writes**. Connecting reads it and must never write it.
+        case appWide(account: String)
+        /// Nothing to store. M17 does not authenticate, and a Web Transceiver
+        /// channel's token is not a secret and has a slot of its own.
+        case none
+    }
+
+    func secretOwnership(for identity: OperatorIdentity) -> SecretOwnership {
+        switch mode {
+        case .allStarLink:
+            return usesWebTransceiver ? .none : .channel(account: secretAccount(for: identity))
+        case .m17:
+            return .none
+        case .echoLink:
+            return .appWide(account: Self.echoLinkAccount(for: identity))
+        }
+    }
+
     /// Whether two channels point at the same place on the same network.
     ///
     /// Identity, name and the operator's own preferences are excluded: a

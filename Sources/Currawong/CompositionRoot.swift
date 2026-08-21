@@ -967,7 +967,14 @@ struct EchoLinkStationDirectory: StationDirectory {
             throw StationDirectoryError.missingDirectoryServer
         }
 
-        var configuration = EchoLinkClient.Configuration(callsign: identity.callsign)
+        // **`normalisedCallsign`, not `callsign`** (APP-14). The QSO path
+        // uppercases by way of `identity.validated()` before it builds a link;
+        // this path did not, so a callsign typed in lower case authenticated for
+        // a call and could be rejected for a browse — with the password correct
+        // and correctly filed. The proxy login and the directory login line are
+        // both built from this string.
+        var configuration = EchoLinkClient.Configuration(
+            callsign: identity.normalisedCallsign)
         configuration.operatorName = identity.operatorName
         configuration.location = identity.location
         configuration.accountPassword = EchoLinkAccountPassword(accountPassword)
