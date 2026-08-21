@@ -847,6 +847,32 @@ final class RadioSession: ObservableObject {
         return channel.id
     }
 
+    /// **APP-22.** Throws away a draft that is in no channel, and puts the form
+    /// back on the selected channel.
+    ///
+    /// What the provisional row's Discard does. Not ``deleteChannel(_:)``, which
+    /// takes an id out of the stored list — there is nothing stored here to take
+    /// out, and calling it with this draft's id would be a no-op that left the
+    /// row on screen.
+    ///
+    /// A no-op when the draft *is* a stored channel: there the row is the
+    /// channel, and removing it is Delete's job.
+    ///
+    /// - Returns: whether anything was discarded.
+    @discardableResult
+    func discardDraftChannel() -> Bool {
+        guard connection == .disconnected, isDraftAnUnsavedChannel else { return false }
+
+        // Its pending edit goes with it. A draft is only ever reached by way of
+        // the channel it belongs to, and this one belongs to none — so leaving it
+        // in the stash would leave something unreachable in the defaults, which
+        // is the reason BU-9 prunes those at launch anyway.
+        drafts[settings.id] = nil
+        persistDrafts()
+        loadSelectedIntoDraft()
+        return true
+    }
+
     /// Points the draft at somewhere chosen from a directory, **without saving
     /// it**.
     ///
