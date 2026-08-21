@@ -8,13 +8,41 @@ import XCTest
 /// It exists because the on-air test could not clean up after itself, and the
 /// question "is Delete broken always, or only after a session?" is the one that
 /// says whether that is a test problem or an app problem.
+///
+/// ## It counts rows, and it clears its own first
+///
+/// The app writes its channel list to the **real** defaults, so a run that dies
+/// before its delete leaves a row behind — and the next run then finds two rows
+/// of one name, deletes one, and reports that Delete did nothing. That false
+/// negative cost a morning once already (BU-9 item 3). So this asserts on the
+/// *count* of rows of its own name, and removes any it finds before it starts.
+///
+/// ## APP-19 changed what `Add channel` does
+///
+/// It used to put a channel in the list on the click, which is the fault APP-19
+/// fixed: one tap of `+` left a permanent blank row in the operator's own app,
+/// and every dead run of this test left one. `+` now points the form at a new
+/// channel and writes nothing; **Save is what puts it in the list**, and this
+/// test presses it.
 final class ChannelLifecycleUITests: XCTestCase {
 
     private let channelName = "Lifecycle probe"
 
+    override func setUp() {
+        // Deliberately not `false`: an early failure must not skip the cleanup
+        // below, or the run leaves its own row in the operator's app.
+        continueAfterFailure = true
+    }
+
     func testAChannelCanBeAddedAndDeletedWithoutConnecting() {
         let app = XCUIApplication()
         app.launch()
+
+        let cleared = removeEveryRow(named: channelName, in: app)
+        if cleared > 0 { print("=== cleared \(cleared) leftover '\(channelName)' row(s)") }
+        XCTAssertEqual(
+            rowCount(named: channelName, in: app), 0,
+            "could not clear the leftovers, so a delete cannot be measured")
 
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
@@ -24,31 +52,106 @@ final class ChannelLifecycleUITests: XCTestCase {
         XCTAssertTrue(name.waitForExistence(timeout: 5), "no channel name field")
         replace(channelName, in: name)
 
-        let row = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", channelName)).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "the new channel never appeared")
+        // **APP-19.** The click above wrote nothing; this is what adds the row.
+        let save = app.buttons["Save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "no Save button")
+        XCTAssertTrue(save.isEnabled, "Save is disabled on a named new channel")
+        save.click()
 
-        row.rightClick()
-
-        // Scoped to the context menu that just opened. `app.menuItems["Delete"]`
-        // would also match the menu bar's own always-greyed `Edit ▸ Delete`, so
-        // it passes `waitForExistence` even when no context menu opened at all —
-        // and then reports `isEnabled == false` and clicks nothing. That is the
-        // shape of BU-9 item 3's evidence, and it is a query fault rather than a
-        // finding.
         XCTAssertTrue(
-            waitUntil(timeout: 5) { app.menus.count > 0 },
-            "no context menu opened on the row — not a disabled Delete, no menu at all")
-        let delete = app.menus.firstMatch.menuItems["Delete"].firstMatch
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "no Delete item in the row's own menu")
-        XCTAssertTrue(delete.isEnabled, "Delete is disabled on a channel never connected to")
+            waitUntil(timeout: 10) { self.rowCount(named: self.channelName, in: app) == 1 },
+            "Save did not put the new channel in the list — APP-19's other half")
+
+        XCTAssertTrue(deleteOneRow(named: channelName, in: app), "Delete did not remove the row")
+        XCTAssertEqual(
+            rowCount(named: channelName, in: app), 0,
+            "the channel was still listed after Delete")
+    }
+
+    // MARK: - Rows
+
+    private func rowCount(named name: String, in app: XCUIApplication) -> Int {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).count
+    }
+
+    private func row(named name: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+    }
+
+    /// Deletes every row of this name, so the count this test asserts on starts
+    /// from zero. Bounded, because a loop deleting rows that something else is
+    /// re-adding would otherwise run until the test times out.
+    @discardableResult
+    private func removeEveryRow(named name: String, in app: XCUIApplication) -> Int {
+        var removed = 0
+        while rowCount(named: name, in: app) > 0 {
+            guard deleteOneRow(named: name, in: app) else { return removed }
+            removed += 1
+            guard removed < 20 else {
+                XCTFail("still deleting '\(name)' rows after twenty — something is re-adding them")
+                return removed
+            }
+        }
+        return removed
+    }
+
+    /// One right-click ▸ Delete on the first row of this name. `false` if the
+    /// menu never opened, Delete was missing or disabled, or the count did not
+    /// fall.
+    @discardableResult
+    private func deleteOneRow(named name: String, in app: XCUIApplication) -> Bool {
+        let before = rowCount(named: name, in: app)
+        guard before > 0 else { return false }
+
+        row(named: name, in: app).rightClick()
+
+        guard let menu = openedRowMenu(in: app) else {
+            XCTFail("no context menu opened on '\(name)' — not a disabled Delete, no menu at all")
+            return false
+        }
+
+        let delete = menu.menuItems["Delete"].firstMatch
+        guard delete.waitForExistence(timeout: 5) else {
+            XCTFail("no Delete item in the row's own menu")
+            return false
+        }
+        guard delete.isEnabled else {
+            XCTFail("Delete is disabled on a channel never connected to")
+            return false
+        }
         delete.click()
 
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline, row.exists {
-            Thread.sleep(forTimeInterval: 0.25)
+        return waitUntil(timeout: 10) { self.rowCount(named: name, in: app) == before - 1 }
+    }
+
+    /// The row's own context menu, if one is open.
+    ///
+    /// **`app.menus` is not a scope.** It holds every menu in the menu bar, open
+    /// or not — its count is about thirteen before anything has been
+    /// right-clicked, and `app.menus.firstMatch` is the *Apple* menu. So
+    /// `app.menus.count > 0` is not "a context menu opened", which is what this
+    /// test used to assert: it passed on a machine whose automation grant had
+    /// lapsed and failed the moment it could really right-click.
+    /// `app.menuItems["Delete"]` is no better — it matches the menu bar's own
+    /// always-greyed `Edit ▸ Delete`, and so reports a disabled Delete whether
+    /// or not a context menu is up. Both halves of BU-9 item 3 were this.
+    ///
+    /// The row's menu is told apart by its contents: exactly one item, Delete.
+    /// The same rule `ChannelDeleteAfterConnectUITests` uses.
+    private func openedRowMenu(in app: XCUIApplication) -> XCUIElement? {
+        var found: XCUIElement?
+        _ = waitUntil(timeout: 5) {
+            let menus = app.menus
+            for index in 0..<menus.count {
+                let menu = menus.element(boundBy: index)
+                if menu.menuItems.count == 1, menu.menuItems["Delete"].firstMatch.exists {
+                    found = menu
+                    return true
+                }
+            }
+            return false
         }
-        XCTAssertFalse(row.exists, "the channel was still listed after Delete")
+        return found
     }
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

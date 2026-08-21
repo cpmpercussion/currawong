@@ -170,7 +170,7 @@ final class RadioSession: ObservableObject {
     /// *is* a ``NodeSettings`` carrying the id of the channel it came from, so
     /// storing one is storing a channel value that has not been asked to
     /// replace anything. An entry whose id is in no channel is a channel that
-    /// has never been saved — a directory browse, or ``addChannel(_:)`` on a
+    /// has never been saved — a directory browse, or ``newChannel(_:)`` on a
     /// channel the operator then abandoned — and needs no special case.
     ///
     /// Written by ``stashDraft()`` and cleared, per channel, by ``saveDraft()``.
@@ -795,38 +795,71 @@ final class RadioSession: ObservableObject {
         settingsStore.saveIdentity(identity)
     }
 
-    /// Adds a channel, selects it, and points the draft at it.
+    /// **`Add channel`.** Points the draft at a new, blank channel — and writes
+    /// nothing to the list.
     ///
-    /// **Adding is itself the operator asking**, so this writes to the list even
-    /// though BU-9 made Save the only thing that *overwrites* one — nothing is
-    /// overwritten here, and a fresh channel is exactly what was asked for. The
-    /// draft that was on screen is stashed rather than saved, so "Add channel"
-    /// gives a blank form without either losing the previous edit or committing
-    /// it.
+    /// ## APP-19
     ///
-    /// Also refused while connected, for the reason ``select(_:)`` is: adding
-    /// selects, and selecting mid-call is what must not happen.
+    /// This used to add the blank channel to the list, select it and persist it,
+    /// on the reasoning that "adding is itself the operator asking". It is the
+    /// only place in the app that could put an empty channel into storage, and it
+    /// did: **one tap of `+` left a permanent "Unnamed channel" with no host,
+    /// which nothing could connect to and only Delete could remove.** Nothing
+    /// warned about it either — ``isDraftAnUnsavedChannel`` is false for a row
+    /// that *is* in the list, so the form's own "Not saved" line stayed dark and
+    /// Save stayed disabled, because a blank draft equal to a blank stored
+    /// channel is not dirty.
+    ///
+    /// The rows the 2026-08-20 handoff called "leftovers of an older run" were
+    /// exactly this: the on-air UI tests click `Add channel` against the real
+    /// defaults, and a run that died between the click and the naming left one
+    /// behind every time.
+    ///
+    /// So `+` now does what a directory browse does — see ``chooseChannel(_:)``,
+    /// which this is otherwise identical to. **The channel reaches the list when
+    /// it is saved or connected to**, which is BU-9's rule with nothing carved
+    /// out of it: a channel is a working copy, Save is the only thing that
+    /// overwrites one, and connecting adds where it went.
+    ///
+    /// The cost, stated plainly: a new channel that is typed into and neither
+    /// saved nor connected **does not survive a quit**, exactly as a reflector
+    /// picked out of the directory does not. That is the trade BU-9 already
+    /// accepted for browsing, and the form says so on screen — "Not saved.
+    /// Connecting will add this to your channels" — as soon as there is anything
+    /// to lose.
+    ///
+    /// Still refused while connected, for the reason ``select(_:)`` is: it moves
+    /// where the form is pointed, and doing that mid-call would leave the form
+    /// describing one place and the audio coming from another.
+    ///
+    /// - Returns: the new channel's id, or `nil` if a link is up and nothing
+    ///   changed.
     @discardableResult
-    func addChannel(_ channel: NodeSettings = NodeSettings()) -> UUID? {
+    func newChannel(_ channel: NodeSettings = NodeSettings()) -> UUID? {
         guard connection == .disconnected else { return nil }
 
+        // The draft being replaced may be a real channel with unsaved edits, and
+        // they are kept without being applied to it.
         stashDraft()
-        channels.add(channel)
-        loadSelectedIntoDraft()
-        persistChannels()
+
+        settings = channel
+        secret = (try? secretStore.secret(for: channel.secretAccount(for: identity))) ?? ""
         return channel.id
     }
 
     /// Points the draft at somewhere chosen from a directory, **without saving
     /// it**.
     ///
-    /// The difference from ``addChannel(_:)`` is the whole reason this exists.
-    /// Browsing a directory is looking around, and looking around should not
-    /// leave anything behind: an operator who taps six reflectors to read their
-    /// modules used to get six saved channels, and tapping the same one twice
-    /// got two. What saves a channel is ``connect()`` — the channel list then
+    /// This used to be the only path that did not write to the list, and the
+    /// difference from `Add channel` was the whole reason it existed. Browsing a
+    /// directory is looking around, and looking around should not leave anything
+    /// behind: an operator who taps six reflectors to read their modules used to
+    /// get six saved channels, and tapping the same one twice got two. What saves
+    /// a channel is ``saveDraft()`` or ``connect()`` — the channel list then
     /// means "places I have actually been", which is the only definition that
-    /// stays useful.
+    /// stays useful. **Since APP-19 ``newChannel(_:)`` works the same way**, and
+    /// the only thing left here that is particular to a directory is the
+    /// same-place check below.
     ///
     /// Nothing here writes to the list, and since BU-9 that is the ordinary
     /// state of the app rather than a special case this one call tolerates: an
@@ -838,7 +871,7 @@ final class RadioSession: ObservableObject {
     ///   link is up and nothing changed.
     @discardableResult
     func chooseChannel(_ channel: NodeSettings) -> Bool {
-        // Same rule as `select(_:)` and `addChannel(_:)`: changing where we are
+        // Same rule as `select(_:)` and `newChannel(_:)`: changing where we are
         // pointed mid-call would leave the form describing one place and the
         // audio coming from another.
         guard connection == .disconnected else { return false }

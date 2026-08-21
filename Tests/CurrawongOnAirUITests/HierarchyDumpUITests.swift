@@ -55,10 +55,11 @@ final class ChannelRestoreUITests: XCTestCase {
             XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
             replace(text, in: field)
         }
-        // Typing alone does not persist: the draft reaches the channel list
-        // only via connect(), addChannel() or select(). So select something
-        // else — that saves the draft into the channel it is leaving — and
-        // select back to prove it stuck.
+        // Typing alone does not reach the channel list: since BU-9 only Save
+        // and Connect write to it, and since APP-19 `Add channel` does not
+        // either. Selecting *stashes* the edit against the channel it is
+        // leaving, which is enough for what this dump needs — so select
+        // something else and select back to prove the draft stuck.
         let name = env["RESTORE_CHANNEL"] ?? ""
         let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", M17,"))
         var other: XCUIElement?

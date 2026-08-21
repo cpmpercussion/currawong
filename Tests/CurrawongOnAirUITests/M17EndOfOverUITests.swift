@@ -67,6 +67,15 @@ final class M17EndOfOverUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
+        // **Start from a list with none of this test's own rows in it.** The app
+        // writes its channel list to the *real* defaults, so a run that dies
+        // before the delete at the end leaves a row behind — and the next run
+        // then deletes one of two identically named rows and reports that Delete
+        // did nothing. That false negative cost a morning under BU-9, and this
+        // test was still open to it.
+        let cleared = removeEveryRow(named: channelName, in: app)
+        if cleared > 0 { print("=== cleared \(cleared) leftover '\(channelName)' row(s)") }
+
         addChannel(named: channelName, in: app)
         selectM17Mode(in: app)
         replace(reflector, in: field("connect.host", in: app))
@@ -127,13 +136,27 @@ final class M17EndOfOverUITests: XCTestCase {
             },
             "the channel list stayed locked after Disconnect")
 
+        XCTAssertTrue(
+            waitUntil(timeout: 15) { self.row(named: self.channelName, in: app).exists },
+            "the test's channel vanished before it could be deleted")
         deleteChannel(named: channelName, in: app)
+        XCTAssertEqual(
+            rowCount(named: channelName, in: app), 0,
+            "left a '\(channelName)' row in the operator's channel list")
     }
 
     // MARK: - The test's own channel
 
-    /// Adds a channel and names it. `addChannel` selects what it adds, so
+    /// Adds a channel and names it. It points the form at a new channel, so
     /// everything typed after this lands on the new one.
+    ///
+    /// **APP-19: `Add channel` no longer writes to the list** — Save or Connect
+    /// does, and here it is the connect below. Pressing Save *here* is the wrong
+    /// move and was tried: the Save button is at the bottom of the form, so
+    /// clicking it scrolls the form, and the fields this test then types into
+    /// report frames outside the visible scroll area. Clicks at those points land
+    /// on the session pane above and the field never takes focus — a failure that
+    /// reads like a broken text field and is a scrolled one.
     private func addChannel(named name: String, in app: XCUIApplication) {
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
@@ -144,26 +167,32 @@ final class M17EndOfOverUITests: XCTestCase {
     /// Deletes it again through the context menu, which is how macOS reaches
     /// this: there is no swipe-to-delete off iOS and no key binding.
     private func deleteChannel(named name: String, in app: XCUIApplication) {
-        guard waitUntil(timeout: 15, { self.row(named: name, in: app).exists }) else {
+        guard row(named: name, in: app).exists else {
             XCTFail("the test's channel vanished before it could be deleted")
             return
         }
         row(named: name, in: app).rightClick()
 
-        // Scoped to the menu that just opened. The unscoped
-        // `app.menuItems["Delete"]` this used to run also matches the menu bar's
-        // always-greyed `Edit ▸ Delete`, so it found a disabled Delete whether or
-        // not a context menu had opened — which is how BU-9 item 3 came to be
-        // reported as "the item is disabled" rather than "no menu appeared".
-        // A modal alert left over from the session is enough to produce the
-        // second, and only the scoped query can tell them apart.
-        guard waitUntil(timeout: 5, { app.menus.count > 0 }) else {
+        // Scoped to the menu that just opened — and **`app.menus` is not that
+        // scope.** It holds every menu-bar menu whether open or not, so its
+        // count is about thirteen before anything has been right-clicked and
+        // `app.menus.firstMatch` is the *Apple* menu, whose items contain no
+        // Delete. `app.menuItems["Delete"]` is the other half of the same trap:
+        // it matches the menu bar's always-greyed `Edit ▸ Delete`, so it finds a
+        // disabled Delete whether or not a context menu opened — which is how
+        // BU-9 item 3 came to be reported as "the item is disabled" rather than
+        // "no menu appeared". A modal alert left over from the session is enough
+        // to produce the second, and only a properly scoped query tells them
+        // apart.
+        //
+        // The row's menu is told apart by its contents: one item, Delete.
+        guard let menu = openedRowMenu(in: app) else {
             XCTFail(
                 "no context menu opened on '\(name)' — not a disabled Delete, no menu at all. "
                 + "Check for an alert still up from the session.")
             return
         }
-        let delete = app.menus.firstMatch.menuItems["Delete"].firstMatch
+        let delete = menu.menuItems["Delete"].firstMatch
         guard delete.waitForExistence(timeout: 5) else {
             XCTFail("no Delete item in the channel's context menu")
             return
@@ -177,11 +206,51 @@ final class M17EndOfOverUITests: XCTestCase {
             "the channel was still listed after Delete")
     }
 
+    /// The row's own context menu, if one is open, told apart from the menu-bar
+    /// menus by holding exactly one item — which is its whole contents.
+    private func openedRowMenu(in app: XCUIApplication) -> XCUIElement? {
+        var found: XCUIElement?
+        _ = waitUntil(timeout: 5) {
+            let menus = app.menus
+            for index in 0..<menus.count {
+                let menu = menus.element(boundBy: index)
+                if menu.menuItems.count == 1, menu.menuItems["Delete"].firstMatch.exists {
+                    found = menu
+                    return true
+                }
+            }
+            return false
+        }
+        return found
+    }
+
     /// A channel row is a button labelled with the channel described in full —
     /// name, mode, where it points, whether it is connected — so match on the
     /// name it begins with rather than on the whole string.
     private func row(named name: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+    }
+
+    private func rowCount(named name: String, in app: XCUIApplication) -> Int {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).count
+    }
+
+    /// Deletes every row of this name. Bounded, because a loop deleting rows
+    /// that something else is re-adding would run until the test times out.
+    @discardableResult
+    private func removeEveryRow(named name: String, in app: XCUIApplication) -> Int {
+        var removed = 0
+        while rowCount(named: name, in: app) > 0 {
+            let before = rowCount(named: name, in: app)
+            deleteChannel(named: name, in: app)
+            guard rowCount(named: name, in: app) < before else { return removed }
+            removed += 1
+            guard removed < 20 else {
+                XCTFail("still deleting '\(name)' rows after twenty — something is re-adding them")
+                return removed
+            }
+        }
+        return removed
     }
 
     // MARK: - Driving the form
