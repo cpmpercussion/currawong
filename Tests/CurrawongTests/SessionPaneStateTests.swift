@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#if os(macOS)
-
-import AppKit
 import SwiftUI
 import XCTest
 
@@ -19,39 +16,14 @@ import XCTest
 /// path are exercised separately, and then together.
 ///
 /// **These tests host real SwiftUI views**, because `onDisappear` is not
-/// something a view model can be asked about. The window is live but off the
-/// display and is deliberately never closed — `close()` starts an
-/// `_NSWindowTransformAnimation` that over-releases once the hosting view goes
-/// away, and the SIGSEGV lands in whichever unrelated test is holding the run
-/// loop. See the long note in `ChannelListContextMenuTests`; this file follows
-/// it exactly.
+/// something a view model can be asked about — see ``ViewHost``, which owns the
+/// window and the platform difference.
+///
+/// **They run on both platforms**, and the compact one is the reason: leaving the
+/// Session tab while keyed is a case only iOS has, and while this file was
+/// `#if os(macOS)` the only platform it covered was the one without the problem.
 @MainActor
 final class SessionPaneStateTests: XCTestCase {
-
-    // MARK: - Hosting
-
-    /// Lets SwiftUI commit a change a `@Published` property just made, or a
-    /// root-view swap. The hosting view needs a turn of the run loop, not just a
-    /// layout pass.
-    private func settle(_ host: NSView) {
-        host.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
-        host.layoutSubtreeIfNeeded()
-    }
-
-    /// A live, off-screen window around `view`. Never closed — see the note on
-    /// the type.
-    private func host<V: View>(_ view: V) -> NSHostingView<AnyView> {
-        let host = NSHostingView(rootView: AnyView(view))
-        host.frame = CGRect(x: 0, y: 0, width: 420, height: 900)
-        let window = NSWindow(
-            contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = host
-        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
-        window.orderFrontRegardless()
-        settle(host)
-        return host
-    }
 
     private func sessionPane(_ harness: SessionHarness) -> some View {
         SessionPane(
@@ -76,7 +48,7 @@ final class SessionPaneStateTests: XCTestCase {
         let harness = SessionHarness()
         await harness.connect()
         await harness.keyDown()
-        let host = host(sessionPane(harness))
+        let host = ViewHost(sessionPane(harness))
         XCTAssertTrue(harness.session.isTransmitting, "precondition: on air")
 
         // The far end, or the transport, hangs up. Not `disconnect()` — that is
@@ -86,7 +58,7 @@ final class SessionPaneStateTests: XCTestCase {
 
         await waitUntil("the link is gone") { harness.session.connection == .disconnected }
         await harness.settleAll()
-        settle(host)
+        host.settle()
 
         XCTAssertFalse(harness.session.isTransmitting)
         XCTAssertFalse(harness.session.isKeyDown)
@@ -102,12 +74,12 @@ final class SessionPaneStateTests: XCTestCase {
         let harness = SessionHarness()
         await harness.connect()
         await harness.keyDown()
-        let host = host(sessionPane(harness))
+        let host = ViewHost(sessionPane(harness))
 
         harness.eventContinuation.yield(.disconnected(reason: nil))
         await waitUntil("the link is gone") { harness.session.connection == .disconnected }
         await harness.settleAll()
-        settle(host)
+        host.settle()
 
         XCTAssertEqual(harness.session.lastStopReason, .disconnecting)
     }
@@ -118,12 +90,12 @@ final class SessionPaneStateTests: XCTestCase {
     func testHangingUpWithNothingKeyedReportsNoStopReason() async {
         let harness = SessionHarness()
         await harness.connect()
-        let host = host(sessionPane(harness))
+        let host = ViewHost(sessionPane(harness))
         XCTAssertNil(harness.session.lastStopReason, "precondition: nothing has stopped yet")
 
         await harness.session.disconnect()
         await harness.settleAll()
-        settle(host)
+        host.settle()
 
         XCTAssertNil(
             harness.session.lastStopReason,
@@ -141,7 +113,7 @@ final class SessionPaneStateTests: XCTestCase {
     /// is correct, and which would hide the failure this asserts against.
     func testRemovingThePushToTalkButtonReleases() {
         let reasons = ReasonLog()
-        let host = host(
+        let host = ViewHost(
             PushToTalkButton(
                 isEnabled: true,
                 isTransmitting: true,
@@ -150,8 +122,7 @@ final class SessionPaneStateTests: XCTestCase {
                 onRelease: { reasons.append($0) }))
         XCTAssertEqual(reasons.reasons, [], "nothing released while the button is on screen")
 
-        host.rootView = AnyView(Text("the link dropped"))
-        settle(host)
+        host.replaceRootView(with: Text("the link dropped"))
 
         XCTAssertEqual(reasons.reasons, [.viewDisappeared])
     }
@@ -164,5 +135,3 @@ private final class ReasonLog {
     private(set) var reasons: [TransmitStopReason] = []
     func append(_ reason: TransmitStopReason) { reasons.append(reason) }
 }
-
-#endif

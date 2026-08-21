@@ -64,20 +64,30 @@ final class M17EndOfOverUITests: XCTestCase {
     }
 
     func testAnOverEndsWhenPTTIsReleased() throws {
-        let app = XCUIApplication()
-        app.launch()
+        // **Its own callsign, before anything else.** The suite is wiped at
+        // launch, so the identity field comes up empty — and a test that
+        // transmits must not invent a callsign. Read the operator's own out of
+        // the app's real defaults, or stop: putting a made-up callsign on a
+        // reflector is not a thing to do by accident.
+        guard let callsign = IsolatedApp.operatorCallsign() else {
+            XCTFail(
+                "no operator callsign in the app's own defaults, and this test "
+                + "transmits. Run Currawong normally, set your callsign, then run this.")
+            return
+        }
 
-        // **Start from a list with none of this test's own rows in it.** The app
-        // writes its channel list to the *real* defaults, so a run that dies
-        // before the delete at the end leaves a row behind — and the next run
-        // then deletes one of two identically named rows and reports that Delete
-        // did nothing. That false negative cost a morning under BU-9, and this
-        // test was still open to it.
-        let cleared = removeEveryRow(named: channelName, in: app)
-        if cleared > 0 { print("=== cleared \(cleared) leftover '\(channelName)' row(s)") }
+        let app = IsolatedApp.launched()
+
+        // ``IsolatedApp`` empties the suite first, so this says the isolation
+        // works rather than cleaning anything up. It is the assertion that stops
+        // this test ever again deleting a row it did not create.
+        XCTAssertEqual(
+            rowCount(named: channelName, in: app), 0,
+            "the app did not start from an empty channel list — see IsolatedApp")
 
         addChannel(named: channelName, in: app)
         selectM17Mode(in: app)
+        replace(callsign, in: field("connect.callsign", in: app))
         replace(reflector, in: field("connect.host", in: app))
         replace(module, in: field("connect.module", in: app))
 
@@ -233,24 +243,6 @@ final class M17EndOfOverUITests: XCTestCase {
 
     private func rowCount(named name: String, in app: XCUIApplication) -> Int {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).count
-    }
-
-    /// Deletes every row of this name. Bounded, because a loop deleting rows
-    /// that something else is re-adding would run until the test times out.
-    @discardableResult
-    private func removeEveryRow(named name: String, in app: XCUIApplication) -> Int {
-        var removed = 0
-        while rowCount(named: name, in: app) > 0 {
-            let before = rowCount(named: name, in: app)
-            deleteChannel(named: name, in: app)
-            guard rowCount(named: name, in: app) < before else { return removed }
-            removed += 1
-            guard removed < 20 else {
-                XCTFail("still deleting '\(name)' rows after twenty — something is re-adding them")
-                return removed
-            }
-        }
-        return removed
     }
 
     // MARK: - Driving the form

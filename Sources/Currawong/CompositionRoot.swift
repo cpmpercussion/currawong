@@ -152,7 +152,11 @@ final class CompositionRoot {
         configuration: IAX2Client.Configuration = IAX2Client.Configuration(
             leveller: CompositionRoot.receiveLeveller),
         audio: AudioIO = AudioPipelineIO(),
-        settingsStore: SettingsStore = UserDefaultsSettingsStore(),
+        // `DefaultsSuite.resolved` rather than `.standard`: the operator's
+        // defaults in every ordinary launch, and a throwaway suite when a UI test
+        // asked for one on the command line. See ``DefaultsSuite``.
+        settingsStore: SettingsStore = UserDefaultsSettingsStore(
+            defaults: DefaultsSuite.resolved),
         secretStore: SecretStore = KeychainSecretStore(),
         // `nil` rather than a default-constructed controller: a default argument
         // expression is evaluated in a nonisolated context, and both of these
@@ -207,8 +211,12 @@ final class CompositionRoot {
             // and nowhere else, for the same reason the clients are: this is the
             // one file that names a platform framework's concrete type.
             activity: activity ?? CompositionRoot.makeActivityController())
-        let accessory = accessory ?? BLEPTTController()
-        let remoteCommand = remoteCommand ?? RemoteCommandPTTController()
+        // Same suite as the settings store, for the same reason: a UI test that
+        // isolates one and not the other would still be editing the operator's
+        // learned accessory.
+        let pttStore = UserDefaultsPTTSettingsStore(defaults: DefaultsSuite.resolved)
+        let accessory = accessory ?? BLEPTTController(store: pttStore)
+        let remoteCommand = remoteCommand ?? RemoteCommandPTTController(store: pttStore)
 
         self.session = session
         self.accessory = accessory
