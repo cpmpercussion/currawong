@@ -167,11 +167,16 @@ struct RootView: View {
                 .tag(Tab.keypad)
             }
 
+            // APP-20: padded here for the reason the split layout's are — a
+            // directory ran flush into both edges of the screen while every
+            // other tab sat in a padded column.
             if session.settings.mode == .echoLink {
                 StationBrowserView(
                     session: session, browser: browser, proxyPicker: proxyPicker,
                     onChosen: { selectedTab = .channels }
                 )
+                .padding(20)
+                .paneColumn()
                 .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(Tab.directory)
             }
@@ -181,6 +186,8 @@ struct RootView: View {
                     session: session, browser: reflectorBrowser,
                     onChosen: { selectedTab = .channels }
                 )
+                .padding(20)
+                .paneColumn()
                 .tabItem {
                     Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted")
                 }
@@ -235,7 +242,6 @@ struct RootView: View {
     private var channelsPane: some View {
         VStack(spacing: 0) {
             ChannelListView(session: session)
-                .padding(.horizontal, 20)
                 .padding(.top, 12)
                 // The list takes what it needs up to a third of the screen and
                 // no more, *while the form is under it*: beyond that it scrolls
@@ -282,7 +288,12 @@ struct RootView: View {
     /// while a transmission is running.
     private var splitLayout: some View {
         NavigationSplitView {
+            // **APP-20.** The list brings its own insets for everything that is
+            // not a `List` row; the top padding is the column's, because a
+            // sidebar's first element sits under the window's title bar area and
+            // only this side knows that.
             ChannelListView(session: session)
+                .padding(.top, 12)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
         } detail: {
             detailColumn
@@ -406,14 +417,26 @@ struct RootView: View {
                     .padding(20)
                     .paneColumn()
             }
+        // **APP-20: the same column as every other pane.** These two were
+        // inserted raw, so they ran flush into both edges of the detail column
+        // while the connect form, the keypad and the settings screen sat in a
+        // padded, width-capped column — and unbounded, the reflector rows' module
+        // chips pushed the list wider than the column, which clipped the Refresh
+        // button off the right-hand side. `paneColumn()` is what the other three
+        // already use, so this is one column width for the whole app rather than
+        // a number chosen here.
         case .stations:
             StationBrowserView(
                 session: session, browser: browser, proxyPicker: proxyPicker,
                 onChosen: { detailPane = .connect })
+                .padding(20)
+                .paneColumn()
         case .reflectors:
             ReflectorBrowserView(
                 session: session, browser: reflectorBrowser,
                 onChosen: { detailPane = .connect })
+                .padding(20)
+                .paneColumn()
         case .setup:
             settingsPane
         }
