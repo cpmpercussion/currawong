@@ -69,7 +69,7 @@ a fault turns out to want a feature, it becomes an `APP-*` row here and says so.
 
 **Phase 4's task list is closed** (2026-08-21) and Phase 5's work shipped inside
 it, under APP-5. Nothing below is open. What is open for this app is in
-`BRINGUP.md`: `BU-7`, `BU-10`, `BU-12`, `BU-13`, `BU-14`, and `BU-11` is a
+`BRINGUP.md`: `BU-7`, `BU-10`, `BU-13`, `BU-14`, and `BU-11` is a
 decision rather than a defect. `SIL-1` — silent operating mode — is an app task
 that has never been scoped; its row is still in the library plan's open list,
 pointing here, and it will be written up in this file when it is taken up.
@@ -1048,12 +1048,12 @@ panes use `paneColumn()` now, so the app has **one column width** rather than a
 number chosen per pane, and the iOS directory tabs get it for the same reason.
 
 Driven on both platforms rather than reasoned about. It also turned up **BU-12**,
-which is in `BRINGUP.md` rather than here: on a short display the
-whole app is taller than its window and macOS centres the overflow, which puts
-the status panel above the top edge with an empty channel list. Measured, four
-theories ruled out, not fixed — and the sidebar's missing *top* alignment is held
-back with it, because under that overflow it moves the header off-screen rather
-than merely down the column.
+which is in `BRINGUP.md` rather than here: on a short display the whole app was
+taller than its window and macOS centred the overflow, which put the status panel
+above the top edge with an empty channel list. **Fixed the same day** — a
+`fixedSize` on wrapping text in the sidebar, which a `NavigationSplitView`
+measures at an unspecified width — and the sidebar's *top* alignment, held back
+for it, shipped with the fix.
 
 ### APP-21 — The view layer is tested on both platforms, and the UI tests stop editing the operator's app ✅ DONE
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, asking whether
