@@ -23,3 +23,7 @@ xcuserdata/
 
 # Claude Code session state and worktrees
 .claude/
+
+# Coverage counters dropped in the working tree by an instrumented run.
+default.profraw
+*.profraw

@@ -81,6 +81,7 @@ keep treating the app as unproven on air.
 | BU-9 | The channel model loses edits, silently repoints named channels, and cannot delete a channel that has been connected to (macOS) | ✅ **closed 2026-08-21.** (1) and (2) fixed to the maintainer's decision of the same day — the connect form is a working copy, Save is the only thing that overwrites, Connect may add but never overwrite, and an unsaved edit survives a quit as a draft. (3) was never a defect — a failed connect leaves a modal sheet up and no context menu can open while it stands; the "greyed out" was the menu bar's own `Edit ▸ Delete`, matched by an unscoped query |
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
+| BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
 
 ---
 
@@ -832,6 +833,78 @@ Also settled in passing: `app.buttons["OK"].firstMatch` clicks the macOS test
 host's **Touch Bar** proxy of the default button and throws *"cannot be called
 with Touch Bar elements"*. Scope alert buttons to `app.sheets` — a SwiftUI
 `alert` on macOS is a sheet, not an `alert`.
+
+### BU-11 — the empty panel under the Channel name field 🔬 DIAGNOSED 2026-08-21
+
+**It is not our panel, and it is not autocorrect.** A small semi-transparent
+rounded rectangle hangs below the Channel name field on launch, with no
+interaction, in the macOS app. It was blamed on autocorrect on 2026-08-21 and
+then on the test window; neither was right.
+
+What it actually is, established by attaching to the running app:
+
+* The window is an **`SPRoundedWindow`** from
+  `/System/Library/PrivateFrameworks/SafariPlatformSupport.framework`, at
+  `kCGWindowLayer` 101 (`NSPopUpMenuWindowLevel`), 180×110.
+* Its `contentView` is an **`NSRemoteView` hosting
+  `SPCompletionListServiceViewController` out of process** in
+  `com.apple.SafariPlatformSupport.Helper`. That is why it looks empty and why it
+  is blank in every screenshot: there is no content in *our* process to draw, and
+  the remote surface does not composite into a window capture.
+* A breakpoint gives the whole path:
+  `-[NSAutoFillHeuristicController _showPasswordAutoFillIfNecessaryForView:withCompletionHandler:]`
+  → `-[SPSafariPlatformSupport displayOTPAutoFillRelativeToRect:ofView:oneTimeCodeMode:completionHandler:]`,
+  with `oneTimeCodeMode: 1`. **It is the one-time-code AutoFill panel**, offered
+  with no code to offer.
+* `ofView:` is the Channel name field — read off the stopped process, its
+  `stringValue` was the selected channel's name. Disabling that field moves the
+  panel down to the next text field, which is the same fact from the other side.
+
+**Four things it is not**, each tested by building and relaunching and then
+looking for the second window with `CGWindowListCopyWindowInfo`:
+
+1. **Not autocorrect.** `.autocorrectionDisabled()` on the Channel name field
+   changes nothing. (The modifier is worth having anyway — autocorrect on a
+   callsign-shaped name is wrong on its own terms — so it stays.)
+2. **Not the `SecureField`.** Replacing the node secret's `SecureField` with a
+   plain `TextField` changes nothing.
+3. **Not the first responder.** Clearing it (`makeFirstResponder(nil)` on every
+   window at launch) leaves the panel exactly where it was, and the stopped
+   process confirms the key window's first responder is the window itself.
+4. **Not naming the credential fields.** `.textContentType(.username)` and
+   `.textContentType(.password)` on the account fields changes nothing.
+
+**What does change it: the code signature.** A minimal two-field SwiftUI app —
+`TextField`, `TextField`, `SecureField`, a four-digit port and a five-digit node
+number, ad-hoc signed with no entitlements — never shows the panel. Re-signing
+*Currawong's own build* with an empty entitlements plist makes the panel go away
+too. So the trigger is the properly signed identity, not the view code: an app
+AppKit considers credential-capable (`com.apple.application-identifier`,
+`keychain-access-groups`) gets offered OTP AutoFill on the first text field of a
+window. Which of the two entitlements it is could not be isolated — ad-hoc
+signing with either one alone is refused at launch (`RBSRequestErrorDomain 5`).
+
+**So there is nothing to fix in the app.** `NSAutoFillHeuristicController` is
+private, there is no public opt-out for a text field, and the entitlement it
+keys off is one the app needs — the node secret lives in the Keychain. The
+options are to report it to Apple as an empty AutoFill panel shown unbidden, or
+to leave it. Worth re-checking on the next macOS update: this machine is on
+macOS 26.5 (SDK `MacOSX26.5`), and an empty completion list that shows itself
+anyway looks like a regression rather than a policy.
+
+**How to check whether it is still happening**, without a screenshot — the panel
+is invisible to `screencapture` but not to the window list:
+
+```sh
+# with the app running, look for a second Currawong window at layer 101
+swift - <<'SWIFT'
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+for w in list where (w["kCGWindowOwnerName"] as? String) == "Currawong" {
+    print(w["kCGWindowNumber"] ?? "?", w["kCGWindowLayer"] ?? "?", w["kCGWindowBounds"] ?? "?")
+}
+SWIFT
+```
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 
