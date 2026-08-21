@@ -124,9 +124,19 @@ struct PushToTalkButton: View {
         .accessibilityLabel("Push to talk")
         .accessibilityValue(isTransmitting ? "Transmitting" : "Not transmitting")
         .accessibilityHint("Press and hold to transmit. Release to stop.")
-        // Belt and braces. If this view leaves the hierarchy while the finger
-        // is still down, the gesture is torn down with it and `@GestureState`
-        // never gets to reset, so the release has to come from here.
+        // **Not belt and braces any more.** If this view leaves the hierarchy
+        // while the finger is still down, the gesture is torn down with it and
+        // `@GestureState` never gets to reset, so the release has to come from
+        // here. That used to mean one thing — switching tabs while keyed, in the
+        // compact layout — and since APP-18 it means another: the button is on
+        // screen only while there is a link, so **a link that drops under a held
+        // finger takes this button away**, and this line is what unkeys.
+        //
+        // It fires whether or not anything was keyed, which is harmless:
+        // `endTransmit(reason:)` records a stop reason only when something was
+        // actually transmitting, so an ordinary disconnect does not leave the
+        // status panel reporting a transmission that ended because a view went
+        // away. `SessionPaneStateTests` pins both halves of that.
         .onDisappear { onRelease(.viewDisappeared) }
     }
 

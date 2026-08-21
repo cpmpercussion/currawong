@@ -35,6 +35,16 @@ import SwiftUI
 struct StatusPanel: View {
     @ObservedObject var session: RadioSession
 
+    /// **APP-18.** The PTT accessory light, or `nil` where there is no room for
+    /// one — the settings screen shows this panel with its own accessory section
+    /// a scroll below it.
+    ///
+    /// Passed as a value rather than observed here, because the two controllers
+    /// it is computed from are already observed by ``SessionPane``: a second
+    /// observer of the same objects buys nothing and makes this panel need to
+    /// know about Bluetooth.
+    let accessory: AccessoryIndicator?
+
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
     }
@@ -60,15 +70,25 @@ struct StatusPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(connectionColour)
-                    .frame(width: 8, height: 8)
-                Text(session.connection.label)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            // The link state and what can key it, on one line: the two things
+            // that decide whether pressing a button will put the operator on
+            // air, side by side and never more than a glance apart.
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(connectionColour)
+                        .frame(width: 8, height: 8)
+                    Text(session.connection.label)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+
+                if let accessory {
+                    Spacer(minLength: 8)
+                    AccessoryIndicatorView(indicator: accessory)
+                }
             }
-            .accessibilityElement(children: .combine)
 
             if status.detail != session.connection.label {
                 Text(status.detail)
