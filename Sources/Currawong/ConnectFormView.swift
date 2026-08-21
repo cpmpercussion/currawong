@@ -268,6 +268,16 @@ struct ConnectFormView: View {
             )
             .accessibilityIdentifier("connect.channelName")
             .textFieldStyle(.roundedBorder)
+            // A channel name is usually a callsign, a reflector or a node —
+            // `M17-CBR A`, `VK1RGI` — and autocorrect on any of those is wrong.
+            // This was the last field in the form without it.
+            //
+            // It is **not** the fix for the panel that hangs under this field on
+            // launch: that is AppKit's own one-time-code AutoFill panel, shown
+            // empty, and it is unaffected by this modifier. See BU-11 in
+            // `docs/BRINGUP.md` for the diagnosis and for why there is nothing
+            // here to fix.
+            .autocorrectionDisabled()
         }
     }
 
