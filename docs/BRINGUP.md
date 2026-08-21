@@ -82,6 +82,7 @@ keep treating the app as unproven on air.
 | BU-10 | The Live Activity (SF-4, APP-3) has never been seen on a locked iPhone, and the case it exists for — an accessory keying a backgrounded app — has never been staged | Open, and the last thing between SF-4 and a fact rather than a claim. Unit-tested on every end path; never looked at |
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
+| BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduces with an empty channel list, or a blank AllStarLink one selected, because that form is the tallest thing in the app | Open, **measured but not diagnosed**. The SwiftUI root is offered 1293.5 points in an 866-point window; pinning the scrolling pane's height does not change it, so the demand is not the `ScrollView`'s ideal. Real for a first launch |
 
 ---
 
@@ -905,6 +906,65 @@ for w in list where (w["kCGWindowOwnerName"] as? String) == "Currawong" {
 }
 SWIFT
 ```
+
+### BU-12 — the app is taller than its window, and the overflow is centred 📏 MEASURED 2026-08-21
+
+**What an operator sees.** On a 1440×900 display, with **no channels** — a first
+launch — or with a blank AllStarLink channel selected, the connect pane opens with
+the mode chooser jammed under the window's toolbar, **no status panel at all**,
+and the channel sidebar's "Channels" header and `Add channel` button sitting
+halfway down an otherwise empty column.
+
+Nothing is wrong with either of those views. The whole app is taller than the
+window it is in, and macOS centres what it cannot fit, so the top of the layout is
+above the top edge of the window and the bottom is below the bottom.
+
+**Measured**, by wrapping the panes in `GeometryReader`s and logging
+`frame(in: .global)` on every layout pass (the app writes to a file; a `print`
+never arrives when the app is launched by `open`):
+
+| View | Frame |
+|---|---|
+| the SwiftUI root, and the split view | `(0, -187.75, 881, 1293.5)` |
+| the detail column | `(288, -135.5, 593, 1241.5)` |
+| the session pane — the status panel | `(288, -135.5, 593, 141)` |
+| the scrolling pane, holding the connect form | `(288, 6.5, 593, 1099.5)` |
+| the sidebar | `(8, 428.75, 280, 105)` |
+
+The window's content view is 881×866, and its content minimum is 760×672, so
+nothing is forcing 1293.5 from the AppKit side. The number is what the SwiftUI
+root is *offered*.
+
+**Ruled out**, each by building and re-measuring:
+
+* **The `ScrollView`'s ideal height.** `.frame(idealHeight: 240)` on the scrolling
+  pane changes nothing, and neither does `.frame(height: 300)` — the pane really
+  is 300 tall in the last measurement above and the root is *still* 1293.5. So the
+  connect form's height is not what the root is asking for, which was the obvious
+  theory and is wrong.
+* **The sidebar.** 105 points tall, and centred like everything else: a
+  consequence, not a cause. `.frame(maxHeight: .infinity)` on it makes the visible
+  symptom worse (the header goes off the top instead of sitting halfway down) and
+  changes no measurement, so the top-alignment it deserves is being kept back
+  until this is fixed rather than shipped into a broken layout.
+* **A `GeometryReader` clamp** on the detail column. It reports 1241.5 — the
+  overflowing height — so there is nothing constrained to clamp *to*. Whatever
+  proposes the height is above the root view.
+* **`.frame(minHeight: 620)`** on the detail column: 620 is less than 866, so it
+  cannot be the demand. It stays as documentation of what the fixed region needs.
+
+**Why it matters more than it looks.** The status panel is the one region APP-18
+says never hides, and this is the one case where it does — silently, on the
+screen a new operator sees first. It is also the same *class* as APP-15 (a rigid
+column against a window that can be any height), which suggests the answer is
+structural rather than another number.
+
+**Where to look next.** The demand comes from above the SwiftUI root, so the
+suspects are the `WindowGroup`/`NSHostingView` sizing on macOS 26 — whether the
+hosting view is being given `fittingSize` once and kept — and the window-restore
+path (the frame is restored from defaults, which is also how the *stale* 866
+arrives). Reproducing on a taller display would say whether it is the display
+bound or the sizing.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
 
