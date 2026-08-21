@@ -2,10 +2,17 @@
 
 The SwiftUI client for the `swift-hamvoip` protocol libraries. Apache-2.0.
 
-**The plan lives in the library repo, not here:**
-`../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` — §1 "How to work" applies to this
-repo too, and **Phase 4 (APP-1 … APP-4)** is the task list for this app.
-Requirements background: `../swift-hamvoip/docs/DESIGN-REQUIREMENTS.md`.
+**Start here: `docs/DEVELOPMENT-PLAN.md`** — this app's task list (`APP-*`,
+`BLE-*`), moved out of the library repo on 2026-08-21, and `docs/BRINGUP.md`,
+its fault list (`BU-*`). Features in the first, things that should already work
+in the second.
+
+**Two things still live in the library repo and are still authoritative:**
+`../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` §1 "How to work", which governs this
+repo as much as that one, and
+`../swift-hamvoip/docs/DESIGN-REQUIREMENTS.md`, the only source of requirement
+IDs (`FR-*`, `SF-*`, `PD-*`, `PT-*`, `OQ-*`, `NG-*`). Do not restate a
+requirement here; cite it.
 Read the library repo; **never write to it.** It is a separate repo with its own
 history and its own agents.
 

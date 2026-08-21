@@ -28,7 +28,8 @@ route layer in the same sense `BU-2` was bring-up of the radio path: read the
 accessory note before either item.
 
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
-`../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
+`DEVELOPMENT-PLAN.md` — beside this file since 2026-08-21, and in the library
+repo before that — are features — things the app should
 be able to do. The items here are faults: things that are supposed to work
 already and do not. They are numbered `BU-n` so a commit can cite one.
 
