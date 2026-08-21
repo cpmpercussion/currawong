@@ -9,13 +9,16 @@ import XCTest
 /// question "is Delete broken always, or only after a session?" is the one that
 /// says whether that is a test problem or an app problem.
 ///
-/// ## It counts rows, and it clears its own first
+/// ## It counts rows, and it starts from an empty list
 ///
-/// The app writes its channel list to the **real** defaults, so a run that dies
-/// before its delete leaves a row behind — and the next run then finds two rows
-/// of one name, deletes one, and reports that Delete did nothing. That false
-/// negative cost a morning once already (BU-9 item 3). So this asserts on the
-/// *count* of rows of its own name, and removes any it finds before it starts.
+/// It used to edit the operator's real channel list, so a run that died before
+/// its delete left a row behind — and the next run found two rows of one name,
+/// deleted one, and reported that Delete did nothing. That false negative cost a
+/// morning under BU-9 and came back under APP-19. ``IsolatedApp`` now launches
+/// the app against a throwaway defaults suite that is emptied first, so the list
+/// starts empty and the operator's own channels are never touched. Assertions are
+/// on the *count* of rows, which is what makes a duplicate visible rather than
+/// invisible.
 ///
 /// ## APP-19 changed what `Add channel` does
 ///
@@ -35,14 +38,15 @@ final class ChannelLifecycleUITests: XCTestCase {
     }
 
     func testAChannelCanBeAddedAndDeletedWithoutConnecting() {
-        let app = XCUIApplication()
-        app.launch()
+        let app = IsolatedApp.launched()
 
-        let cleared = removeEveryRow(named: channelName, in: app)
-        if cleared > 0 { print("=== cleared \(cleared) leftover '\(channelName)' row(s)") }
+        // The suite is wiped at launch, so this is a statement about the
+        // isolation rather than a cleanup: if a row of this name is already here,
+        // the app is reading the operator's defaults and every count below is
+        // measuring the wrong list.
         XCTAssertEqual(
             rowCount(named: channelName, in: app), 0,
-            "could not clear the leftovers, so a delete cannot be measured")
+            "the app did not start from an empty channel list — see IsolatedApp")
 
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
@@ -76,23 +80,6 @@ final class ChannelLifecycleUITests: XCTestCase {
 
     private func row(named name: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
-    }
-
-    /// Deletes every row of this name, so the count this test asserts on starts
-    /// from zero. Bounded, because a loop deleting rows that something else is
-    /// re-adding would otherwise run until the test times out.
-    @discardableResult
-    private func removeEveryRow(named name: String, in app: XCUIApplication) -> Int {
-        var removed = 0
-        while rowCount(named: name, in: app) > 0 {
-            guard deleteOneRow(named: name, in: app) else { return removed }
-            removed += 1
-            guard removed < 20 else {
-                XCTFail("still deleting '\(name)' rows after twenty — something is re-adding them")
-                return removed
-            }
-        }
-        return removed
     }
 
     /// One right-click ▸ Delete on the first row of this name. `false` if the

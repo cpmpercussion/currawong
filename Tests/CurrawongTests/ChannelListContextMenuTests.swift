@@ -58,14 +58,6 @@ final class ChannelListContextMenuTests: XCTestCase {
             menu.items.first { $0.title == "Delete" }, "no Delete item in row \(index)'s menu")
     }
 
-    /// Lets SwiftUI commit the change a `@Published` property just made. The
-    /// hosting view needs a turn of the run loop, not just a layout pass.
-    private func settle(_ host: NSView) {
-        host.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
-        host.layoutSubtreeIfNeeded()
-    }
-
     func testDeleteComesBackAfterALinkHasBeenUpAndDown() async throws {
         let connected = SessionHarness.goodSettings
         let harness = SessionHarness(
@@ -74,40 +66,16 @@ final class ChannelListContextMenuTests: XCTestCase {
         // Hosted the way `RootView.splitLayout` hosts it on macOS: the channel
         // list is the sidebar of a `NavigationSplitView`, which is a different
         // list representation from a bare `List`.
-        let host = NSHostingView(
-            rootView: NavigationSplitView {
+        // Hosted by `ViewHost`, which owns the window and the "never close it"
+        // rule that the long note below is about.
+        let hosted = ViewHost(
+            NavigationSplitView {
                 ChannelListView(session: harness.session)
             } detail: {
                 Text("detail")
-            })
-        host.frame = CGRect(x: 0, y: 0, width: 480, height: 480)
-        // **Ordered front, but off the display, and closed when the test ends.**
-        // The window has to be live — SwiftUI only builds the row's `NSMenu`
-        // for a view in a real window hierarchy, which is the whole reason this
-        // test hosts one. `orderFrontRegardless()` alone put a 480×480 panel
-        // showing a channel list and the word "detail" on top of whatever the
-        // operator was doing, for every `make test-macos` run, and it was never
-        // closed. That was reported twice as a bug in the app before it was
-        // recognised as this test: the window belongs to the *test host*, which
-        // is also called Currawong.
-        //
-        // Off-screen coordinates keep the hierarchy live and the screen clean.
-        // The class comment above says this runs headless; now it does.
-        //
-        // **Moved, not closed.** Closing it in a teardown block seemed tidier
-        // and crashed the whole bundle: `close()` starts an
-        // `_NSWindowTransformAnimation`, the test then tears the hosting view
-        // down underneath it, and the animation over-releases inside a later
-        // CoreAnimation commit — landing as a SIGSEGV in whichever unrelated
-        // test happened to be holding the run loop, which passed in isolation
-        // every time. The window outliving the test is the cheaper problem: the
-        // process is a test host that is about to exit anyway.
-        let window = NSWindow(
-            contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = host
-        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
-        window.orderFrontRegardless()
-        settle(host)
+            },
+            size: CGSize(width: 480, height: 480))
+        let host = hosted.contentView
 
         XCTAssertTrue(
             try deleteItem(ofRow: 0, in: host).isEnabled,
@@ -115,7 +83,7 @@ final class ChannelListContextMenuTests: XCTestCase {
 
         await harness.session.connect()
         XCTAssertEqual(harness.session.connection, .connected)
-        settle(host)
+        hosted.settle()
 
         // The lock reaches the menu, which is the behaviour that is wanted:
         // deleting a channel under a live call is refused, and the menu says so
@@ -125,7 +93,7 @@ final class ChannelListContextMenuTests: XCTestCase {
 
         await harness.session.disconnect()
         XCTAssertEqual(harness.session.connection, .disconnected)
-        settle(host)
+        hosted.settle()
 
         // The row that was merely sitting in the list while it was locked.
         let bystanderItem = try deleteItem(ofRow: 0, in: host)
@@ -156,7 +124,7 @@ final class ChannelListContextMenuTests: XCTestCase {
         XCTAssertTrue(
             NSApp.sendAction(action, to: bystanderItem.target, from: bystanderItem),
             "the Delete item's action was not accepted")
-        settle(host)
+        hosted.settle()
 
         XCTAssertFalse(
             harness.session.channels.channels.contains { $0.id == bystander.id },

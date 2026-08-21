@@ -40,14 +40,15 @@ import XCTest
 /// picks it, which throws *"cannot be called with Touch Bar elements"* — a
 /// failure that says nothing about the app.
 ///
-/// ## It starts by clearing its own leftovers
+/// ## It starts from an empty channel list
 ///
-/// The app writes its channel list to the **real** defaults, so a run that dies
-/// before its cleanup edits the operator's app — and the next run then sees two
-/// rows of the same name, deletes one, and reports that Delete did nothing. That
-/// false negative is what made this look like a live bug for a morning. So the
-/// test removes every row of its own two names before it adds anything, and
-/// removes both again at the end.
+/// It used to write to the **real** defaults, so a run that died before its
+/// cleanup edited the operator's app — and the next run saw two rows of the same
+/// name, deleted one, and reported that Delete did nothing. That false negative
+/// is what made this look like a live bug for a morning. ``IsolatedApp`` launches
+/// against a throwaway suite that is emptied first; the test asserts it really is
+/// empty, and still removes its own rows at the end, which is a delete this test
+/// is about anyway.
 final class ChannelDeleteAfterConnectUITests: XCTestCase {
 
     /// The channel that is never connected to, never selected again, and is the
@@ -72,17 +73,19 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
     }
 
     func testDeleteWorksOnARowThatSatInTheListWhileItWasLocked() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = IsolatedApp.launched()
 
         // MARK: Start from a list with none of this test's own rows in it
 
+        // A statement about the isolation, not a cleanup: ``IsolatedApp`` empties
+        // the suite before the app reads it, so a row already here means the app
+        // is reading the operator's defaults and every count below is measuring
+        // the wrong list. `removeEveryRow` is kept for the end of the test, where
+        // it still proves something.
         for name in [bystanderName, dialledName] {
-            let leftovers = removeEveryRow(named: name, in: app)
-            if leftovers > 0 { print("=== cleared \(leftovers) leftover '\(name)' row(s)") }
             XCTAssertEqual(
                 rowCount(named: name, in: app), 0,
-                "could not clear the leftover '\(name)' rows, so a delete cannot be measured")
+                "the app did not start from an empty channel list — see IsolatedApp")
         }
 
         addChannel(named: bystanderName, in: app)
@@ -330,8 +333,12 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
         let callsign = field("connect.callsign", in: app)
         let existing = callsign.value as? String ?? ""
         if existing.trimmingCharacters(in: .whitespaces).isEmpty {
-            // Only reached on a machine with no callsign saved. Connect refuses
-            // to leave `.disconnected` without one, and the lock would never arm.
+            // The ordinary path now: ``IsolatedApp`` wipes the suite, so there is
+            // no stored identity. Connect refuses to leave `.disconnected`
+            // without a callsign and the lock would never arm, so one is needed —
+            // and a made-up one is safe *here* precisely because this test dials
+            // TEST-NET-1 and nothing ever leaves the machine. The on-air test
+            // brings the operator's own instead.
             replace("VK1TEST", in: callsign)
         }
     }
