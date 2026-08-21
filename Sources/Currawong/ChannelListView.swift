@@ -37,6 +37,7 @@ struct ChannelListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+                .padding(.horizontal, Self.inset)
 
             if !isMutable {
                 Label(
@@ -45,16 +46,31 @@ struct ChannelListView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Self.inset)
             }
 
             if session.channels.channels.isEmpty {
                 emptyState
+                    .padding(.horizontal, Self.inset)
             } else {
                 list
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// **APP-20.** The horizontal inset for everything that is not a `List` row.
+    ///
+    /// The rows get theirs from the `List`, which is why this is not applied to
+    /// the whole view: padding the container would inset the rows *again* and
+    /// leave the header hanging left of the channel names it labels. It was the
+    /// other way round before — the two call sites padded the whole view, so on
+    /// macOS, where the sidebar padded nothing, "Channels" and `Add channel` sat
+    /// flush against both edges of the column.
+    ///
+    /// 20 to match `List`'s own row inset on both platforms, so the header lines
+    /// up with the row text under it rather than nearly lining up with it.
+    private static let inset: CGFloat = 20
 
     private var header: some View {
         HStack {
