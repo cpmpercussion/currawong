@@ -203,6 +203,48 @@ struct ChannelListView: View {
             }
             .deleteDisabled(!isMutable)
             .moveDisabled(!isMutable)
+
+            // **APP-22: the row for a channel that is not in the list yet.**
+            //
+            // `Add channel` points the form at a new channel and writes nothing
+            // (APP-19) — which was right about storage and left the operator with
+            // no sign that anything had happened, since the row it used to create
+            // was the only feedback the button had. So the draft appears here, at
+            // the bottom, marked "Not saved", and **Save or Connect is still what
+            // puts it in storage**. Quit without either and it is gone, exactly
+            // as a reflector picked out of the directory is: nothing can leave a
+            // permanent hostless row behind. The maintainer's call, 2026-08-21.
+            //
+            // Outside the `ForEach` on purpose: `onDelete` and `onMove` above
+            // work in offsets into the *stored* array, and a row inside that
+            // loop would shift every index by one.
+            if session.isDraftAnUnsavedChannel {
+                Button {
+                    // Already showing it; a tap is not a no-op only because the
+                    // form may have been scrolled away from on a phone.
+                } label: {
+                    ChannelRow(
+                        channel: session.settings,
+                        isSelected: true,
+                        hasUnsavedEdits: false,
+                        isUnsavedChannel: true,
+                        isConnected: false,
+                        connectionLabel: session.connection.label)
+                }
+                .buttonStyle(.plain)
+                .disabled(!isMutable)
+                .contextMenu {
+                    // Not `deleteChannel(_:)`: there is nothing stored to
+                    // delete. Discarding puts the form back on the selected
+                    // channel, which is what leaving this row means.
+                    Button(role: .destructive) {
+                        session.discardDraftChannel()
+                    } label: {
+                        Label("Discard", systemImage: "trash")
+                    }
+                    .disabled(!isMutable)
+                }
+            }
         }
         .listStyle(.plain)
         // `.disabled` on the List itself would take the scrolling with it, so
@@ -226,6 +268,13 @@ private struct ChannelRow: View {
     /// contain. Shown, because the alternative is a row that quietly describes
     /// something other than what pressing Connect would call.
     let hasUnsavedEdits: Bool
+
+    /// **APP-22.** Whether this row is the *provisional* one — a channel the
+    /// operator has started and not yet saved, which is in the list but not in
+    /// storage. Says "Not saved" rather than "Edited", because there is nothing
+    /// stored for it to differ from.
+    var isUnsavedChannel = false
+
     let isConnected: Bool
     let connectionLabel: String
 
@@ -237,7 +286,7 @@ private struct ChannelRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(channel.displayName.isEmpty ? "Unnamed channel" : channel.displayName)
+                    Text(channel.listDisplayName)
                         .font(.body.weight(isSelected ? .semibold : .regular))
                         .lineLimit(1)
 
@@ -253,7 +302,11 @@ private struct ChannelRow: View {
                             .foregroundStyle(.green)
                     }
 
-                    if hasUnsavedEdits {
+                    if isUnsavedChannel {
+                        Text("Not saved")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    } else if hasUnsavedEdits {
                         Text("Edited")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.orange)
@@ -272,9 +325,9 @@ private struct ChannelRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(channel.displayName), \(channel.mode.displayName), \(destination)"
+            "\(channel.listDisplayName), \(channel.mode.displayName), \(destination)"
             + (isConnected ? ", \(connectionLabel)" : "")
-            + (hasUnsavedEdits ? ", unsaved changes" : ""))
+            + (isUnsavedChannel ? ", not saved" : hasUnsavedEdits ? ", unsaved changes" : ""))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

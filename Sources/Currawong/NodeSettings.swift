@@ -250,6 +250,21 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// **APP-22.** What the channel list calls this channel, including before it
+    /// has anything in it.
+    ///
+    /// ``displayName`` is empty for a channel with no name, no host and no node —
+    /// which is exactly what `Add channel` hands over — and the list used to fall
+    /// back to "Unnamed channel" for it. That was the right words for a *stored*
+    /// row nobody could explain, and the wrong ones for a row the operator has
+    /// just this moment created: it reads as a fault rather than as an
+    /// invitation. The connect form's own placeholder already says "New channel";
+    /// this is the same wording, in the list.
+    var listDisplayName: String {
+        let name = displayName
+        return name.isEmpty ? "New channel" : name
+    }
+
     /// Where this channel actually points, in the terms the mode uses.
     ///
     /// The companion to ``displayName``, and deliberately *not* a fallback for
