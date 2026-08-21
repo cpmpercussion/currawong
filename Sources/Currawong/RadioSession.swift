@@ -201,8 +201,16 @@ final class RadioSession: ObservableObject {
     /// EchoLink has always filed this under `echolink:<callsign>`, shared by
     /// every EchoLink channel with that callsign — so it was never a per-channel
     /// credential, and the settings screen is where it is now edited rather than
-    /// mid-connect. ``secret`` still carries it into a connection, and
-    /// ``setEchoLinkAccountPassword(_:)`` keeps the two in step.
+    /// mid-connect.
+    ///
+    /// **APP-14: this is the only copy.** It used to be mirrored into ``secret``
+    /// whenever an EchoLink channel happened to be selected, and `connect()`
+    /// sent `secret` — so the password that was actually used depended on which
+    /// channel had been selected when it was typed, connecting could write a
+    /// node secret over it, and the station browser read `secret` and got the
+    /// empty string. Nothing mirrors now: ``credentialSecret(for:identity:)``
+    /// reads this for an EchoLink connection, and the station browser is handed
+    /// this too.
     @Published private(set) var echoLinkAccountPassword: String
 
     /// **APP-13.** The operator's own EchoLink proxy, if they run one.
@@ -550,7 +558,15 @@ final class RadioSession: ObservableObject {
         let storedReceiveGain = settingsStore.loadReceiveGain() ?? .unity
         self.receiveGain = storedReceiveGain
         self.receiveGainBox.gain = storedReceiveGain
-        self.secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
+        // Not `storedSecret(for:)`: an instance method cannot be called until
+        // every property is initialised. The rule is the same one spelled out —
+        // a channel's own secret is loaded, an app-wide one is not (APP-14),
+        // because `echoLinkAccountPassword` below is where that one lives.
+        if case .channel(let account) = current.secretOwnership(for: identity) {
+            self.secret = (try? secretStore.secret(for: account)) ?? ""
+        } else {
+            self.secret = ""
+        }
         // Loaded regardless of the selected channel's mode: the token belongs to
         // the operator rather than to a channel, so it is there for whichever
         // channel they switch to next.
@@ -608,19 +624,26 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Stores the EchoLink account password, and keeps a selected EchoLink
-    /// channel's in-memory secret in step with it.
+    /// Stores the EchoLink account password. The one place it is written.
     ///
-    /// The mirroring is the part that matters: ``connect()`` sends ``secret``,
-    /// and an operator who changed their password in settings while an EchoLink
-    /// channel was selected would otherwise connect with the old one and be told
-    /// by the directory server that their password was wrong.
+    /// **APP-14 removed the mirror into ``secret``.** It was there because
+    /// `connect()` sent `secret`, and it ran only `if settings.mode == .echoLink`
+    /// — so which password a connection used depended on which channel was
+    /// selected at the moment this was typed. Now `connect()` reads
+    /// ``echoLinkAccountPassword`` for an EchoLink channel and there is nothing
+    /// to keep in step.
+    ///
+    /// **Trimmed.** A password pasted with a trailing newline passed every
+    /// emptiness check and every "Stored in the Keychain" indicator, and then
+    /// failed the digest at the directory server — which presents as a password
+    /// that is right but rejected. The Web Transceiver token is trimmed for the
+    /// same reason; see ``saveWebTransceiverToken(_:)``.
     ///
     /// - Returns: whether it reached the Keychain.
     @discardableResult
     func setEchoLinkAccountPassword(_ password: String) -> Bool {
+        let password = password.trimmingCharacters(in: .whitespacesAndNewlines)
         echoLinkAccountPassword = password
-        if settings.mode == .echoLink { secret = password }
         do {
             try secretStore.setSecret(password, for: NodeSettings.echoLinkAccount(for: identity))
             return true
@@ -843,7 +866,7 @@ final class RadioSession: ObservableObject {
         stashDraft()
 
         settings = channel
-        secret = (try? secretStore.secret(for: channel.secretAccount(for: identity))) ?? ""
+        secret = storedSecret(for: channel)
         return channel.id
     }
 
@@ -891,7 +914,7 @@ final class RadioSession: ObservableObject {
         }
 
         settings = channel
-        secret = (try? secretStore.secret(for: channel.secretAccount(for: identity))) ?? ""
+        secret = storedSecret(for: channel)
         return true
     }
 
@@ -940,11 +963,71 @@ final class RadioSession: ObservableObject {
     /// shows what was typed rather than what was stored. The secret is read for
     /// whichever of the two won, because a draft may have been re-pointed at a
     /// different account than the channel it came from.
+    /// **APP-14.** What the station browser needs in order to ask the directory
+    /// server for a listing.
+    ///
+    /// It exists so that *which* password goes to the directory server is
+    /// decided here, next to the two fields, rather than in a view — which is
+    /// where it was decided wrongly: `StationBrowserView` asked for
+    /// `session.secret`, the channel's own secret, and got the empty string in
+    /// the ordinary case. A view reaching for one of two similarly named
+    /// properties is a mistake nothing could catch; a named request is testable.
+    struct DirectoryRequest: Equatable {
+        let settings: NodeSettings
+        let identity: OperatorIdentity
+        /// The **app-wide** EchoLink account password (APP-12), which is the only
+        /// credential a directory login has ever used.
+        let accountPassword: String
+    }
+
+    var directoryRequest: DirectoryRequest {
+        DirectoryRequest(
+            settings: settings, identity: identity, accountPassword: echoLinkAccountPassword)
+    }
+
+    /// **APP-14.** Which password a link is built with.
+    ///
+    /// For AllStarLink it is the channel's own, as typed into the form. For
+    /// EchoLink it is the *app-wide* account password the settings screen owns —
+    /// **not** the form's `secret`, which under the old code was whatever the
+    /// previously selected channel had left there. Switching a draft from
+    /// AllStarLink to EchoLink and connecting sent a node secret to the
+    /// directory server as an account password, which fails to authenticate and
+    /// reads to the operator as "my EchoLink password is wrong".
+    private func credentialSecret(
+        for settings: NodeSettings, identity: OperatorIdentity
+    ) -> String {
+        switch settings.secretOwnership(for: identity) {
+        case .channel:
+            return secret
+        case .appWide:
+            return echoLinkAccountPassword
+        case .none:
+            return ""
+        }
+    }
+
+    /// The stored secret to put in the form for a channel, if it has one of its
+    /// own.
+    ///
+    /// **An app-wide password is not loaded here** (APP-14). It lives in
+    /// ``echoLinkAccountPassword``, which is loaded once at launch and written
+    /// only by the settings screen; copying it into `secret` as well is what let
+    /// the two disagree, and what let a connect write one over the other.
+    private func storedSecret(for settings: NodeSettings) -> String {
+        switch settings.secretOwnership(for: identity) {
+        case .channel(let account):
+            return (try? secretStore.secret(for: account)) ?? ""
+        case .appWide, .none:
+            return ""
+        }
+    }
+
     private func loadSelectedIntoDraft() {
         let stored = channels.selected ?? NodeSettings()
         let current = drafts[stored.id] ?? stored
         settings = current
-        secret = (try? secretStore.secret(for: current.secretAccount(for: identity))) ?? ""
+        secret = storedSecret(for: current)
     }
 
     private func persistChannels() {
@@ -1091,18 +1174,39 @@ final class RadioSession: ObservableObject {
 
         do {
             if validated.usesWebTransceiver {
-                // The node-secret slot is deliberately left alone. A WT channel
-                // has no secret to store, and writing an empty one would *delete*
-                // the secret of every channel sharing that account string — which
-                // for AllStarLink is any channel with the same username, host,
-                // port and node. Switching a working channel to WT and back would
-                // otherwise lose its password.
                 webTransceiverToken = trimmedToken
                 try secretStore.setSecret(
                     trimmedToken, for: validated.webTransceiverAccount(for: validatedIdentity))
-            } else {
-                try secretStore.setSecret(
-                    secret, for: validated.secretAccount(for: validatedIdentity))
+            }
+
+            // **APP-14.** What gets written is decided by whose secret it is —
+            // see ``NodeSettings/SecretOwnership``. The old branch asked only
+                // "is this Web Transceiver?" and wrote the form's `secret` to
+            // `secretAccount(for:)` for everything else, which wrote an empty
+            // string for M17 and wrote over the settings screen's EchoLink
+            // password for EchoLink.
+            switch validated.secretOwnership(for: validatedIdentity) {
+            case .channel(let account):
+                // **Never empty.** `SecretStore` deletes on an empty value, and
+                // the account string is shared by every channel with the same
+                // username, host, port and node — so connecting with the field
+                // blank would take another channel's password with it. That was
+                // already the stated reason the Web Transceiver arm left this
+                // slot alone; it is the same reason here.
+                guard !secret.isEmpty else { break }
+                try secretStore.setSecret(secret, for: account)
+
+            case .appWide:
+                // EchoLink. The settings screen owns this password (APP-12) and
+                // connecting only *reads* it — see `credentialSecret` below.
+                break
+
+            case .none:
+                // M17, and a Web Transceiver channel whose token is written
+                // above. Nothing to store, so nothing is written and nothing can
+                // fail: the "could not save the secret" alert stops appearing on
+                // the happy path of a mode that has no secrets.
+                break
             }
         } catch {
             // Not fatal: the connection can proceed with the credential held in
@@ -1168,7 +1272,9 @@ final class RadioSession: ObservableObject {
         do {
             newLink = try makeLink(
                 resolved, validatedIdentity,
-                LinkCredentials(secret: secret, webTransceiverToken: trimmedToken),
+                LinkCredentials(
+                    secret: credentialSecret(for: validated, identity: validatedIdentity),
+                    webTransceiverToken: trimmedToken),
                 transmitTimeout, proxy)
         } catch {
             connection = .disconnected
@@ -1224,7 +1330,7 @@ final class RadioSession: ObservableObject {
         // operator asking for the channel they are leaving to be rewritten.
         stashDraft()
         settings = last
-        secret = (try? secretStore.secret(for: last.secretAccount(for: identity))) ?? ""
+        secret = storedSecret(for: last)
         return true
     }
 

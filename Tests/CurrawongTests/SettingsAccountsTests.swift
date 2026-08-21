@@ -262,19 +262,42 @@ final class SettingsAccountsTests: XCTestCase {
             "account-password")
     }
 
-    /// The mirroring that stops the app connecting with the old password:
-    /// `connect()` sends `secret`, and the settings screen writes the account.
-    func testChangingItWhileAnEchoLinkChannelIsSelectedUpdatesWhatWillBeSent() {
+    /// **APP-14.** Changing the password changes what a connection sends, with
+    /// no mirror into `secret` to keep in step.
+    ///
+    /// This used to assert the mirror — `if settings.mode == .echoLink { secret =
+    /// password }` — which made *which* password a connection used depend on
+    /// which channel was selected when it was typed. The property that matters is
+    /// the one below: what the link is built with.
+    func testChangingItChangesWhatAConnectionSends() async {
         let echo = SessionHarness.echoLinkSettings
         let harness = SessionHarness(
             settings: echo,
             secrets: [echo.secretAccount(for: vk1xyz): "old-password"])
-        XCTAssertEqual(harness.session.secret, "old-password", "precondition")
+        XCTAssertEqual(harness.session.echoLinkAccountPassword, "old-password", "precondition")
+        XCTAssertEqual(harness.session.secret, "", "and not in the channel's own field")
 
         harness.session.setEchoLinkAccountPassword("new-password")
-
-        XCTAssertEqual(harness.session.secret, "new-password")
         XCTAssertEqual(harness.session.echoLinkAccountPassword, "new-password")
+
+        await harness.session.connect()
+
+        XCTAssertEqual(harness.credentialsSeen.last?.secret, "new-password")
+    }
+
+    /// A password pasted with a trailing newline used to pass every emptiness
+    /// check and every "Stored in the Keychain" indicator, and then fail the
+    /// digest at the directory server — which reads as a password that is right
+    /// and rejected.
+    func testTheEchoLinkPasswordIsTrimmed() {
+        let harness = SessionHarness()
+
+        harness.session.setEchoLinkAccountPassword("  account-password\n")
+
+        XCTAssertEqual(harness.session.echoLinkAccountPassword, "account-password")
+        XCTAssertEqual(
+            harness.secretStore.all[NodeSettings.echoLinkAccount(for: vk1xyz)],
+            "account-password")
     }
 
     /// And it must *not* reach into a channel of another mode, whose `secret` is

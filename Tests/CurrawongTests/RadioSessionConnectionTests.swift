@@ -167,7 +167,10 @@ final class RadioSessionConnectionTests: XCTestCase {
             identity: identity)
 
         XCTAssertEqual(harness.session.identity, identity)
-        XCTAssertEqual(harness.session.secret, "account-password")
+        // APP-14: read into the app-wide field rather than into `secret`, and it
+        // is still the callsign-derived account string that finds it — which is
+        // what this test is about.
+        XCTAssertEqual(harness.session.echoLinkAccountPassword, "account-password")
     }
 
     func testMissingHostAndNodeAreRefused() async {

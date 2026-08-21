@@ -585,11 +585,24 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
 
     private let lock = NSLock()
     private var secrets: [String: String] = [:]
+    private var writeLog: [(account: String, secret: String?)] = []
 
     var failWrites = false
 
     init(initial: [String: String] = [:]) {
         self.secrets = initial
+    }
+
+    /// Every write attempted, in order — **including the ones that store
+    /// nothing** (APP-14). `setSecret(_:for:)` treats an empty value as a
+    /// removal, exactly as the Keychain store does, so a write of `""` to an
+    /// account with nothing in it leaves `all` unchanged and is invisible to a
+    /// test that only reads the contents. That is the shape of the M17 fault: a
+    /// write that exists only to fail.
+    var writes: [(account: String, secret: String?)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return writeLog
     }
 
     func secret(for account: String) throws -> String? {
@@ -599,6 +612,9 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     }
 
     func setSecret(_ secret: String?, for account: String) throws {
+        lock.lock()
+        writeLog.append((account: account, secret: secret))
+        lock.unlock()
         if failWrites { throw WriteFailed() }
         lock.lock()
         if let secret, !secret.isEmpty {
