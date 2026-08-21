@@ -4,12 +4,15 @@ import XCTest
 
 @testable import Currawong
 
-/// The session pane's link button: what it says in each state, and what
-/// "reconnect" actually reconnects to.
+/// The session pane's link button: what it says in each state, and what it
+/// actually dials.
 ///
-/// Two halves, and the second is the one that matters on air: a button labelled
-/// "Reconnect to VK1RGI" must place a call to VK1RGI and not to whichever
-/// channel happens to be selected by the time it is pressed.
+/// Two halves, and the second is the one that matters on air: **the button must
+/// dial the channel it names, and name the channel the status panel above it is
+/// showing.** It used to name the last channel connected to this run instead, so
+/// selecting a different channel left the pane showing one destination above a
+/// button offering another — and pressing it dialled the second. See the note on
+/// ``SessionLinkControl`` for why the wording changed with the behaviour.
 @MainActor
 final class SessionLinkControlTests: XCTestCase {
     private let vk1xyz = OperatorIdentity(callsign: "VK1XYZ")
@@ -21,7 +24,7 @@ final class SessionLinkControlTests: XCTestCase {
 
     func testConnectedOffersDisconnect() throws {
         let control = try XCTUnwrap(
-            SessionLinkControl(connection: .connected, lastConnectedName: "Repeater"))
+            SessionLinkControl(connection: .connected, destinationName: "Repeater"))
 
         XCTAssertEqual(control.title, "Disconnect")
         XCTAssertTrue(control.isEnabled)
@@ -32,7 +35,7 @@ final class SessionLinkControlTests: XCTestCase {
     /// control that offers it — the form's button is inert while busy.
     func testConnectingOffersCancelRatherThanDisconnect() throws {
         let control = try XCTUnwrap(
-            SessionLinkControl(connection: .connecting, lastConnectedName: nil))
+            SessionLinkControl(connection: .connecting, destinationName: nil))
 
         XCTAssertEqual(control.title, "Cancel")
         XCTAssertTrue(control.isEnabled)
@@ -41,7 +44,7 @@ final class SessionLinkControlTests: XCTestCase {
     /// The one state with nothing left to ask for.
     func testDisconnectingIsShownButDisabled() throws {
         let control = try XCTUnwrap(
-            SessionLinkControl(connection: .disconnecting, lastConnectedName: "Repeater"))
+            SessionLinkControl(connection: .disconnecting, destinationName: "Repeater"))
 
         XCTAssertEqual(control.title, "Disconnecting…")
         XCTAssertFalse(control.isEnabled)
@@ -49,23 +52,56 @@ final class SessionLinkControlTests: XCTestCase {
 
     /// The label names the place, because a button that keys a transmitter
     /// should not be ambiguous about which one.
-    func testDisconnectedOffersReconnectNamingTheChannel() throws {
+    func testDisconnectedOffersToConnectToTheSelectedChannel() throws {
         let control = try XCTUnwrap(
-            SessionLinkControl(connection: .disconnected, lastConnectedName: "VK1RGI"))
+            SessionLinkControl(connection: .disconnected, destinationName: "VK1RGI"))
 
-        XCTAssertEqual(control.title, "Reconnect to VK1RGI")
+        XCTAssertEqual(control.title, "Connect to VK1RGI")
         XCTAssertTrue(control.isEnabled)
-        XCTAssertFalse(control.isDestructive, "reconnecting is not the destructive action")
+        XCTAssertFalse(control.isDestructive, "connecting is not the destructive action")
+        XCTAssertTrue(control.isProminent, "it is the next step after choosing a channel")
     }
 
-    /// Before the first call there is nothing to go back to, and a dead button
-    /// only invites pressing it. The connect form is where a first call starts.
-    func testNothingIsShownWithNowhereToGoBackTo() {
-        XCTAssertNil(SessionLinkControl(connection: .disconnected, lastConnectedName: nil))
-        XCTAssertNil(SessionLinkControl(connection: .disconnected, lastConnectedName: ""))
+    /// The word is the only thing the last-connected channel decides. Both
+    /// spellings dial the selection.
+    func testTheSelectionBeingWhereWeJustWereOnlyChangesTheWord() throws {
+        let returning = try XCTUnwrap(
+            SessionLinkControl(
+                connection: .disconnected, destinationName: "VK1RGI",
+                isReturningToLastConnected: true))
+
+        XCTAssertEqual(returning.title, "Reconnect to VK1RGI")
+        XCTAssertTrue(returning.isProminent)
     }
 
-    // MARK: - What it reconnects to
+    /// Disconnect is findable because it is red and in a fixed place. A second
+    /// filled slab under the PTT would compete with it for the glance SF-3
+    /// wants spent on the transmit state.
+    func testOnlyTheAffirmativeActionIsProminent() throws {
+        let connected = try XCTUnwrap(
+            SessionLinkControl(connection: .connected, destinationName: "VK1RGI"))
+        XCTAssertFalse(connected.isProminent)
+
+        let cancelling = try XCTUnwrap(
+            SessionLinkControl(connection: .connecting, destinationName: "VK1RGI"))
+        XCTAssertFalse(cancelling.isProminent)
+    }
+
+    /// With no channel selected there is nowhere for the button to go, and a
+    /// dead button only invites pressing it.
+    func testNothingIsShownWithNoChannelSelected() {
+        XCTAssertNil(SessionLinkControl(connection: .disconnected, destinationName: nil))
+        XCTAssertNil(SessionLinkControl(connection: .disconnected, destinationName: ""))
+    }
+
+    // MARK: - `restoreLastConnectedChannel()`, which the button no longer calls
+    //
+    // The button dials the selection now, so nothing in the UI reaches these.
+    // They are kept because `lastConnectedChannel` itself is still live — it
+    // decides whether the button says "Reconnect" or "Connect", and
+    // `RadioSession` falls back to it — and because the restore is a coherent
+    // model capability somebody may want wired to something else. If it is
+    // still unused when the next task passes through here, delete both.
 
     func testNoLastChannelUntilACallIsAnswered() async {
         let harness = SessionHarness()
@@ -102,9 +138,12 @@ final class SessionLinkControlTests: XCTestCase {
         XCTAssertEqual(harness.session.lastConnectedChannel?.id, allStar.id)
     }
 
-    /// The whole point of storing the channel rather than trusting the draft:
-    /// selecting another channel while disconnected is allowed, and Reconnect
-    /// still means the place the operator was just talking to.
+    /// What the restore does when it is called: it moves the selection back,
+    /// list and draft together, and brings the secret with it.
+    ///
+    /// **This is no longer what the link button does.** It used to call this
+    /// first, which changed the selection out from under the operator — the pane
+    /// showed one channel and the button dialled another.
     func testReconnectingReturnsToTheLastChannelAfterAnotherWasSelected() async {
         let harness = SessionHarness(
             settings: nil,

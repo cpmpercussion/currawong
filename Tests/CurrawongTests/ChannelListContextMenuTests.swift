@@ -81,9 +81,31 @@ final class ChannelListContextMenuTests: XCTestCase {
                 Text("detail")
             })
         host.frame = CGRect(x: 0, y: 0, width: 480, height: 480)
+        // **Ordered front, but off the display, and closed when the test ends.**
+        // The window has to be live — SwiftUI only builds the row's `NSMenu`
+        // for a view in a real window hierarchy, which is the whole reason this
+        // test hosts one. `orderFrontRegardless()` alone put a 480×480 panel
+        // showing a channel list and the word "detail" on top of whatever the
+        // operator was doing, for every `make test-macos` run, and it was never
+        // closed. That was reported twice as a bug in the app before it was
+        // recognised as this test: the window belongs to the *test host*, which
+        // is also called Currawong.
+        //
+        // Off-screen coordinates keep the hierarchy live and the screen clean.
+        // The class comment above says this runs headless; now it does.
+        //
+        // **Moved, not closed.** Closing it in a teardown block seemed tidier
+        // and crashed the whole bundle: `close()` starts an
+        // `_NSWindowTransformAnimation`, the test then tears the hosting view
+        // down underneath it, and the animation over-releases inside a later
+        // CoreAnimation commit — landing as a SIGSEGV in whichever unrelated
+        // test happened to be holding the run loop, which passed in isolation
+        // every time. The window outliving the test is the cheaper problem: the
+        // process is a test host that is about to exit anyway.
         let window = NSWindow(
             contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
         window.orderFrontRegardless()
         settle(host)
 
