@@ -22,7 +22,12 @@ model.
 
 **Added 2026-08-21: the first accessory.** A TIDRADIO Q2L speaker-mic with a PTT
 button is in hand, and neither half of it works for long — `BU-13` (the audio
-stops after keying) and `BU-14` (the button stops keying). Every one of PT-1 …
+stops after keying) and `BU-14` (the button stops keying). **Probed properly on
+2026-08-22**, which answered the question both items were waiting on — the
+device attaches as *two* Bluetooth devices, and the PTT is BLE rather than a
+media key — and turned up `BU-15` on the way. The transport map, the measured
+HFP costs, and why macOS is the reference behaviour rather than the odd one out
+are in `BLUETOOTH-AUDIO.md`; read it before either item. Every one of PT-1 …
 PT-4 shipped under APP-5 against a fake, so this is bring-up of the input and
 route layer in the same sense `BU-2` was bring-up of the radio path: read the
 accessory note before either item.
@@ -92,7 +97,8 @@ keep treating the app as unproven on air.
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
-| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | Open, undiagnosed, 2026-08-21. First question is *which input it arrives on*: BLE GATT (PT-2/3) or `MPRemoteCommandCenter` (PT-4), which stops working silently the moment another app takes now-playing |
+| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | Open, 2026-08-21. **Which input answered 2026-08-22: BLE GATT** (`FF00/FF01`, `01`/`00`, real edges), so the PT-4 traps are ruled out and the suspects are in `BLEPTTController`. See `BLUETOOTH-AUDIO.md` |
+| BU-15 | **The first transmit after launch does a visible dance** — press PTT, handset beeps, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS, Q2L) | **Diagnosed 2026-08-22, not yet fixed.** Bringing HFP up changes the engine's configuration (A2DP device → HFP device, 44100 → 16000 Hz), `AVAudioEngineConfigurationChange` fires `.routeChanged`, and `resumeAcrossRouteChange()` correctly drops transmit and keys back down. The machinery is working as specified; the operator should not have to watch it |
 
 ---
 
@@ -925,6 +931,16 @@ accessory of any kind this app has met**: every one of PT-1 … PT-4 has until n
 been exercised by a unit test against a fake, and APP-5 shipped all three inputs
 without a device in the room.
 
+> ⚠️ **Answered 2026-08-22 — see `BLUETOOTH-AUDIO.md`.** The device attaches
+> **both** ways at once, as two Bluetooth devices with different addresses:
+> classic HFP/A2DP/AVRCP for the mic, speaker, CH+/CH- and volume, and a
+> *separate* BLE peripheral (service `0xFFE0`) carrying the PTT and nothing
+> else. **The PTT is a BLE item (PT-2/PT-3), not a PT-4 item**, so the two PT-4
+> traps below do not apply to it — they apply to CH+/CH-, which are AVRCP Next
+> and Previous Track. The question below is kept because the *reasoning* still
+> holds for the next accessory; the guess that it would be one or the other did
+> not.
+
 **The first measurement decides which fault is which**, and it is not a
 diagnosis, it is a question about the device: *how does this thing attach?*
 Accessories of this class usually pair as **classic Bluetooth handsfree** — a
@@ -1001,6 +1017,17 @@ the order the code makes likely — not findings.
   output device chosen in System Settings and there is no `AVAudioSession` at
   all, so if the audio survives keying on the Mac and not on the phone, the
   fault is the iOS session and the route, not the pipeline.
+  **Done, 2026-08-22, and it points at the iOS session.** On macOS the OS brings
+  HFP up on capture start and drops it ~2.1 s after capture stops, so listening
+  happens on A2DP and only transmitting is narrowband — the behaviour we want,
+  and `BLUETOOTH-AUDIO.md` argues it is the reference. On iOS the standing
+  `.playAndRecord` + `.allowBluetooth` session holds SCO up for the whole
+  session instead, which is both the permanently-lit LED and — the part that
+  matters — **16 kHz receive audio for the entire QSO**. That is a strong
+  candidate for "the audio stops being good", and it is a *library* change if it
+  is the cause. Not yet confirmed as the cause of the audio *stopping*
+  outright; the confirming measurement is the idle hardware rate, named in
+  `BLUETOOTH-AUDIO.md` step 1.
 
 **Closed when** a full QSO is held through the accessory — heard both ways, more
 than one over, with the last over as good as the first.
@@ -1010,6 +1037,21 @@ than one over, with the last over as good as the first.
 **What the operator sees.** The button can be got working — "starts working a
 bit" — and then stops. Whether this is BU-13's fault wearing a second face, or
 independent, is unknown.
+
+**Answered 2026-08-22: it is BLE GATT.** The button is `FF00/FF01` on the
+accessory's BLE peripheral — `0x01` press, `0x00` release, with real edges
+(3.088 s measured for a three-second hold, 0.090 s for a tap). So **the second
+bullet below is the live one and the first is ruled out**: latching and the
+now-playing trap cannot be the cause of a PTT that stops keying, because the PTT
+never travels over `MPRemoteCommandCenter` on this device. Details and the full
+button map are in `BLUETOOTH-AUDIO.md`.
+
+One new suspect for this item, from the same session: **the release `0x00`
+arrives twice**, ~1 ms apart. `applyRuntimeMapping` handles that correctly today
+(its release path is deliberately unguarded and idempotent), but any future
+handler that toggles per notification would key, unkey, key again and stick —
+which is "the button stops working" with the radio left on air, the urgent
+failure mode this item already flags.
 
 **Read the accessory note above first.** The single most useful thing here is
 knowing which input the button arrives on, because the two answers share no
@@ -1046,6 +1088,78 @@ button is being fought with.
 **Closed when** the button keys and unkeys reliably across a session of several
 overs, with the app backgrounded and the phone locked for at least one of them,
 and the operator can tell from the screen whether letting go will unkey them.
+
+### BU-15 — the first transmit after launch does a visible dance 🔬 DIAGNOSED 2026-08-22
+
+**What the operator sees**, on macOS with the Q2L, first transmit of a session:
+press PTT → the handset beeps → a pause → the UI flashes red → back to not-red
+→ then red, and actually transmitting. Subsequent transmits do not do it, or do
+it less. Nothing is broken at the end of it; it just looks like the app changed
+its mind.
+
+**Diagnosed, and every step is a component behaving as specified.** The
+sequence:
+
+1. Key-down. `beginTransmit` → `audio.startCapture(...)` opens the input.
+2. Opening the accessory's input brings the HFP SCO link up. The handset beeps
+   at that moment — ~100 ms in, and about 60 ms *before* audio actually flows.
+3. Bringing SCO up **changes the engine's configuration**: CoreAudio swaps the
+   A2DP device for the HFP device and the rate goes 44100 → 16000 Hz.
+4. `AVAudioEngine` posts `.AVAudioEngineConfigurationChange`. The library's
+   observer for that is **not** inside `#if os(iOS)`
+   (`RadioCore/AudioPipeline.swift:1158`), so it yields `.routeChanged` on macOS
+   too — correctly, since the graph really was rebuilt.
+5. `RadioSession.handle(_:)` routes `.routeChanged` to
+   `resumeAcrossRouteChange()`, which does exactly what SF-3 and its own
+   doc comment promise: **stop transmitting** (red off), wait
+   `routeSettleNanoseconds` for the graph to settle, then key back down (red on).
+
+So the flash is SF-3 firing on a route change that the act of keying caused.
+**Nothing here is a bug in isolation** — which is why it needs writing down
+rather than fixing in passing.
+
+**Why mostly the first one.** The dance needs the configuration change to land
+*while the engine is already running*. On a warm link — inside the ~2.1 s SCO
+linger, or when SCO comes up before the engine finishes starting — there is no
+change to observe, so no drop. That makes it timing-dependent rather than
+strictly once-per-launch, and an operator on a slow first key-up may see it
+again later. **Not measured; inferred.** If this item is picked up, measure
+before designing: log every `.routeChanged` with its cause against key-down
+timestamps for a dozen presses.
+
+**Why it matters beyond cosmetics.**
+
+* Each resume is a **real key-down** and starts its own SF-1 watchdog. The
+  transmission the operator thinks they started is not the one being timed.
+* `automaticResumes` is capped at `maximumAutomaticResumes` per hold. Spending
+  one of those on every first key-up spends a safety budget on a self-inflicted
+  route change.
+* It puts a red/not-red flicker in front of the operator at exactly the moment
+  they are deciding whether they are on air. The `TransmitActivityRequest` for
+  a route-change resume already says "keep holding" rather than blinking the
+  banner — the same care has not been taken for the main UI.
+* **It blocks the iOS harmonisation** in `BLUETOOTH-AUDIO.md`, which would
+  deliberately cause a route change on every key-down. On top of an unresolved
+  BU-15 that would move the dance from the first over to all of them.
+
+**Where the fix probably is** — not decided, and deliberately not:
+
+* **Suppress the resume when the route change is one we caused**, i.e. arriving
+  within a short window after our own `startCapture` and before
+  `isTransmitting` is set. Cheapest, and the risk is obvious: a suppression
+  window is a hole in SF-3, and SF-3 is not negotiable. Any such window must be
+  bounded, must not span an `await`, and needs a test that a *genuine* route
+  change inside the window still drops transmit.
+* **Let the route settle before keying at all** — bring the input up, wait for
+  configuration to stop changing, then `startTransmit()`. Honest, and pushes the
+  163 ms out to maybe 300 ms, which is the cost the operator would actually feel.
+* **Accept it and make it legible** — do not surface the intermediate state to
+  the UI at all until the first resume has settled. Does not touch the safety
+  path, and is probably the smallest honest change.
+
+**Closed when** the first transmit of a session looks like every other one, with
+SF-3 still demonstrably dropping transmit on a route change the app did not
+cause.
 
 ### BU-12 — the app is taller than its window, and the overflow is centred ✅ FIXED 2026-08-21
 
