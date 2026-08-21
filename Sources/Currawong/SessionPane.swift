@@ -5,7 +5,7 @@ import SwiftUI
 /// The pane that is about *the radio right now*: what the link is doing, what
 /// stopped the last transmission, and the button that keys the transmitter.
 ///
-/// ## Why these five things and nothing else
+/// ## Why these things and nothing else
 ///
 /// Everything here is either a safety message or the PTT button, and the two
 /// belong together because of what SF-3 and PT-1 need from the layout: the
@@ -14,6 +14,31 @@ import SwiftUI
 /// form, the keypad and the station browser are all things you do *between*
 /// transmissions, so they live in other panes; this one is the one you look at
 /// while talking.
+///
+/// ## APP-18: the controls the state actually has
+///
+/// This pane used to show all of it in every state, which made it the *union*
+/// of two radios rather than either one — and made the column rigid and tall
+/// enough to overflow a short window, which is the root cause APP-15 worked
+/// around by moving the pane picker to the toolbar.
+///
+/// It is now organised the way a rig is. **The status panel never hides**: one
+/// region that is always there and always current, anchored at the top, so a
+/// state change reads as the controls around the display changing rather than
+/// as the whole thing jumping. Everything else earns its place:
+///
+/// * **Disconnected** — no level meters and no PTT button. A large slab reading
+///   "Connect to a node first" is a control that advertises itself and then
+///   refuses, and the space it took belongs to the connect form, which is the
+///   only thing an operator can act on before a link exists.
+/// * **Connecting or connected** — meters and PTT. The switch is on
+///   ``RadioSession/ConnectionStatus/connecting``, not `.connected`: keyed off
+///   the latter, the layout would change twice for one action, and the second
+///   change would land while the operator was watching for the link to come up.
+///
+/// The accessory row went into the status panel as ``AccessoryIndicator``. Its
+/// configuration was already on the settings screen (APP-12); what is left is a
+/// light, which is what it always was.
 ///
 /// ## What is deliberately not here
 ///
@@ -40,11 +65,6 @@ struct SessionPane: View {
     /// the PTT button above the fold.
     let showsHeader: Bool
 
-    /// Opens the accessory screen. Passed in rather than presented from here,
-    /// because in the split layout the accessories are a pane rather than a
-    /// sheet and this view should not have to know which.
-    let openAccessories: () -> Void
-
     /// Hangs up, cancels a connect in progress, or reconnects to the last
     /// channel — whichever ``SessionLinkControl`` says the button means.
     ///
@@ -67,25 +87,40 @@ struct SessionPane: View {
                 MediaWarningLabel(text: warning)
             }
 
-            StatusPanel(session: session)
+            StatusPanel(session: session, accessory: accessoryIndicator)
 
-            LevelMetersView(session: session)
+            // APP-18. Only once there is a link, or one on the way: before that
+            // these are a meter reading nothing and a button that refuses.
+            //
+            // **A link that drops while the operator is keyed takes the PTT
+            // button out of the hierarchy under a held finger.**
+            // ``PushToTalkButton`` ends with
+            // `.onDisappear { onRelease(.viewDisappeared) }`, which was written
+            // as a backstop for the tab layout and is load-bearing here: it is
+            // the only thing that unkeys in that case, because the gesture that
+            // would have reported the release is torn down with the button.
+            // `SessionPaneStateTests` drops the link while keyed and asserts
+            // the release.
+            if showsTransmitControls {
+                LevelMetersView(session: session)
 
-            PushToTalkButton(
-                isEnabled: session.connection.isConnected,
-                isTransmitting: session.isTransmitting,
-                isKeyDown: session.isKeyDown,
-                onPress: { session.beginTransmit() },
-                onRelease: { session.endTransmit(reason: $0) })
-                // The button is a `GeometryReader` and so takes whatever it is
-                // given. Capped, because in the split layout this pane shares a
-                // fixed column with the panes below it and an uncapped button
-                // would push them off the bottom.
-                .frame(maxHeight: 240)
+                PushToTalkButton(
+                    isEnabled: session.connection.isConnected,
+                    isTransmitting: session.isTransmitting,
+                    isKeyDown: session.isKeyDown,
+                    onPress: { session.beginTransmit() },
+                    onRelease: { session.endTransmit(reason: $0) })
+                    // The button is a `GeometryReader` and so takes whatever it
+                    // is given. Capped, because in the split layout this pane
+                    // shares a fixed column with the panes below it and an
+                    // uncapped button would push them off the bottom.
+                    .frame(maxHeight: 240)
+            }
 
             // Directly under the PTT button, which is where the operator's hand
-            // already is, and above the accessory row so that the two things
-            // that end a transmission and end a call sit together.
+            // already is — and it is the last thing in the pane in every state,
+            // so the control that ends a call does not move when the controls
+            // above it come and go.
             if let control = SessionLinkControl(
                 connection: session.connection,
                 destinationName: session.settings.displayName,
@@ -93,13 +128,28 @@ struct SessionPane: View {
             {
                 SessionLinkButton(control: control, action: linkAction)
             }
-
-            AccessoryStatusRow(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                action: openAccessories)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Animated, so the region below the status panel is seen to change
+        // rather than to have been replaced. The panel itself does not move:
+        // this pane is top-aligned by its container.
+        .animation(.default, value: showsTransmitControls)
+    }
+
+    /// Whether the transmit controls are on screen. The other half of the same
+    /// decision — whether the connect form is — is ``RootView``'s, which is why
+    /// the decision itself is ``SessionPaneLayout`` rather than a comparison
+    /// written out in each place.
+    private var showsTransmitControls: Bool {
+        SessionPaneLayout(connection: session.connection).showsTransmitControls
+    }
+
+    private var accessoryIndicator: AccessoryIndicator {
+        AccessoryIndicator(
+            linkState: accessory.linkState,
+            isAccessoryConfigured: accessory.mapping != nil,
+            isAccessoryKeyed: accessory.isAccessoryKeyed,
+            isRemoteCommandEnabled: remoteCommand.isEnabled)
     }
 
     private var header: some View {
@@ -160,76 +210,6 @@ struct SessionLinkButton: View {
             }
             .font(.subheadline.weight(.medium))
             .frame(maxWidth: .infinity)
-        }
-    }
-}
-
-/// **BLE-3's indicator**, and the way in to the accessory screen.
-///
-/// The link state is on the row rather than only on the screen that configures
-/// it, because the question "is my PTT fob still connected?" is asked from the
-/// screen the operator is looking at while transmitting, not from the settings
-/// screen.
-struct AccessoryStatusRow: View {
-    @ObservedObject var accessory: BLEPTTController
-    @ObservedObject var remoteCommand: RemoteCommandPTTController
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .foregroundStyle(colour)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("PTT accessories")
-                        .font(.subheadline.weight(.medium))
-                    Text(summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var icon: String {
-        if accessory.isAccessoryKeyed { return "dot.radiowaves.left.and.right" }
-        switch accessory.linkState {
-        case .connected: return "dot.circle"
-        case .noAccessory: return remoteCommand.isEnabled ? "headphones" : "dot.circle"
-        case .scanning, .connecting, .reconnecting: return "antenna.radiowaves.left.and.right"
-        case .unavailable, .failed: return "exclamationmark.triangle"
-        }
-    }
-
-    private var colour: Color {
-        switch accessory.linkState {
-        case .connected: return .green
-        case .reconnecting, .scanning, .connecting: return .orange
-        case .failed, .unavailable: return .orange
-        case .noAccessory: return remoteCommand.isEnabled ? .green : .secondary
-        }
-    }
-
-    /// One line covering both inputs, because "no accessory" and "no accessory
-    /// but the headset button is armed" are different situations and the
-    /// difference is whether a button in the operator's pocket can key a
-    /// transmitter.
-    private var summary: String {
-        switch (accessory.linkState, remoteCommand.isEnabled) {
-        case (.noAccessory, false):
-            return "None set up"
-        case (.noAccessory, true):
-            return PTTSource.remoteCommand.label
-        case (let state, false):
-            return state.label
-        case (let state, true):
-            return "\(state.label) · \(PTTSource.remoteCommand.label)"
         }
     }
 }

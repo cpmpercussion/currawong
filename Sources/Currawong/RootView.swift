@@ -65,8 +65,6 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
-    @State private var isShowingAccessorySheet = false
-
     /// Which of the detail column's secondary panes is showing. Split layout
     /// only; the tab layout uses tabs for the same choice.
     @State private var detailPane: DetailPane = .connect
@@ -102,12 +100,6 @@ struct RootView: View {
             if phase != .active { session.stashDraft() }
         }
         .onDisappear { session.viewDisappeared() }
-        .sheet(isPresented: $isShowingAccessorySheet) {
-            AccessoryView(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                isTransmitting: status.isTransmitting)
-        }
         .alert(
             session.alert?.title ?? "",
             isPresented: Binding(
@@ -226,36 +218,58 @@ struct RootView: View {
         }
     }
 
-    /// The channel list with the connect form for whatever it has selected.
+    /// The channel list, with the connect form under it while there is no link.
     ///
     /// The list takes the space and the form takes what it needs, because the
     /// list is what the operator is reading and the form is the handful of
     /// fields underneath it. The form gets its own `ScrollView` so that a
     /// keyboard covering half the screen cannot make the Connect button
     /// unreachable.
+    ///
+    /// **APP-18: no form once a link is up or on its way.** It is
+    /// `isEditable: session.connection == .disconnected`, so while connected it
+    /// is a read-only wall of fields, and the one thing in it worth reading —
+    /// where the radio is pointed — is on the status panel (APP-16). What the
+    /// tab gets instead is the whole screen for the channel list, which is what
+    /// this tab is for.
     private var channelsPane: some View {
         VStack(spacing: 0) {
             ChannelListView(session: session)
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 // The list takes what it needs up to a third of the screen and
-                // no more. Beyond that it scrolls internally, so a long channel
-                // list never pushes the form — and the Connect button at the
-                // bottom of it — off the bottom of the tab.
-                .frame(maxHeight: 320, alignment: .top)
+                // no more, *while the form is under it*: beyond that it scrolls
+                // internally, so a long channel list never pushes the form — and
+                // the Connect button at the bottom of it — off the bottom of the
+                // tab. With no form, the cap has nothing to protect and the list
+                // takes the tab.
+                .frame(maxHeight: showsConnectForm ? 320 : .infinity, alignment: .top)
 
-            Divider()
+            if showsConnectForm {
+                Divider()
 
-            // Not capped. An earlier `maxHeight` here left slack in the stack,
-            // which a `VStack` centres, and the pane opened with a band of empty
-            // space above the channel list. The form takes the remainder.
-            ScrollView {
-                connectForm
-                    .padding(20)
-                    .paneColumn()
+                // Not capped. An earlier `maxHeight` here left slack in the
+                // stack, which a `VStack` centres, and the pane opened with a
+                // band of empty space above the channel list. The form takes the
+                // remainder.
+                ScrollView {
+                    connectForm
+                        .padding(20)
+                        .paneColumn()
+                }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .animation(.default, value: showsConnectForm)
+    }
+
+    /// **APP-18.** Whether the connect form is on screen at all.
+    ///
+    /// The other half of the switch ``SessionPane`` makes for the meters and the
+    /// PTT button, and exactly its complement — which is why both come from
+    /// ``SessionPaneLayout`` rather than from a comparison written out twice.
+    private var showsConnectForm: Bool {
+        SessionPaneLayout(connection: session.connection).showsConnectForm
     }
 
     // MARK: - Regular: split view
@@ -439,19 +453,36 @@ struct RootView: View {
             case .keypad: return session.settings.mode.sendsDTMF
             case .stations: return session.settings.mode == .echoLink
             case .reflectors: return session.settings.mode == .m17
-            case .connect, .setup: return true
+            // **APP-18.** The form is the disconnected state's pane, and only
+            // that state's: see ``showsConnectForm``. It leaves the picker
+            // rather than staying in it showing nothing, because a pane that is
+            // offered and then turns out to be a wall of greyed fields is worse
+            // than one that is not offered.
+            case .connect: return showsConnectForm
+            case .setup: return true
             }
         }
     }
 
-    /// The selection, resolved against what the current mode actually offers.
+    /// The selection, resolved against what this mode and this connection state
+    /// actually offer.
     ///
-    /// Changing mode can take the selected pane away — the selection is state
-    /// and the mode is not — so it is corrected on read rather than mutated
-    /// from an `onChange`. `.connect` is the fallback because it is the pane
-    /// that can put the operator back on a working link.
+    /// Changing mode can take the selected pane away, and since APP-18 so can
+    /// connecting — the selection is state and neither of those is — so it is
+    /// corrected on read rather than mutated from an `onChange`. There is then
+    /// no frame in which the picker points at a pane that is not there, and the
+    /// stored choice comes back when its pane does: connect while the form is
+    /// showing and the picker moves on; disconnect and it is showing again.
+    ///
+    /// The fallback is the first pane there is, which is `.connect` whenever
+    /// that exists — the pane that can put the operator back on a working link —
+    /// and otherwise the leftmost of what a live link has: the keypad for a mode
+    /// that sends DTMF, then the directory, then Settings, which is always
+    /// there. So the list is never empty and the picker never has nothing to
+    /// select.
     private var effectiveDetailPane: DetailPane {
-        visibleDetailPanes.contains(detailPane) ? detailPane : .connect
+        guard !visibleDetailPanes.contains(detailPane) else { return detailPane }
+        return visibleDetailPanes.first ?? .setup
     }
 
     // MARK: - Shared pieces
@@ -462,7 +493,6 @@ struct RootView: View {
             accessory: accessory,
             remoteCommand: remoteCommand,
             showsHeader: showsHeader,
-            openAccessories: { isShowingAccessorySheet = true },
             linkAction: { Task { await sessionLinkAction() } })
     }
 
@@ -547,16 +577,17 @@ struct RootView: View {
     /// **APP-12.** The settings screen — the operator, the two stored accounts,
     /// and the PTT accessory, which used to be the whole of this destination.
     ///
-    /// `isTransmitting: false` for the same reason the pane always passed it: the
-    /// root's ``TransmitBanner`` is above this view and still on screen, so a
-    /// second copy inside it would be two banners saying the same thing.
+    /// It used to be handed an `isTransmitting` to draw its own "on air" strip,
+    /// which was always `false`: the root's ``TransmitBanner`` is above this view
+    /// and still on screen, so a second copy inside it would be two banners
+    /// saying the same thing. The parameter existed for the accessory *sheet*,
+    /// which covered the banner and which APP-18 removed, so it went with it.
     private var settingsPane: some View {
         SettingsView(
             session: session,
             accessory: accessory,
             remoteCommand: remoteCommand,
-            portalLogin: portalLogin,
-            isTransmitting: false)
+            portalLogin: portalLogin)
     }
 
     private var keypadPane: some View {

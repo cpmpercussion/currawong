@@ -50,10 +50,6 @@ struct SettingsView: View {
     @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var portalLogin: PortalLoginController
 
-    /// Whether to draw the local "on air" strip in the accessory pane. See
-    /// ``AccessoryPane/isTransmitting``.
-    let isTransmitting: Bool
-
     /// The token, as typed or pasted. Committed to the Keychain on `onSubmit`
     /// and when the field loses focus rather than on every keystroke, so a
     /// half-pasted token is never what gets stored.
@@ -517,7 +513,6 @@ struct SettingsView: View {
             AccessoryPane(
                 accessory: accessory,
                 remoteCommand: remoteCommand,
-                isTransmitting: isTransmitting,
                 isEmbedded: true)
         }
     }

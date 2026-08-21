@@ -20,59 +20,17 @@ import SwiftUI
 /// trade: a whitelist would be tidier and would stop working the moment somebody
 /// bought a fob nobody had heard of.
 ///
-/// ## Sheet and pane
+/// ## A section of the settings screen, not a sheet
 ///
-/// This type is the *sheet*: a `NavigationStack`, a title and a `Done` button,
-/// which is how it is reached on iPhone. The screen's actual content is
-/// ``AccessoryPane``, which the split layout puts in a column where a sheet
-/// would be absurd and a `Done` button would have nothing to dismiss. Splitting
-/// them keeps one copy of the content — the alternative, a second rendering of
-/// learn mode for the pane, is two screens that would drift apart in exactly
-/// the fiddly state machine where they must not.
-struct AccessoryView: View {
-    @ObservedObject var accessory: BLEPTTController
-    @ObservedObject var remoteCommand: RemoteCommandPTTController
-
-    /// Passed in rather than observed, because this screen has no session. See
-    /// the note at the call site: the sheet covers the transmit banner, and
-    /// "on air" must survive being covered up.
-    let isTransmitting: Bool
-
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            AccessoryPane(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                isTransmitting: isTransmitting)
-                .navigationTitle("PTT accessories")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
-        }
-    }
-}
-
-/// The accessory screen's content, with no navigation chrome of its own.
-///
-/// Embedded directly as a pane in the split layout, and wrapped in a
-/// `NavigationStack` by ``AccessoryView`` when it is presented as a sheet.
+/// This is the screen's content with no navigation chrome of its own, and
+/// nothing wraps it any more. There used to be an `AccessoryView` around it — a
+/// `NavigationStack`, a title and a Done button — for the row at the bottom of
+/// the session pane to present on iPhone. APP-12 moved the configuration to the
+/// settings screen, which embeds this directly, and APP-18 removed the row; the
+/// wrapper had no caller left. Both layouts now reach it the same way.
 struct AccessoryPane: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
-
-    /// Whether to draw the local "on air" strip.
-    ///
-    /// True from the sheet, which covers ``TransmitBanner`` — and "on air" must
-    /// not be something the operator loses sight of by opening a settings
-    /// screen, least of all this settings screen, where the whole activity is
-    /// pressing a button that keys the radio. **False when embedded as a pane**,
-    /// where the root's banner is above this view and still on screen; a second
-    /// copy there would just be two banners saying the same thing.
-    let isTransmitting: Bool
 
     /// Whether this is a section of a larger screen (APP-12's settings screen)
     /// rather than the whole of one.
@@ -108,29 +66,10 @@ struct AccessoryPane: View {
 
     private var sections: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if isTransmitting { transmittingBanner }
             bluetoothSection
             Divider()
             remoteCommandSection
         }
-    }
-
-    // MARK: - On air
-
-    private var transmittingBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-            Text("TRANSMITTING")
-                .font(.subheadline.weight(.black))
-                .monospaced()
-            Spacer()
-        }
-        .foregroundStyle(.white)
-        .padding(12)
-        .frame(maxWidth: .infinity)
-        .background(Color.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Transmitting. On air.")
     }
 
     // MARK: - Bluetooth (PT-2, PT-3)
@@ -462,10 +401,9 @@ private struct LearnModeView: View {
 }
 
 #Preview {
-    AccessoryView(
+    AccessoryPane(
         accessory: BLEPTTController(makeCentral: { PreviewBLECentral() }),
-        remoteCommand: RemoteCommandPTTController(makeSource: { PreviewRemoteSource() }),
-        isTransmitting: false)
+        remoteCommand: RemoteCommandPTTController(makeSource: { PreviewRemoteSource() }))
 }
 
 /// Previews must not construct a `CBCentralManager` — it would ask Xcode's
