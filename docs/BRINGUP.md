@@ -20,6 +20,13 @@ day — four overs from the app, each seen to *end* by an independent observer �
 and `BU-9` records what trying to automate that turned up about the channel
 model.
 
+**Added 2026-08-21: the first accessory.** A TIDRADIO Q2L speaker-mic with a PTT
+button is in hand, and neither half of it works for long — `BU-13` (the audio
+stops after keying) and `BU-14` (the button stops keying). Every one of PT-1 …
+PT-4 shipped under APP-5 against a fake, so this is bring-up of the input and
+route layer in the same sense `BU-2` was bring-up of the radio path: read the
+accessory note before either item.
+
 It is deliberately **not** part of the phase plan. `APP-*` and `BLE-*` in
 `../swift-hamvoip/docs/DEVELOPMENT-PLAN.md` are features — things the app should
 be able to do. The items here are faults: things that are supposed to work
@@ -83,6 +90,8 @@ keep treating the app as unproven on air.
 | BU-8 | Nobody has watched an M17 over *end* at the far end — the last-frame flag is sent and read, but the pair has never been observed working together | ✅ **Closed 2026-08-20** — four overs from the app, four `ended — end of over` at an independent observer on `m17-cbr.charlesmartin.au` A. Closes `BU-4` check 5 with it |
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduces with an empty channel list, or a blank AllStarLink one selected, because that form is the tallest thing in the app | Open, **measured but not diagnosed**. The SwiftUI root is offered 1293.5 points in an 866-point window; pinning the scrolling pane's height does not change it, so the demand is not the `ScrollView`'s ideal. Real for a first launch |
+| BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
+| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | Open, undiagnosed, 2026-08-21. First question is *which input it arrives on*: BLE GATT (PT-2/3) or `MPRemoteCommandCenter` (PT-4), which stops working silently the moment another app takes now-playing |
 
 ---
 
@@ -906,6 +915,136 @@ for w in list where (w["kCGWindowOwnerName"] as? String) == "Currawong" {
 }
 SWIFT
 ```
+
+### The accessory itself — read this before BU-13 or BU-14
+
+**A TIDRADIO Q2L, in hand 2026-08-21.** A Bluetooth speaker-mic with a PTT
+button, of the shape sold for phone-based radio apps. It is the **first
+accessory of any kind this app has met**: every one of PT-1 … PT-4 has until now
+been exercised by a unit test against a fake, and APP-5 shipped all three inputs
+without a device in the room.
+
+**The first measurement decides which fault is which**, and it is not a
+diagnosis, it is a question about the device: *how does this thing attach?*
+Accessories of this class usually pair as **classic Bluetooth handsfree** — a
+mic-and-speaker *route* the audio session may select, not a peripheral the app
+connects to — and send the button as an HID or AVRCP key, which reaches this app
+as `MPRemoteCommandCenter` (PT-4). Some also advertise BLE GATT, which is the
+path PT-2/PT-3 and all of `BLEPTTController` were written for. Which of those is
+happening here is unknown, and until it is known, the two items below cannot be
+told apart from each other.
+
+Answer it first, cheaply, in this order:
+
+1. **`hamvoip-cli` is not the instrument for this** — the accessory is an app and
+   OS concern, not a protocol one. Nothing about this belongs in the library.
+2. Open the accessory pane and run **learn mode** with the device paired. If no
+   notification arrives when the button is pressed, it is not a BLE peripheral
+   button, `BLEPTTController` is not in the picture, and BU-14 is a PT-4 item.
+3. Note whether the device appears in the iPhone's Bluetooth list as a *paired
+   accessory* (handsfree) or only in the app's own scan (BLE), or both.
+
+Two standing traps apply the moment it is a PT-4 button, and both are already
+written down in `RemoteCommandPTT.swift` rather than being new discoveries:
+**the button latches** — press to key, press again to unkey, because a remote
+command has no release edge — and **only the app the system considers "now
+playing" receives commands at all**, so anything else that starts audio takes
+the button away with no error anywhere. "Works for a while and then stops" is
+that trap's exact signature, so rule it in or out before looking for a bug.
+
+### BU-13 — a Bluetooth speaker-mic stops carrying audio, and keying is what stops it 🔧 OPEN 2026-08-21
+
+**What the operator sees.** Audio works through the Q2L "a bit", then stops, and
+keying is what precedes the stop.
+
+**Not reproduced under instrumentation yet.** What follows is where to look, in
+the order the code makes likely — not findings.
+
+* **`stopCapture()` stops the whole engine, on every single unkey.** That is
+  deliberate and documented (`AudioIO.swift`, the type note): half-duplex has
+  nothing to receive while the microphone is open, and leaving the tap installed
+  keeps the system recording indicator lit for the whole call, which this app
+  must never do. With the built-in microphone the cost is invisible, because
+  `enqueuePlayback(_:)` restarts the engine on the next inbound frame. **With a
+  handsfree route it may not be invisible**: stopping the engine can drop the
+  link, the route changes underneath, and the engine that comes back was built
+  against a route that no longer exists. `AVAudioEngine` never revisits its
+  input format — the same fact that produced the 0 Hz bootstrap deadlock — so
+  "the route moved across an engine rebuild" is a fault of a shape this file
+  already knows, in a path that does not yet act on it.
+  **If this is the cause, the repair is to rebuild on a route change, not to
+  stop stopping the engine.** Keeping the tap open is a rejected design, not an
+  option that reopens because it would be convenient here.
+* **The SF-3 signals may already be telling us.** `AudioPipeline` emits
+  `AudioSessionSignal`s and `RadioSession` consumes them. A handsfree route
+  coming and going is a route change; find out whether one is arriving and being
+  ignored, or arriving and dropping transmit. Either answer is progress.
+* **The category and mode are the library's, not the app's** (RC-11, v0.5.3 —
+  `AudioPipeline.activateSession()`). Whether they ask for handsfree Bluetooth,
+  and what `mode` they set, decides whether the microphone is the accessory's or
+  the phone's. **Playing out of the accessory while recording from the phone is a
+  different fault** and worth telling apart on the first session, because it
+  looks like success until somebody at the far end says the audio sounds like a
+  pocket. If the fix is in the category, it is a library change, cited here and
+  made there.
+
+**Instruments.**
+
+* `AudioPipelineIO.audioStateDescription()` already prints category, mode,
+  hardware rate and the **route's input port types**. Today it is only reached
+  from the failure alert. Log it on every key and unkey and this item is either
+  diagnosed or narrowed in one session.
+* `AVAudioSession.routeChangeNotification` and its reason code, logged the same
+  way. `oldDeviceUnavailable` around an unkey would close the question.
+* **Run the same thing on macOS.** There the accessory is an ordinary input and
+  output device chosen in System Settings and there is no `AVAudioSession` at
+  all, so if the audio survives keying on the Mac and not on the phone, the
+  fault is the iOS session and the route, not the pipeline.
+
+**Closed when** a full QSO is held through the accessory — heard both ways, more
+than one over, with the last over as good as the first.
+
+### BU-14 — the accessory's PTT button keys for a while and then stops 🔧 OPEN 2026-08-21
+
+**What the operator sees.** The button can be got working — "starts working a
+bit" — and then stops. Whether this is BU-13's fault wearing a second face, or
+independent, is unknown.
+
+**Read the accessory note above first.** The single most useful thing here is
+knowing which input the button arrives on, because the two answers share no
+suspects:
+
+* **If it is `MPRemoteCommandCenter` (PT-4)**, start from the two documented
+  traps — latching, and the now-playing app being the only one that receives
+  commands. Check what else on the phone has claimed now-playing when the button
+  goes dead; check whether the app's now-playing entry is still there. If the
+  entry is being lost when the audio engine stops on unkey, that is the *same
+  root cause as BU-13* and both items close together — which is the outcome to
+  hope for and the reason to instrument the engine stop before anything else.
+* **If it is BLE GATT (PT-2/PT-3)**, the suspects are in
+  `BLEPTTController`: a mapping learned from a characteristic that also carries
+  something else (a keepalive on the press path would key on its own schedule),
+  the accessory dropping the link to save power, and the reconnect cap — five
+  consecutive failures and the controller stops trying and shows **Try again**,
+  which is exactly "it stopped working" from the operator's side. The link-state
+  indicator says which; look at it *at the moment it stops* rather than after.
+* **Either way**, a press must never survive a link drop keyed. SF-2 says a
+  disconnection unkeys unconditionally, and `BLEPTTController` does that first,
+  before anything else — a session that goes quiet is acceptable, a session that
+  stays keyed is not. Watch for the failure mode where the radio is still keyed
+  with a dead button, and if it happens, that is more urgent than the rest of
+  this item.
+
+**Stage BU-10 in the same session.** "An accessory keys a backgrounded app" is
+the case the Live Activity exists for and the one thing nobody has ever watched;
+with an accessory finally in hand there is no reason to make a second session of
+it. BU-7's two safety checks want a device in hand too, and the parrot (`55553`)
+is the right node for all of it — nobody else's channel is occupied while a
+button is being fought with.
+
+**Closed when** the button keys and unkeys reliably across a session of several
+overs, with the app backgrounded and the phone locked for at least one of them,
+and the operator can tell from the screen whether letting go will unkey them.
 
 ### BU-12 — the app is taller than its window, and the overflow is centred 📏 MEASURED 2026-08-21
 
