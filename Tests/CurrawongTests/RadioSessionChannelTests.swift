@@ -141,25 +141,68 @@ final class RadioSessionChannelTests: XCTestCase {
 
     // MARK: - Adding
 
-    func testAddingAChannelSelectsItAndPointsTheDraftAtIt() {
+    /// **APP-19.** `Add channel` points the form at a new channel and writes
+    /// nothing. It used to add the blank channel to the list and persist it,
+    /// which is where the "Unnamed channel" rows came from: one tap left a row
+    /// with no host that nothing could connect to and only Delete could remove.
+    func testANewChannelIsADraftAndIsNotInTheListYet() {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
 
-        let added = harness.session.addChannel(echo)
+        let added = harness.session.newChannel(echo)
 
         XCTAssertEqual(added, echo.id)
-        XCTAssertEqual(harness.session.channels.channels.map(\.id), [allStar.id, echo.id])
-        XCTAssertEqual(harness.session.settings, echo)
-        XCTAssertEqual(harness.settingsStore.savedChannels?.count, 2)
+        XCTAssertEqual(harness.session.settings, echo, "the form is pointed at it")
+        XCTAssertEqual(
+            harness.session.channels.channels.map(\.id), [allStar.id],
+            "and the list is untouched")
+        XCTAssertEqual(harness.session.channels.selectedID, allStar.id)
+        XCTAssertEqual(
+            harness.settingsStore.savedChannels?.map(\.id), [allStar.id],
+            "and nothing new was written")
+        XCTAssertTrue(
+            harness.session.isDraftAnUnsavedChannel,
+            "so the form can say it is not saved")
     }
 
-    /// Adding selects, and selecting mid-call is the thing that must not
-    /// happen — so adding is refused for the same reason selecting is.
-    func testAddingIsRefusedWhileConnected() async {
+    /// And Save is what puts it there — the same path a channel picked out of a
+    /// directory takes.
+    func testSavingANewChannelIsWhatAddsItToTheList() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+
+        harness.session.newChannel()
+        harness.session.settings.host = "typed.example.org"
+        harness.session.settings.name = "Typed"
+        XCTAssertTrue(harness.session.isDraftDirty, "Save is offered")
+
+        harness.session.saveDraft()
+
+        XCTAssertEqual(harness.session.channels.channels.count, 2)
+        XCTAssertEqual(harness.session.channels.channels.last?.host, "typed.example.org")
+        XCTAssertEqual(harness.settingsStore.savedChannels?.count, 2)
+        XCTAssertFalse(harness.session.isDraftAnUnsavedChannel)
+    }
+
+    /// A blank form nobody has typed into is not an unsaved change, so tapping
+    /// `+` and stopping there offers nothing to save and leaves nothing behind.
+    func testANewChannelNobodyTypedIntoIsNotDirty() {
+        let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+
+        harness.session.newChannel()
+
+        XCTAssertFalse(harness.session.isDraftDirty)
+        XCTAssertEqual(harness.settingsStore.savedChannels?.map(\.id), [allStar.id])
+    }
+
+    /// `Add channel` moves where the form is pointed, and doing that mid-call
+    /// would leave the form describing one place and the audio coming from
+    /// another — so it is refused for the reason selecting is.
+    func testANewChannelIsRefusedWhileConnected() async {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
         await harness.connect()
 
-        XCTAssertNil(harness.session.addChannel(echo))
+        XCTAssertNil(harness.session.newChannel(echo))
         XCTAssertEqual(harness.session.channels.channels.count, 1)
+        XCTAssertEqual(harness.session.settings.id, allStar.id, "and the form did not move")
     }
 
     // MARK: - Connecting
@@ -497,22 +540,39 @@ final class RadioSessionChannelTests: XCTestCase {
             "and nothing unreachable is left in the defaults")
     }
 
-    /// The `Add channel` case, which does survive: adding puts the channel in
-    /// the list, so a form filled in and never saved is still found next launch.
-    func testAnEditToAnAddedChannelSurvivesAQuit() {
-        let first = SessionHarness(settings: nil, channels: [])
-        let added = first.session.addChannel()
+    /// **APP-19 changed this one.** The `Add channel` case used to survive,
+    /// because adding put the blank channel in the list — which is exactly the
+    /// fault APP-19 fixed. A new channel that is typed into and neither saved
+    /// nor connected is now as durable as a reflector picked out of the
+    /// directory: it is a draft belonging to no channel, and BU-9 decided those
+    /// are dropped at launch.
+    ///
+    /// The cost is deliberate and it is on screen — "Not saved. Connecting will
+    /// add this to your channels" — from the moment there is anything to lose.
+    func testAnEditToANewChannelDoesNotSurviveAQuitUnlessItIsSaved() {
+        let first = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        first.session.newChannel()
         first.session.settings.host = "half-typed.exam"
         first.session.settings.name = "New one"
         first.session.stashDraft()
 
         let second = SessionHarness(reusing: first)
 
-        XCTAssertEqual(second.session.channels.selectedID, added)
-        XCTAssertEqual(second.session.settings.host, "half-typed.exam")
-        XCTAssertEqual(
-            second.session.channels.channels.first?.host, "",
-            "the channel itself is still the blank one that was added")
+        XCTAssertEqual(second.session.channels.channels.map(\.id), [allStar.id])
+        XCTAssertEqual(second.session.settings.id, allStar.id, "back on the stored channel")
+        XCTAssertTrue(
+            second.settingsStore.savedDrafts.isEmpty,
+            "and nothing unreachable is left in the defaults")
+
+        // Saved, it is an ordinary channel and survives like one.
+        let third = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
+        third.session.newChannel()
+        third.session.settings.host = "half-typed.exam"
+        third.session.saveDraft()
+
+        let fourth = SessionHarness(reusing: third)
+        XCTAssertEqual(fourth.session.channels.channels.count, 2)
+        XCTAssertEqual(fourth.session.channels.channels.last?.host, "half-typed.exam")
     }
 
     /// Tapping the highlighted row after a directory browse goes back to that
@@ -566,7 +626,7 @@ final class RadioSessionChannelTests: XCTestCase {
         harness.session.select(allStar.id)
         harness.session.chooseChannel(other)
         harness.session.select(allStar.id)
-        harness.session.addChannel()
+        harness.session.newChannel()
         harness.session.select(allStar.id)
         await harness.session.connect()
         await harness.session.disconnect()
@@ -619,11 +679,11 @@ final class RadioSessionChannelTests: XCTestCase {
 
     /// `Add channel` is a fresh start — which means the edit that was on screen
     /// is neither carried into the new channel nor lost.
-    func testAddingAChannelGivesABlankDraftAndKeepsThePreviousEdit() {
+    func testANewChannelGivesABlankDraftAndKeepsThePreviousEdit() {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
         harness.session.settings.host = "half-typed.exam"
 
-        let added = harness.session.addChannel()
+        let added = harness.session.newChannel()
 
         XCTAssertNotNil(added)
         XCTAssertEqual(harness.session.settings.host, "", "a blank form to fill in")

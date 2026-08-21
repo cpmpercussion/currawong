@@ -12,7 +12,7 @@ import SwiftUI
 ///
 /// ## Everything here is refused while a link is up
 ///
-/// `RadioSession.select(_:)`, `addChannel(_:)` and `deleteChannel(_:)` all
+/// `RadioSession.select(_:)`, `newChannel(_:)` and `deleteChannel(_:)` all
 /// return early unless the connection is `.disconnected`, because changing the
 /// destination under a live call would leave the screen describing one node
 /// while the audio came from another. That is the backstop; this view is the
@@ -72,7 +72,7 @@ struct ChannelListView: View {
             #endif
 
             Button {
-                session.addChannel()
+                session.newChannel()
             } label: {
                 Label("Add channel", systemImage: "plus")
             }
@@ -140,13 +140,25 @@ struct ChannelListView: View {
                 } label: {
                     ChannelRow(
                         channel: channel,
-                        isSelected: channel.id == session.channels.selectedID,
+                        // **APP-19: the highlight follows the form, not the
+                        // stored selection.** The two can differ — a directory
+                        // browse and `Add channel` both point the form at a
+                        // channel that is not in this list — and when they do,
+                        // no row is highlighted, which is the honest answer:
+                        // what the form is describing is not one of these yet.
+                        // Highlighting the channel the operator has just left
+                        // made `Add channel` look like it had done nothing.
+                        isSelected: channel.id == session.settings.id,
                         // BU-9: the row shows the *stored* channel, and an edit
                         // no longer reaches it on its own — so where the two
                         // disagree the list has to say so, or the operator is
                         // reading a description of somewhere they are not about
                         // to call.
                         hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
+                        // The *connected* row is still the selected one, which
+                        // is the channel the call was placed to — a connection
+                        // cannot be to a draft that is in no list, and while one
+                        // is up neither of the two paths above can run.
                         isConnected: channel.id == session.channels.selectedID
                             && session.connection != .disconnected,
                         connectionLabel: session.connection.label)
