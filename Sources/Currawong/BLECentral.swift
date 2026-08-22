@@ -165,7 +165,12 @@ protocol BLECentral: AnyObject, Sendable {
     /// evidence of anything within a useful time, because a PTT button is
     /// legitimately silent for minutes — which is the flaw this call fixes.
     ///
-    /// A no-op when the peripheral has nothing readable, or is not connected.
-    /// Silence is then the answer, and the caller must not read anything into it.
+    /// **A no-op when there is nothing readable yet, or the peripheral is not
+    /// connected — and silence must not be read as failure.** Characteristic
+    /// discovery arrives service by service, so an early probe genuinely cannot
+    /// run; reporting that as a dead link once made this call the cause of the
+    /// fault it exists to detect. Only a read that was attempted and failed is
+    /// evidence, and that is what ``BLECentralEvent/probeFailed(id:reason:)``
+    /// means.
     func probeForLiveness(_ id: UUID)
 }

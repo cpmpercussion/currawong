@@ -133,10 +133,20 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
                 return
             }
         }
-        // Nothing readable found. Reported rather than left as silence, because
-        // the caller must never be left waiting for an answer that cannot come.
-        continuation.yield(
-            .probeFailed(id: id, reason: "no readable characteristic"))
+        // **Nothing readable *yet*, and that is not a failure.**
+        //
+        // Characteristic discovery arrives service by service, and the caller
+        // probes as each one is subscribed — so the first probe of a rebuild runs
+        // before the readable characteristic has been discovered at all. Treating
+        // that as "the link is dead" made this method the cause of the fault it
+        // was written to detect: measured 2026-08-22, a probe 24 ms too early
+        // reported failure, the controller rebuilt a link that was about to be
+        // fine, and the whole thing looped.
+        //
+        // So: say nothing. A later subscription will probe again, and the
+        // controller's backstop covers the pathological case of a device with
+        // nothing readable at all. Only a *read that was attempted and failed* is
+        // evidence about the link.
     }
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {

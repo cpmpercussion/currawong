@@ -378,6 +378,71 @@ final class BLEPTTControllerTests: XCTestCase {
         _ = controller
     }
 
+
+    // MARK: - The seam's contract, where the last bug actually lived
+
+    /// **The regression, and the reason the earlier tests missed it.**
+    ///
+    /// `CoreBluetoothCentral` has no tests by construction — it needs a radio, so
+    /// everything above it is exercised against ``FakeBLECentral`` (AU-5). That
+    /// works only while the fake honours the same contract, and it did not: the
+    /// fake's probe always "works", while the real device delivers `.subscribed`
+    /// **eight times** per reconnect and the readable characteristic is not
+    /// discovered until the third. The real central reported that as a probe
+    /// failure, the controller rebuilt a link that was about to be fine, and the
+    /// whole thing looped — measured 2026-08-22.
+    ///
+    /// The rule, now stated on the protocol and asserted here: **a probe that
+    /// cannot run says nothing.** Only an attempted-and-failed read is evidence.
+    func testAProbeThatCannotRunYetMustNotCauseARebuild() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        central.clearCalls()
+
+        // Discovery arrives service by service, as it does on the device. The
+        // first subscription cannot be probed usefully; the central says nothing
+        // about it, and that silence must not be read as a dead link.
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await Task.yield()
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await Task.yield()
+
+        XCTAssertFalse(
+            central.calls.contains(.disconnect(mapping.accessoryID)),
+            "silence from a probe that could not run is not evidence of anything")
+    }
+
+    /// The device sends `.subscribed` once per service and repeats the whole
+    /// round, eight times in all. That must produce **one** rebuild attempt, not
+    /// eight — and it is the fake's failure to model this that hid the last bug.
+    func testTheDevicesRepeatedSubscriptionsProduceOneAttempt() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        central.clearCalls()
+
+        for _ in 0..<8 {
+            central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+            await Task.yield()
+        }
+        // One probe failure, once discovery really has finished, is one retry.
+        central.emit(.probeFailed(id: mapping.accessoryID, reason: "test"))
+        await waitUntil("one retry") {
+            self.central.calls.contains(.disconnect(mapping.accessoryID))
+        }
+
+        let disconnects = central.calls.filter { $0 == .disconnect(mapping.accessoryID) }
+        XCTAssertEqual(
+            disconnects.count, 1,
+            "eight subscriptions must not become eight rebuilds")
+    }
     // MARK: - A connection is not a working button (BU-14)
 
     /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the
