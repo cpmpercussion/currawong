@@ -65,7 +65,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// A mapping already stored and the link up — the state a repair applies to.
     private func makeConnectedController(
         clock: TestClock,
-        verifyDelay: (@Sendable () async -> Void)? = nil,
+        neverFiringBackstop: DelayGate? = nil,
         isRebuildSafe: (@MainActor () -> Bool)? = nil
     ) async -> (BLEPTTController, BLEPTTMapping) {
         let mapping = TestSignals.mapping()
@@ -75,7 +75,9 @@ final class BLEPTTControllerTests: XCTestCase {
             store: store,
             retryDelay: {},
             now: { clock.now },
-            verifyDelay: verifyDelay ?? {})
+            // A wait that is never released: these tests assert the
+            // *event-driven* path, and a backstop that fired would mask it.
+            stuckProbeBackstop: (neverFiringBackstop ?? DelayGate()).wait)
         controller.sink = sink
         controller.isRebuildSafe = isRebuildSafe
         controller.activateIfConfigured()
@@ -113,20 +115,6 @@ final class BLEPTTControllerTests: XCTestCase {
         let (controller, mapping) = await makeConnectedController(clock: clock)
 
         for _ in 0..<5 { controller.audioRouteDidChange() }
-
-        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
-    }
-
-    /// The cooldown is a cooldown, not a one-shot: a genuine second failure
-    /// later must still be repaired.
-    func testARouteChangeAfterTheCooldownRebuildsAgain() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
-
-        controller.audioRouteDidChange()
-        central.clearCalls()
-        clock.advance(BLEPTTController.repairCooldown + 1)
-        controller.audioRouteDidChange()
 
         XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
     }
@@ -192,96 +180,130 @@ final class BLEPTTControllerTests: XCTestCase {
     }
 
 
-    // MARK: - Escalation: checking the rebuild actually took (BU-14)
+    // MARK: - Escalation, driven by the probe's answer (BU-14)
 
-    /// **Why escalation exists.** A full reconnect was observed completing —
-    /// connected, every characteristic subscribed, every step reporting success —
-    /// and leaving the button dead. So one rebuild per route change is not
-    /// enough, and the only evidence it worked is data arriving.
-    func testARebuildThatProducesNothingIsTriedAgain() async {
+    /// Walk a rebuild to the point where it has probed.
+    private func rebuildAndProbe(
+        _ controller: BLEPTTController, _ mapping: BLEPTTMapping
+    ) async {
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await waitUntil("probed") { self.central.calls.contains(.probe(mapping.accessoryID)) }
+    }
+
+    /// **A rebuild whose probe fails is retried at once**, with no waiting.
+    ///
+    /// The previous design waited three seconds to see whether a notification
+    /// turned up, which measured how recently the operator pressed the button —
+    /// normal silence read as a dead link. A read either answers or fails, and
+    /// both arrive on their own.
+    func testARebuildWhoseProbeFailsIsRetriedImmediately() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)], "first attempt")
+        await rebuildAndProbe(controller, mapping)
         central.clearCalls()
 
-        // Nothing arrives, so the check fires and rebuilds again.
-        await waitUntil("the check is waiting") { gate.waiterCount == 1 }
-        gate.open()
-        await waitUntil("second attempt") {
+        central.emit(.probeFailed(id: mapping.accessoryID, reason: "test"))
+
+        await waitUntil("retried") {
             self.central.calls.contains(.disconnect(mapping.accessoryID))
         }
     }
 
-    /// It is a ladder, not a loop. Giving up is deliberate: an honest "untested"
-    /// and a Reconnect button beat retrying invisibly forever.
-    func testEscalationGivesUpAfterTheBound() async {
+    /// **A probe that answers ends the ladder**, with no operator involvement —
+    /// which is what makes the ladder mean anything.
+    func testAProbeThatAnswersEndsTheLadder() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        gate.open()
+        await rebuildAndProbe(controller, mapping)
+        central.clearCalls()
 
-        // Let the ladder run itself out, then count what the central was asked.
-        await waitUntil("the ladder finishes") {
-            self.central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
-                >= BLEPTTController.maximumRepairAttempts
-        }
+        // The read comes back — empty, because the question is whether bytes
+        // flow, not what they say.
+        central.emit(
+            .notified(
+                id: mapping.accessoryID,
+                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
+        await waitUntil("verified") { controller.isButtonVerified }
         await Task.yield()
-        let attempts = central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
-        XCTAssertEqual(
-            attempts, BLEPTTController.maximumRepairAttempts,
-            "the ladder must stop at the bound rather than retry forever")
-        XCTAssertFalse(controller.isButtonVerified, "and it must not claim success")
+
+        XCTAssertEqual(central.calls, [], "a proven link must not be rebuilt again")
     }
 
-    /// Data arriving ends the ladder and restores the budget, so the next failure
-    /// gets a full set of attempts rather than the remainder of the last one.
-    func testDataArrivingEndsTheLadderAndRestoresTheBudget() async {
+    /// It is a ladder, not a loop. Giving up leaves an honest "untested" and a
+    /// Reconnect button, which beats retrying invisibly forever.
+    func testEscalationGivesUpAfterTheBound() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.release))
-        await waitUntil("verified") { controller.isButtonVerified }
-        central.clearCalls()
-        gate.open()
-        await Task.yield()
+        for _ in 0..<BLEPTTController.maximumRepairAttempts {
+            await rebuildAndProbe(controller, mapping)
+            central.clearCalls()
+            central.emit(.probeFailed(id: mapping.accessoryID, reason: "test"))
+            await Task.yield()
+        }
 
-        XCTAssertEqual(central.calls, [], "a verified link must not be rebuilt again")
+        XCTAssertEqual(
+            central.calls, [],
+            "the ladder must stop at the bound rather than retry forever")
+        XCTAssertFalse(controller.isButtonVerified, "and must not claim success")
+    }
 
-        // And the budget is whole: a fresh failure gets the full ladder.
-        clock.advance(BLEPTTController.repairCooldown + 1)
-        controller.audioRouteDidChange()
+    /// **Coalescing by state, not by clock.** A burst of route changes produces
+    /// one rebuild because one is already in flight — no cooldown, and so nothing
+    /// to tune wrongly.
+    func testABurstCoalescesWhileARebuildIsInFlight() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        for _ in 0..<5 { controller.audioRouteDidChange() }
+
         XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
     }
 
-    /// **SF-2, and the reason the safety question is asked again rather than
-    /// assumed.** An escalation fires on a timer, and by then the operator may be
-    /// on air by way of the *on-screen* button, which this controller cannot see.
-    /// A rebuild disconnects, and a disconnection unkeys.
-    func testEscalationIsDeclinedWhenTheSessionSaysItIsNotIdle() async {
+    /// And once the rebuild has resolved, a later route change is free to repair
+    /// again — the gate is in-flight state, not a dead period.
+    func testAfterAProbeResolvesAnotherRouteChangeMayRepair() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        var isIdle = true
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait, isRebuildSafe: { isIdle })
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)], "first attempt")
+        await rebuildAndProbe(controller, mapping)
+        central.emit(
+            .notified(
+                id: mapping.accessoryID,
+                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
+        await waitUntil("verified") { controller.isButtonVerified }
         central.clearCalls()
 
-        // The operator keys up on the on-screen button while the check waits.
+        controller.audioRouteDidChange()
+
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+    }
+
+    /// **SF-2.** A rebuild disconnects, and a disconnection unkeys — so the
+    /// session is asked again on every attempt, including one the controller
+    /// triggered itself from a probe failure.
+    func testARetryIsDeclinedWhenTheSessionSaysItIsNotIdle() async {
+        let clock = TestClock()
+        var isIdle = true
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, isRebuildSafe: { isIdle })
+
+        controller.audioRouteDidChange()
+        await rebuildAndProbe(controller, mapping)
+        central.clearCalls()
+
+        // The operator keys up on the on-screen button, which this controller
+        // cannot see, before the probe's answer arrives.
         isIdle = false
-        await waitUntil("the check is waiting") { gate.waiterCount == 1 }
-        gate.open()
+        central.emit(.probeFailed(id: mapping.accessoryID, reason: "test"))
         await Task.yield()
 
         XCTAssertEqual(
@@ -289,20 +311,17 @@ final class BLEPTTControllerTests: XCTestCase {
             "a rebuild must never disconnect while the operator is transmitting")
     }
 
-    /// The operator asking gets a fresh budget, because a person pressing a
-    /// button is new information and whatever exhausted the ladder may have
-    /// changed.
+    /// The operator asking gets a fresh budget, and clears any wedged in-flight
+    /// state — a person pressing a button is new information.
     func testTheOperatorsReconnectRestoresTheBudget() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        gate.open()
-        await waitUntil("the ladder finishes") {
-            self.central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
-                >= BLEPTTController.maximumRepairAttempts
+        await rebuildAndProbe(controller, mapping)
+        for _ in 0..<BLEPTTController.maximumRepairAttempts {
+            central.emit(.probeFailed(id: mapping.accessoryID, reason: "test"))
+            await Task.yield()
         }
         central.clearCalls()
 
@@ -313,65 +332,24 @@ final class BLEPTTControllerTests: XCTestCase {
 
     // MARK: - The liveness probe (BU-14)
 
-    /// **What makes the ladder mean anything.** A rebuild is worth nothing unless
-    /// the new link carries data, and neither `.connected` nor a successful
-    /// subscribe shows that — both were observed reporting success over a dead
-    /// link. So after a rebuild the link is asked to prove itself.
+    /// A rebuilt link is asked to prove itself, because neither `.connected` nor a
+    /// successful subscribe is evidence — both were observed reporting success
+    /// over a dead link.
     func testARebuiltLinkIsProbed() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
-        central.emit(.connected(id: mapping.accessoryID))
-        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
-
-        await waitUntil("probed") { self.central.calls.contains(.probe(mapping.accessoryID)) }
+        await rebuildAndProbe(controller, mapping)
         _ = controller
     }
 
-    /// **And the probe's answer ends the ladder**, without the operator having to
-    /// touch anything. This is the whole point: the previous version waited to see
-    /// whether somebody pressed the button, so ordinary silence read as a dead
-    /// link and healthy links were rebuilt three times over.
-    func testTheProbesAnswerVerifiesTheLinkWithNoOperatorInvolvement() async {
-        let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
-
-        controller.audioRouteDidChange()
-        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
-        central.emit(.connected(id: mapping.accessoryID))
-        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
-        await waitUntil("probed") { self.central.calls.contains(.probe(mapping.accessoryID)) }
-
-        // The read comes back as an ordinary notification — a read and a
-        // notification are the same callback in CoreBluetooth. Empty, because the
-        // question is whether bytes flow, not what they say.
-        central.emit(
-            .notified(
-                id: mapping.accessoryID,
-                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
-        await waitUntil("verified") { controller.isButtonVerified }
-
-        central.clearCalls()
-        gate.open()
-        await Task.yield()
-        XCTAssertEqual(central.calls, [], "a proven link must not be rebuilt again")
-    }
-
-    /// **The trap the probe must not walk into.** The read's value arrives as a
+    /// **The trap the probe must not walk into.** A read's value arrives as a
     /// notification, and learn mode latches the first signal it sees — so a probe
-    /// during learning would be recorded as the operator's press. That exact
-    /// confusion, from a probe of a different kind, cost a session to diagnose.
+    /// during learning would be recorded as the operator's press.
     func testNoProbeIsIssuedWhileLearning() async {
         let clock = TestClock()
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(
-            clock: clock, verifyDelay: gate.wait)
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
         central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
@@ -386,8 +364,8 @@ final class BLEPTTControllerTests: XCTestCase {
             "a probe during learn mode would be latched as the operator's press")
     }
 
-    /// No probe when nothing was being repaired: an ordinary connection at launch
-    /// has no reason to be interrogated, and a read costs the accessory something.
+    /// No probe on an ordinary connection: nothing was being repaired, and a read
+    /// costs the accessory something.
     func testNoProbeOnAnOrdinaryConnection() async {
         let clock = TestClock()
         let (controller, mapping) = await makeConnectedController(clock: clock)
@@ -399,6 +377,7 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertFalse(central.calls.contains(.probe(mapping.accessoryID)))
         _ = controller
     }
+
     // MARK: - A connection is not a working button (BU-14)
 
     /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the

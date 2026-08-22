@@ -147,10 +147,6 @@ final class BLEPTTController: ObservableObject {
     /// The clock, injected so a test does not wait real seconds for a cooldown.
     private let now: @Sendable () -> Date
 
-    /// How long to give a rebuilt link to produce something before rebuilding it
-    /// again. Injected, like ``retryDelay``.
-    private let verifyDelay: @Sendable () async -> Void
-
     /// **Whether a rebuild is safe right now**, asked of whoever knows what is on
     /// air — ``RadioSession`` in the app, via the composition root.
     ///
@@ -179,6 +175,27 @@ final class BLEPTTController: ObservableObject {
     /// into one reconnect instead of one per change.
     private var lastRepairAt: Date?
 
+    /// **The only timer left, and it is a backstop rather than a mechanism.**
+    ///
+    /// A probe answers or fails, and both arrive on their own — that is what
+    /// makes the ladder event-driven. But if CoreBluetooth ever produced neither,
+    /// the controller would sit in ``isRebuildInFlight`` forever and never repair
+    /// again, which is silent permanent breakage of exactly the kind this whole
+    /// item is about. So there is one long wait whose *only* job is to unstick
+    /// that. If it is firing in practice, something is wrong with the seam, not
+    /// with the length of the wait.
+    private let stuckProbeBackstop: @Sendable () async -> Void
+
+    /// Whether a rebuild is between its disconnect and its answer.
+    ///
+    /// **This replaced a four-second cooldown**, and the difference is the point:
+    /// a route-change burst is coalesced because a rebuild is already happening,
+    /// not because a clock says too little time has passed. Every timing constant
+    /// in this class was a guess, and each one produced its own failure — a quiet
+    /// period that suppressed the repair for the event that causes the damage, and
+    /// a verify window that measured how recently the operator pressed the button.
+    private var isRebuildInFlight = false
+
     /// Repairs attempted since the link last produced anything, so escalation is
     /// bounded. Reset by data arriving, and by the operator asking directly.
     private var repairAttempts = 0
@@ -196,12 +213,6 @@ final class BLEPTTController: ObservableObject {
     /// retrying invisibly forever.
     static let maximumRepairAttempts = 3
 
-    /// How long after a repair further route changes are ignored.
-    ///
-    /// Long enough to cover a reconnect (about 1.2 s measured on a phone) and
-    /// `BU-17`'s once-a-second flapping, short enough that a genuine second
-    /// failure is not stonewalled.
-    static let repairCooldown: TimeInterval = 4
 
     // MARK: - Init
 
@@ -212,15 +223,15 @@ final class BLEPTTController: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         },
         now: @escaping @Sendable () -> Date = Date.init,
-        verifyDelay: @escaping @Sendable () async -> Void = {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        stuckProbeBackstop: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
         }
     ) {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
         self.now = now
-        self.verifyDelay = verifyDelay
+        self.stuckProbeBackstop = stuckProbeBackstop
         self.mapping = store.loadMapping()
     }
 
@@ -388,6 +399,7 @@ final class BLEPTTController: ObservableObject {
         isButtonVerified = false
         escalationTask?.cancel()
         repairAttempts = 0
+        isRebuildInFlight = false
         store.saveMapping(nil)
         linkState = idleLinkState
     }
@@ -447,6 +459,7 @@ final class BLEPTTController: ObservableObject {
         // A fresh budget: the operator pressing a button is new information, and
         // whatever exhausted the automatic attempts may since have changed.
         repairAttempts = 0
+        isRebuildInFlight = false
         repair(reason: "operator asked", force: true)
     }
 
@@ -458,8 +471,9 @@ final class BLEPTTController: ObservableObject {
     /// 1.2 s reconnect. Reported as "when it works it feels slow", and the
     /// complaint was right — the wait bought nothing that a cooldown does not.
     ///
-    /// So: repair on the *first* change of a burst and ignore the rest for
-    /// ``repairCooldown``. Same coalescing, none of the latency.
+    /// So: repair on the *first* change of a burst, and coalesce the rest by
+    /// noticing that a rebuild is already in flight. Same coalescing, none of the
+    /// latency — and no constant to tune wrongly.
     private func repair(reason: String, force: Bool) {
         // No accessory in use, or no link to repair: nothing to do. In
         // particular this must not fire during learn mode, where the operator is
@@ -468,9 +482,10 @@ final class BLEPTTController: ObservableObject {
             !isAccessoryKeyed, let id = wantedAccessory
         else { return }
 
-        if !force, let last = lastRepairAt,
-            now().timeIntervalSince(last) < Self.repairCooldown
-        {
+        // Coalescing by state, not by clock: a burst of route changes produces
+        // one rebuild because one is already happening.
+        if isRebuildInFlight, !force {
+            Diagnostics.route("accessory repair (\(reason)) skipped: rebuild in flight")
             return
         }
 
@@ -485,6 +500,7 @@ final class BLEPTTController: ObservableObject {
 
         lastRepairAt = now()
         repairAttempts += 1
+        isRebuildInFlight = true
 
         // The link is not to be trusted again until something arrives on it.
         isButtonVerified = false
@@ -495,41 +511,44 @@ final class BLEPTTController: ObservableObject {
         // through `handle(_:)`, which is the same path a real link drop takes —
         // so there is exactly one reconnection routine, not two.
         central?.disconnect(id)
-        scheduleEscalation()
+        armStuckProbeBackstop()
     }
 
-    /// **Check whether the rebuild took, and try again if it did not.**
+    /// **The rebuild's answer arrived: act on it.**
     ///
-    /// The repair was doing one rebuild per route change and calling it done. It
-    /// is not: a full reconnect was observed completing — connected, all four
-    /// characteristics subscribed, every step reporting success — and leaving the
-    /// button dead. Neither `.connected` nor a successful subscribe is evidence,
-    /// so the only way to know is to wait and see whether anything arrives.
-    ///
-    /// **What it waits for is a probe, not the operator.** An earlier version
-    /// waited to see whether a *notification* arrived, which measured "did
-    /// somebody press the button in the last three seconds" — normal silence read
-    /// as a dead link, and the ladder then rebuilt healthy links, taking the
-    /// button away for about a second and a half per attempt. Measured doing
-    /// exactly that on 2026-08-22. The probe replaces the guess.
-    ///
-    /// Bounded at ``maximumRepairAttempts``, and each attempt re-asks whether a
-    /// rebuild is safe. Giving up is deliberate rather than a gap: an honest
-    /// "untested" plus a **Reconnect** button beats retrying invisibly forever.
-    private func scheduleEscalation() {
+    /// Called when a probe answers (`alive`) or fails. No waiting and no
+    /// guessing — which is the whole reason `probeFailed` exists on the seam.
+    private func handleProbeOutcome(alive: Bool, detail: String?) {
         escalationTask?.cancel()
-        let wait = verifyDelay
+        isRebuildInFlight = false
+
+        if alive {
+            // `isButtonVerified` was already set by the arriving data.
+            return
+        }
+
+        guard repairAttempts < Self.maximumRepairAttempts else {
+            Diagnostics.route(
+                "accessory repair gave up after \(repairAttempts) attempts "
+                    + "(\(detail ?? "probe failed")) — the link is not coming "
+                    + "back on its own")
+            return
+        }
+        repair(reason: "probe failed: \(detail ?? "no reason")", force: true)
+    }
+
+    /// Arm the one remaining timer, whose only job is to unstick a probe that
+    /// never answered *or* failed. See ``stuckProbeBackstop``.
+    private func armStuckProbeBackstop() {
+        escalationTask?.cancel()
+        let backstop = stuckProbeBackstop
         escalationTask = Task { @MainActor [weak self] in
-            await wait()
-            guard !Task.isCancelled, let self else { return }
-            if self.isButtonVerified { return }  // something arrived; done.
-            guard self.repairAttempts < Self.maximumRepairAttempts else {
-                Diagnostics.route(
-                    "accessory repair gave up after \(self.repairAttempts) "
-                        + "attempts — the link is not coming back on its own")
-                return
-            }
-            self.repair(reason: "nothing arrived after rebuild", force: true)
+            await backstop()
+            guard !Task.isCancelled, let self, self.isRebuildInFlight else { return }
+            Diagnostics.route(
+                "accessory probe never answered — unsticking. This should not "
+                    + "happen; the seam owes an answer either way.")
+            self.handleProbeOutcome(alive: false, detail: "probe never answered")
         }
     }
 
@@ -630,6 +649,11 @@ final class BLEPTTController: ObservableObject {
                 central?.probeForLiveness(id)
             }
 
+        case .probeFailed(let id, let reason):
+            guard id == wantedAccessory else { return }
+            Diagnostics.route("accessory probe failed: \(reason ?? "no reason")")
+            handleProbeOutcome(alive: false, detail: reason)
+
         case .notified(let id, let signal):
             guard id == wantedAccessory else { return }
             // Data arrived, which is the only proof this link works.
@@ -637,9 +661,9 @@ final class BLEPTTController: ObservableObject {
                 isButtonVerified = true
                 // Ends any ladder in progress and restores the full budget for
                 // the next time the link dies.
-                escalationTask?.cancel()
                 repairAttempts = 0
                 Diagnostics.route("accessory link verified by arriving data")
+                handleProbeOutcome(alive: true, detail: nil)
             }
             lastSignal = signal
             Diagnostics.route(
