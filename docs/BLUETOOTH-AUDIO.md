@@ -293,7 +293,43 @@ or it becomes a mechanism for dropping the operator mid-over. The safe window is
 between overs — which is also when the operator is not looking, so it wants to
 be silent when it works and visible when it does not.
 
-Candidate fixes, none chosen:
+### The fix, implemented 2026-08-22
+
+**On an audio route change that finds the session idle, rebuild the link.**
+
+* `RadioSession.handle(.routeChanged)` calls `onIdleAudioRouteChange` — but only
+  when `!isTransmitting`, `heldSource == nil` and `!routeResumeInFlight`. **The
+  idle test lives there because that is the class that knows the answer**, and it
+  is what lets SF-2 stay unconditional: nothing suppresses the unkey, the repair
+  simply is not requested while anything is on air.
+* `BLEPTTController.audioRouteDidChange()` waits for the route to go quiet
+  (`routeSettleDelay`, 1.5 s, injected) and then **disconnects**. The existing
+  `.disconnected` path reconnects, so there is one reconnection routine rather
+  than two.
+* The wait coalesces a burst into a single repair. `BU-17` has route changes
+  flapping about once a second, and repairing on each would thrash the link it is
+  trying to fix.
+* Refused during learn mode, and refused while the accessory itself holds the
+  key — the controller's own guard, on top of the session's.
+
+**Why a reconnect and not a re-subscribe** is the measured part: a bare
+re-subscribe revived the link **once in six attempts** and reported success all
+six times, while a reconnect worked every time it was tried. So this does the
+reliable thing on a signal that is observable — the route change — rather than
+the cheap thing on a signal that is not.
+
+**What this does not claim.** The repair is aimed at the *observed* trigger. A
+link that dies for some other reason will still strand the button until the next
+route change, and there is still no liveness check — because there cannot be a
+useful one without either a readable characteristic on the seam (`BLECentral` has
+no read) or a definition of "too quiet", which a PTT button legitimately is for
+minutes at a time.
+
+Seven tests: the repair itself, burst coalescing, refusal while keyed, refusal
+during learn mode, refusal with nothing learned, and both sides of the session's
+idle gate.
+
+### Candidate fixes considered
 
 * ~~**Re-subscribe on every `.routeChanged`.**~~ **Ruled out 2026-08-22** — a bare
   re-subscribe revived the link once in six attempts, and reported success every

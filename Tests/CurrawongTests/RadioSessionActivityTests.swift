@@ -279,6 +279,55 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(harness.activityPresenter.shownState?.isOnAir, true)
     }
 
+    // MARK: - The idle gate on BU-14's repair
+
+    /// **The safety-relevant half of `BU-14`'s repair.** Rebuilding the
+    /// accessory link means disconnecting it, and SF-2 makes a disconnection
+    /// unkey unconditionally — so a repair fired during an over would be a way of
+    /// dropping the operator mid-sentence.
+    ///
+    /// The guard is here rather than in `BLEPTTController` because this is the
+    /// class that knows whether anything is on air. Nothing downstream suppresses
+    /// SF-2; the hook simply is not called.
+    func testARouteChangeUnderAHeldButtonDoesNotAskForARepair() async {
+        let harness = SessionHarness()
+        var repairRequests = 0
+        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
+        harness.session.start()
+        await harness.connect()
+        await harness.keyDown()
+
+        // Both waits, in this order, for the reason the tests above give: the
+        // recovery condition is already true before the session has seen
+        // anything.
+        harness.audio.emit(.routeChanged)
+        await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
+        await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
+        await harness.settleAll()
+
+        XCTAssertEqual(
+            repairRequests, 0,
+            "a repair was requested while the operator was holding the button")
+    }
+
+    /// And the other side of it: with nothing keyed, a route change is exactly
+    /// when the link should be rebuilt, because the button is needed for the
+    /// *next* press and this is the moment nobody is using it.
+    func testARouteChangeWhileIdleAsksForARepair() async {
+        let harness = SessionHarness()
+        var repairRequests = 0
+        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
+        harness.session.start()
+        await harness.connect()
+
+        harness.audio.emit(.routeChanged)
+        await waitUntil("the repair is requested") { repairRequests == 1 }
+        await harness.settleAll()
+
+        XCTAssertEqual(repairRequests, 1)
+        XCTAssertFalse(harness.client.isTransmitting, "nothing should have keyed")
+    }
+
     /// It stays up, but it does not lie: during the gap nothing is on air and it
     /// says so. Red means "your voice is going out", and it may not be shown
     /// over a microphone that is shut, however briefly.
