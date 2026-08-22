@@ -78,7 +78,12 @@ final class BLEPTTController: ObservableObject {
 
     // MARK: - Published state
 
-    @Published private(set) var linkState: LinkState = .noAccessory
+    @Published private(set) var linkState: LinkState = .noAccessory {
+        didSet {
+            guard oldValue != linkState else { return }
+            Diagnostics.route("accessory link \(oldValue) -> \(linkState)")
+        }
+    }
     @Published private(set) var availability: BLECentralAvailability = .unknown
 
     /// Accessories seen while scanning, newest RSSI wins. Not a support list —
@@ -374,6 +379,8 @@ final class BLEPTTController: ObservableObject {
             isAccessoryKeyed = false
             // ────────────────────────────────────────────────────────────────
 
+            Diagnostics.route(
+                "accessory DISCONNECTED: \(reason ?? "no reason given")")
             guard id == wantedAccessory else { return }
             if reason != nil { lastDisconnectReason = reason }
             linkState = .reconnecting
@@ -382,12 +389,27 @@ final class BLEPTTController: ObservableObject {
         case .subscribed(let id, let paths):
             guard id == wantedAccessory else { return }
             subscribedPaths = paths
+            // "Subscribed to seven characteristics and none of them said
+            // anything" is a different fault from "subscribe never completed",
+            // and on 2026-08-22 there was no way to tell them apart while a
+            // re-learn sat there receiving nothing.
+            Diagnostics.route(
+                "accessory subscribed to \(paths.count): "
+                    + paths.map { "\($0.service)/\($0.characteristic)" }
+                        .joined(separator: " "))
 
         case .notified(let id, let signal):
             guard id == wantedAccessory else { return }
             lastSignal = signal
+            Diagnostics.route(
+                "accessory notify \(signal.path.service)/\(signal.path.characteristic) "
+                    + "= \(signal.payloadDescription) "
+                    + "(\(learner != nil ? "learning" : "runtime"))")
             if learner != nil {
                 learner?.observe(signal)
+                if let step = learner?.step {
+                    Diagnostics.route("learn step -> \(step)")
+                }
             } else {
                 applyRuntimeMapping(signal)
             }
@@ -404,13 +426,19 @@ final class BLEPTTController: ObservableObject {
             // held must not produce a press edge fifty times a second.
             guard !isAccessoryKeyed else { return }
             isAccessoryKeyed = true
+            Diagnostics.keying("accessory PRESS edge")
             sink?.pttPressed(from: .accessory)
         } else if signal == mapping.release {
             // Deliberately *not* guarded on `isAccessoryKeyed`. A release that
             // arrives when the app thinks the button is already up can only
             // ever stop transmission, and `endTransmit` is idempotent; a
             // release that is swallowed can leave a microphone open.
+            let wasKeyed = isAccessoryKeyed
             isAccessoryKeyed = false
+            // Logged with what it found, because the Q2L sends its release
+            // twice ~1 ms apart: a second line saying `wasKeyed=false` is the
+            // duplicate being absorbed, not a fault.
+            Diagnostics.keying("accessory RELEASE edge (wasKeyed=\(wasKeyed))")
             sink?.pttReleased(from: .accessory, reason: .accessoryReleased)
         }
         // Anything else — a battery level, a heartbeat, the other button on the

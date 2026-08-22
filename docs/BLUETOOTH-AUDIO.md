@@ -93,10 +93,18 @@ than an accident.
 
 **This aligns exactly with simplex operation.** On a simplex channel nobody
 listens and talks at once, so the output dropping to narrowband during transmit
-costs nothing real, and the operator gets hi-fi receive audio for free. The
-handset's beep and red LED land ~100 ms into the key-up — about 60 ms *before*
-audio actually flows — which is better PTT feedback than anything the app could
-draw.
+costs nothing real, and the operator gets hi-fi receive audio for free. The red
+LED tracks the SCO link, so on macOS it tracks transmit, which makes it a usable
+TX indicator.
+
+> ⚠️ **Corrected 2026-08-22.** An earlier version of this file said the
+> handset's *beep* was the SCO-established tone, landing ~100 ms into the
+> key-up and ~60 ms before audio flows. **That was wrong.** On iOS the Q2L was
+> observed beeping on every button press with SCO down the whole time, so the
+> beep is the handset's own button feedback and says nothing about the audio
+> link. The 163 ms figure above is unaffected — it was measured from
+> `coreaudiod`/`bluetoothd` timestamps, never from the beep. The LED, unlike the
+> beep, really does track SCO.
 
 > **Therefore: the fact that macOS holds SCO only while transmitting is a
 > feature, not an inconsistency to be fixed.** A future change that makes macOS
@@ -143,14 +151,120 @@ down on every release, deliberately, and that is why the system recording
 indicator behaves correctly. The SCO link is held by the session's *route*, one
 layer below the tap.
 
+### HFP starves the BLE button. This is `BU-14`'s root cause
+
+**Measured on iOS, 2026-08-22, with `Diagnostics` streaming from the phone.**
+The accessory's PTT notifications are delivered when the route is A2DP and are
+**not delivered at all** when the route is HFP:
+
+| Phase | Route | PTT presses | Notifications |
+|---|---|---|---|
+| Learn mode, before connecting | `BluetoothA2DPOutput` 44100 Hz | several | **all delivered** — full learn sequence, both edges |
+| After `categoryChange` | `BluetoothHFP` 16000 Hz | several | **none** |
+| App backgrounded (session deactivated) | `BluetoothA2DPOutput` 44100 Hz | ~25 | **all delivered** |
+| Foreground + connected again | `BluetoothHFP` 16000 Hz | several | **one**, at the transition instant, then none |
+
+Four transitions, and the button tracked the route every time. The link never
+reported a disconnection — `linkState` stayed `.connected` throughout, and the
+accessory pane went on saying so while nothing arrived. **The link-state
+indicator alone cannot be trusted to tell you the button is alive.**
+
+Mechanism not yet distinguished, and it matters for the fix:
+
+* **Coexistence starvation.** SCO is a reserved, periodic voice channel; BLE
+  connection events on the same 2.4 GHz radio get squeezed. macOS logs show
+  explicit machinery here (`Server.MacCoex`, `Server.Coex`, and sniff-parameter
+  adjustment that counts SCO connections).
+* **The handset changes mode.** The Q2L may stop reporting the button over BLE
+  while it is in an HFP call, on the assumption the host will take the button as
+  a hook-switch instead. This fits the device class and fits the operator's
+  original description of a "PTT mode".
+
+**Why this makes macOS work and iOS fail.** Same accessory, same app code. On
+macOS SCO is up only while transmitting, so the button is free the rest of the
+time — which is all the time that matters, because the *press* is what has to
+get through. On iOS SCO is up for the whole session, so the button is dead for
+the whole session.
+
+### The session is never deactivated, and iOS keeps re-choosing HFP
+
+Also observed 2026-08-22: **disconnecting from a reflector does not put the
+route back.** The LED goes out and then comes back on with no channel connected
+at all. In the log that is:
+
+```
+route changed: reason=override           in=BluetoothHFP     out=BluetoothHFP  16000 Hz
+route changed: reason=override           in=MicrophoneBuiltIn out=Speaker      48000 Hz
+route changed: reason=newDeviceAvailable in=BluetoothHFP     out=BluetoothHFP  16000 Hz
+```
+
+The session is deactivated and reactivated, `.defaultToSpeaker` briefly wins —
+which is the `MicrophoneBuiltIn` line, and **that is the app transmitting from
+the phone's own microphone if it happens during an over**, the "sounds like a
+pocket" fault `BU-13` warns about, seen live — and then HFP is re-offered and
+taken again.
+
+So an active `.playAndRecord` + `.allowBluetooth` session does not merely *start*
+on HFP, it **keeps returning** to it, because the category demands an input route
+and HFP is the only Bluetooth one on offer. Disconnecting is not enough; only
+deactivating the session, or changing the category, releases the accessory.
+
 ### How to harmonise iOS to the macOS behaviour
 
 The goal is to state it once: **A2DP while listening, HFP only while
-transmitting, switched at key-down and key-up.** Sketched in the order the
-risk sits, because step 1 is cheap and steps 2–3 are not.
+transmitting, switched at key-down and key-up.** That is now the *fix for
+`BU-14`* and not only a receive-quality improvement — but the finding above
+adds a constraint that breaks the obvious implementation.
 
-**1. Confirm the diagnosis before changing anything. The instrument now
-exists** — `Diagnostics` (added under `BU-13`) logs `audioStateDescription()` on
+> ### ⚠️ The release-edge hazard. Read this before writing any of it
+>
+> If HFP is what starves the button, then a design that raises SCO **at
+> key-down** puts the *release* edge on the wrong side of the boundary: the
+> press arrives with SCO down and gets through, SCO comes up, and the release
+> arrives into exactly the condition under which nothing is delivered.
+>
+> **That is key-down with no key-up: a transmitter held open by a button the app
+> can no longer hear.** It is the precise failure `SF-2` exists to prevent, and
+> it would be *caused* by the change meant to fix `BU-14`.
+>
+> On the observed evidence this is a real risk, not a hypothetical: the one
+> press that got through on HFP got through at the transition instant, and
+> nothing after it did.
+>
+> So the accessory PTT on iOS **must not depend on the release edge arriving
+> over a live SCO link.** Options, none chosen:
+>
+> * **Latch with a bounded hold.** Treat the press as keying until either a
+>   release arrives *or* a timeout expires — with the timeout well inside the
+>   `SF-1` watchdog, so the watchdog is the backstop and not the mechanism. This
+>   turns an undelivered release into a short over rather than a stuck one.
+>   Costs the operator hold-to-talk semantics on iOS, which is a real loss.
+> * **Do not raise SCO for the accessory path at all.** Transmit from the
+>   *phone's* microphone while the accessory stays on A2DP for receive. The
+>   button keeps working, the operator keeps hi-fi receive — and speaks into the
+>   phone, which for a speaker-mic in the hand is close to absurd. Listed
+>   because it is safe, not because it is good.
+> * **Establish whether the starvation is symmetric.** If the mechanism is the
+>   handset changing mode rather than radio coexistence, the release may in fact
+>   be delivered and the whole hazard evaporates. **This is the cheap
+>   experiment and it should come first:** key down over the accessory on
+>   macOS — where SCO rises on the transmit path already — and see whether the
+>   release edge arrives while SCO is up. macOS reportedly works, which is
+>   weak evidence that it does.
+>
+> Until that experiment is run, **do not implement the switch.**
+
+Sketched in the order the risk sits, because step 1 is cheap and steps 2–3 are
+not.
+
+**1. ✅ Done 2026-08-22 — the diagnosis is confirmed.** The idle hardware rate
+during a session is **16000 Hz on `BluetoothHFP`**, against 44100 Hz on
+`BluetoothA2DPOutput` before the session is configured. iOS holds HFP for the
+whole call, exactly as this section predicted, and the operator's independent
+report of worse receive audio is that. Kept below because the instrument is how
+the next steps get measured too.
+
+**The instrument now exists** — `Diagnostics` (added under `BU-13`) logs `audioStateDescription()` on
 every key-down and key-up, and on iOS logs
 `AVAudioSession.routeChangeNotification` with its reason code. Read it with:
 
