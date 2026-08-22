@@ -2,6 +2,10 @@
 
 import XCTest
 
+// **macOS only**, for the same reason as `ChannelDeleteAfterConnectUITests`:
+// the delete it exercises is the macOS context menu's. See that file's note.
+#if os(macOS)
+
 /// Add a channel and delete it again, touching nothing else. **Transmits
 /// nothing** — it is in this target only because it needs a running app.
 ///
@@ -150,3 +154,5 @@ final class ChannelLifecycleUITests: XCTestCase {
         return condition()
     }
 }
+
+#endif

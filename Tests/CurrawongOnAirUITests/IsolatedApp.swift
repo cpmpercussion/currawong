@@ -40,22 +40,74 @@ enum IsolatedApp {
         return app
     }
 
-    /// The operator's own callsign, read out of the app's **real** defaults.
+    /// The environment variable a caller sets to say which callsign may go on
+    /// the air. See ``operatorCallsign()``.
+    static let callsignVariable = "CURRAWONG_ONAIR_CALLSIGN"
+
+    /// The operator's own callsign — from the environment, or failing that the
+    /// app's **real** defaults.
     ///
-    /// A test that transmits must not invent one. The suite is wiped at launch, so
-    /// the callsign field comes up empty; typing something made up would put a
-    /// callsign on the air that belongs to nobody, or to somebody else. The runner
-    /// and the app share the user's preference domain on macOS, which is where
-    /// this target runs, so the honest answer is available — and where it is not,
-    /// the caller fails the test rather than guessing.
+    /// A test that transmits must not invent one. The suite is wiped at launch,
+    /// so the callsign field comes up empty; typing something made up would put
+    /// a callsign on the air that belongs to nobody, or to somebody else.
+    ///
+    /// ## Why the environment comes first, added 2026-08-23
+    ///
+    /// The defaults route **only works on macOS**, where the runner and the app
+    /// share the user's preference domain. On iOS they are separate sandboxed
+    /// apps and the runner cannot read the app's container at all, so on the
+    /// device — the one platform where `BU-15` is visible — this returned nil
+    /// and the test could not run.
+    ///
+    /// The variable also makes the opt-in explicit, which is worth having on
+    /// both platforms: a callsign is public information, but *transmitting*
+    /// under somebody's callsign is not something a checkout should do because
+    /// a test target happened to get run. Nothing here is committed — the value
+    /// is supplied per run:
+    ///
+    /// ```sh
+    /// xcodebuild ... TEST_RUNNER_CURRAWONG_ONAIR_CALLSIGN=<yours>
+    /// ```
+    ///
+    /// `xcodebuild` strips the `TEST_RUNNER_` prefix and passes the rest into
+    /// the runner's environment, which is the only route into a UI test process
+    /// on a device.
     static func operatorCallsign() -> String? {
-        guard
-            let real = UserDefaults(suiteName: "au.charlesmartin.currawong"),
-            let data = real.data(forKey: "au.charlesmartin.currawong.operatorIdentity"),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let callsign = json["callsign"] as? String,
-            !callsign.trimmingCharacters(in: .whitespaces).isEmpty
-        else { return nil }
+        if let fromEnvironment = ProcessInfo.processInfo.environment[callsignVariable],
+            !fromEnvironment.trimmingCharacters(in: .whitespaces).isEmpty
+        {
+            return fromEnvironment.trimmingCharacters(in: .whitespaces).uppercased()
+        }
+        #if os(macOS)
+            guard
+                let real = UserDefaults(suiteName: "au.charlesmartin.currawong"),
+                let data = real.data(forKey: "au.charlesmartin.currawong.operatorIdentity"),
+                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let callsign = json["callsign"] as? String,
+                !callsign.trimmingCharacters(in: .whitespaces).isEmpty
+            else { return nil }
+            return callsign
+        #else
+            return nil
+        #endif
+    }
+
+    /// The callsign, or a skip explaining how to supply one.
+    ///
+    /// **A skip rather than a failure.** This whole target is opt-in — it is
+    /// kept out of the `Currawong` scheme precisely so it never runs by
+    /// accident — and "you did not tell me who is transmitting" is the target
+    /// not being configured, not the app being broken. A red test there would
+    /// say the app has a fault, which is a lie, and the loud thing to do about
+    /// an unconfigured opt-in is to refuse to transmit, which a skip does.
+    static func requireOperatorCallsign() throws -> String {
+        guard let callsign = operatorCallsign() else {
+            throw XCTSkip(
+                "This test transmits, and no callsign was given, so it will not. Set "
+                    + "\(callsignVariable) — pass "
+                    + "TEST_RUNNER_\(callsignVariable)=<yours> to xcodebuild — or, on "
+                    + "macOS only, set your callsign in Currawong first.")
+        }
         return callsign
     }
 }

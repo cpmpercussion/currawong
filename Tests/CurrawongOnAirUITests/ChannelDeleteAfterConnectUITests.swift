@@ -2,6 +2,14 @@
 
 import XCTest
 
+// **macOS only.** This target gained an iOS destination on 2026-08-23 so the
+// on-air M17 test could reach a device (`BU-15`). This file did not come with
+// it, and should not: it is about the macOS context menu — right-click, the
+// menu-bar `Edit ▸ Delete` decoy, and the modal sheet that hides both — none of
+// which exist on iOS, where deletion is a swipe. Built for iOS it would be a
+// test that asserts nothing.
+#if os(macOS)
+
 /// **BU-9 item 3.** Can a channel be deleted on macOS once the app has had the
 /// channel list locked? **Transmits nothing** — it is in this target only
 /// because it needs a running app.
@@ -379,3 +387,5 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
         return condition()
     }
 }
+
+#endif

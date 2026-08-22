@@ -262,9 +262,15 @@ targets:
   # omission is the whole point: this target *transmits*, so it must never run
   # under `make test` or in CI. It runs from its own scheme, deliberately, and
   # only when somebody means it.
+  # **iOS as well as macOS since 2026-08-23.** `BU-15`'s iOS trigger is a
+  # category change that only the device reports — the simulator moves the route
+  # and posts no notification at all (`BU15SessionProbeTests`), so a real iPhone
+  # is the only place that fault can be seen. The macOS-shaped tests in this
+  # target — `BU-9`'s delete bug, which is *about* macOS — stay behind
+  # `#if os(macOS)`; the on-air M17 test drives both.
   CurrawongOnAirUITests:
     type: bundle.ui-testing
-    supportedDestinations: [macOS]
+    supportedDestinations: [macOS, iOS]
     sources:
       - Tests/CurrawongOnAirUITests
     dependencies:

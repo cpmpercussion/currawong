@@ -8,10 +8,12 @@ import XCTest
 /// touch the on-air test will need it too.
 final class HierarchyDumpUITests: XCTestCase {
     func testDumpTheConnectForm() {
-        let app = XCUIApplication()
-        app.launch()
+        // Isolated like everything else here: dumping the tree used to mean
+        // launching against the operator's real channel list, and the dump then
+        // named their channels in the build log.
+        let app = IsolatedApp.launched()
         let m17 = app.radioButtons["M17"].firstMatch
-        if m17.waitForExistence(timeout: 5) { m17.click() }
+        if m17.waitForExistence(timeout: 5) { m17.activate() }
         Thread.sleep(forTimeInterval: 1)
         print("=== TEXT FIELDS ===")
         for field in app.textFields.allElementsBoundByIndex {
@@ -45,11 +47,11 @@ final class ChannelRestoreUITests: XCTestCase {
             let row = app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 10), "no channel named \(name)")
-            row.click()
+            row.activate()
         }
 
         let m17 = app.radioButtons["M17"].firstMatch
-        if m17.waitForExistence(timeout: 5) { m17.click() }
+        if m17.waitForExistence(timeout: 5) { m17.activate() }
         for (identifier, text) in [("connect.host", host), ("connect.module", module)] {
             let field = app.textFields[identifier].firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
@@ -68,12 +70,12 @@ final class ChannelRestoreUITests: XCTestCase {
             break
         }
         XCTAssertNotNil(other, "no other channel to select, so the draft cannot be flushed")
-        other?.click()
+        other?.activate()
         Thread.sleep(forTimeInterval: 1)
 
         let restored = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
-        restored.click()
+        restored.activate()
         Thread.sleep(forTimeInterval: 1)
         XCTAssertEqual(app.textFields["connect.host"].firstMatch.value as? String, host)
         XCTAssertEqual(app.textFields["connect.module"].firstMatch.value as? String, module)
