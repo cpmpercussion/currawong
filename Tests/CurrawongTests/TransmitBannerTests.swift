@@ -95,7 +95,7 @@ final class TransmitBannerTests: XCTestCase {
         #else
             let controller = UIHostingController(rootView: view.frame(width: 400))
             return controller.sizeThatFits(
-                in: CGSize(width: 400, height: .greatestFiniteMagnitude))
+                in: CGSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         #endif
     }
 }
