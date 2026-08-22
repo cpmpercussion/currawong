@@ -25,7 +25,11 @@ operator settled the priority: a permanently lit accessory LED is acceptable if
 the button works. **The LED is not what blocks the button** — after a fresh
 reconnect the button works with the LED lit and the route on HFP, and it stayed
 dead after the LED went out. So `BU-17` is deprioritised rather than solved, its
-receive-quality cost becomes an accepted iOS limitation, and `BU-14` — making the
+receive-quality cost becomes an accepted iOS limitation — **and it is a smaller
+cost than earlier entries here claimed**: all three modes are 8 kHz at source
+(µ-law, GSM 06.10, Codec2 3200), so A2DP's extra bandwidth buys nothing, and what
+HFP actually costs is a second lossy codec generation plus `.voiceChat`
+processing. `BU-14` — making the
 accessory link survive the HFP transition or recover from it unnoticed — is the
 work. See `BLUETOOTH-AUDIO.md`, which now leads with this.
 

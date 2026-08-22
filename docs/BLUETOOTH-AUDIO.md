@@ -134,10 +134,10 @@ tap is installed.** Two costs follow, and the second is the substantive one:
 1. The accessory's LED stays lit the entire time the app is connected, so it
    reports "in a call" rather than "transmitting" and is useless as a TX
    indicator. This is the visible symptom.
-2. **Received audio is 16 kHz mono for the entire QSO**, not just while
-   transmitting. This is a real quality regression against macOS, and it is
-   invisible in testing because it sounds like the far end rather than like a
-   fault.
+2. Received audio is 16 kHz mono for the entire QSO, not just while
+   transmitting. **Overstated — see the correction later in this file:** the
+   sources are all 8 kHz, so the real cost is a second lossy codec generation and
+   unwanted voice processing, which is smaller than this implies.
 
 **Corroborated by the operator, 2026-08-22.** Receive audio was independently
 reported as sounding "more normal on macOS than iOS" — noticed from the
@@ -234,7 +234,43 @@ time — which is all the time that matters, because the *press* is what has to
 get through. On iOS SCO is up for the whole session, so the button is dead for
 the whole session.
 
-### Inflection point, 2026-08-22: reliability over the indicator
+#### Correction: the receive-quality cost was overstated
+
+Written down because it was the main argument for `BU-17` and it does not survive
+contact with what the three modes actually carry:
+
+| Mode | Codec | Rate |
+|---|---|---|
+| AllStarLink / IAX2 | µ-law (G.711) | 8 kHz, 64 kbit/s |
+| EchoLink | GSM 06.10, 33-byte frames | 8 kHz, 13 kbit/s |
+| M17 | Codec2 mode 3200 | 8 kHz, **3.2 kbit/s** |
+
+**Every source is 8 kHz.** A 44.1 kHz A2DP link cannot add information that was
+never in a 3.2 kbit/s Codec2 stream, so "16 kHz for the whole call" was never the
+cost it was described as here. The sample-rate comparison was the wrong axis.
+
+**The operator's ear was still right, and the mechanism is different.** Two
+things happen on the HFP path that do not happen on A2DP, and neither is about
+bandwidth:
+
+1. **Tandem coding.** The already-lossy 8 kHz stream is re-encoded by SCO's own
+   codec — mSBC at best, CVSD at worst — so it goes through a *second* lossy
+   generation. A2DP's SBC at 44.1 kHz is close to transparent by comparison
+   against an 8 kHz source. Cascading two low-rate speech codecs is audibly
+   worse than either alone, and this is the more likely explanation for
+   "more normal on macOS than iOS".
+2. **`.voiceChat` voice processing.** The mode exists for echo cancellation and
+   the routing a call wants, and it brings noise suppression and AGC with it.
+   Applied to *received* radio audio — which is not a near-end voice being echoed
+   — that processing has nothing useful to do and can thin or pump it.
+
+So `BU-17` retains a real but much smaller benefit: avoiding a second codec
+generation and unwanted DSP on audio that is already at the limit. Not enough on
+its own to justify a suppression window in SF-3, which is why the
+deprioritisation above stands — but the reason is "the gain is small", not "there
+is no gain".
+
+## Inflection point, 2026-08-22: reliability over the indicator
 
 After two failed attempts at `BU-17`, the operator settled the priority:
 
