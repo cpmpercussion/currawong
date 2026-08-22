@@ -51,11 +51,25 @@ final class WindowSizingTests: XCTestCase {
             portalLogin: root.portalLogin)
     }
 
-    /// The layout SwiftUI handed AppKit: the hosting view's one child, which is
-    /// the split view's platform host and the view whose frame was
-    /// `(0, -175.5, 881, 1249.5)` when this was broken.
-    private func hostedLayout(_ host: ViewHost) -> NSView? {
-        host.contentView.subviews.first
+    /// The layout SwiftUI handed AppKit: the union of the hosting view's
+    /// children, which is the region whose frame was `(0, -175.5, 881, 1249.5)`
+    /// when this was broken.
+    ///
+    /// **APP-23 moved where this region starts.** The transmit strip above the
+    /// pane container is permanent now, and it is drawn without an `NSView` of
+    /// its own, so what AppKit is handed is the pane container alone — inset
+    /// from the top by the strip's 55 points. In a 1432-point window that is
+    /// `(0, 55, 881, 1377)`: the app fills the window exactly, and its *height*
+    /// is 55 short of it.
+    ///
+    /// Which is why the assertions below are about where this region **ends**
+    /// rather than how tall it is. `maxY` answers "is there a gap at the bottom,
+    /// or an overflow past it?" in both layouts; height only answered it while
+    /// the pane container was the whole of the app.
+    private func hostedLayout(_ host: ViewHost) -> CGRect? {
+        let frames = host.contentView.subviews.map(\.frame)
+        guard let first = frames.first else { return nil }
+        return frames.dropFirst().reduce(first) { $0.union($1) }
     }
 
     /// The regression. An empty channel list is deliberate — that is a first
@@ -66,10 +80,10 @@ final class WindowSizingTests: XCTestCase {
         let window = host.contentView.frame.height
 
         XCTAssertLessThanOrEqual(
-            laid.frame.height, window + 1,
+            laid.maxY, window + 1,
             "the app is taller than its window; it was 1249.5 points in 866")
         XCTAssertGreaterThanOrEqual(
-            laid.frame.minY, -1,
+            laid.minY, -1,
             "the overflow is being centred, so the top of the app is above the window's top edge")
     }
 
@@ -80,7 +94,9 @@ final class WindowSizingTests: XCTestCase {
         let host = ViewHost(rootView(), size: CGSize(width: 881, height: 1400))
         let laid = try XCTUnwrap(hostedLayout(host))
 
-        XCTAssertEqual(laid.frame.height, host.contentView.frame.height, accuracy: 1)
+        XCTAssertEqual(
+            laid.maxY, host.contentView.frame.height, accuracy: 1,
+            "the app stops short of the bottom of the window")
     }
 
     /// The mechanism, so the missing `fixedSize` in ``ChannelListView`` is not
@@ -113,7 +129,7 @@ final class WindowSizingTests: XCTestCase {
         // height: with nothing to stop it, the hosting view grows to the demand
         // too, so comparing the two would compare the fault with itself.
         XCTAssertGreaterThan(
-            laid.frame.height, Self.shortWindow.height,
+            laid.height, Self.shortWindow.height,
             "the platform behaviour BU-12's fix exists for appears to have changed")
     }
 }

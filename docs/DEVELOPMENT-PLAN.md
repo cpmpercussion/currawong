@@ -1131,6 +1131,85 @@ array; and its menu offers **Discard**, not Delete, because there is nothing
 stored to delete — `discardDraftChannel()` refuses when the draft *is* a stored
 channel, so it cannot become a second, quieter way of losing one.
 
+### APP-23 — the channel flow: nothing moves, a channel is one tap, and one Connect ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-22, after the
+BU-16/BU-17 session. Four complaints, filed as one task because each is part of
+the same journey — *choose a channel, connect, talk* — and fixing any one alone
+leaves that journey stranger than it is now.
+
+**1. The transmit banner must not move the UI.** `TransmitBanner` is inserted
+above the pane container when transmit begins, so keying pushes everything down
+— including the PTT button under the operator's finger. Colour and wording
+carrying the state is right; motion is not. The slot becomes **permanent**: one
+strip that is always in the hierarchy and changes only its colour and its text.
+SF-4's structural guarantee is untouched, because what makes the banner
+unhideable is that it is a sibling of the `TabView`/`NavigationSplitView`, not
+that it comes and goes.
+
+**2. A channel can be switched while connected.** The list greys out with
+"Disconnect to switch, add or delete channels." The backstop it explains is real
+— `select(_:)` refuses unless disconnected, because a destination changing under
+a live call would leave the screen describing one node while the audio came from
+another. But *tap another channel to go there* is what a radio does, and making
+the operator disconnect, choose, then connect is three steps for one intent. So
+the gesture is answered rather than refused: choosing a channel while connected
+**hangs up, selects, and dials the new one**, as one sequence owned by
+`RootView` beside the connect sequence it already owns. The invariant holds at
+every frame, because the selection still only changes while disconnected. Add,
+edit and delete stay locked while connected — those are not "go there now".
+
+**3. One Connect button, not two.** There is one under the PTT slab
+(`SessionLinkButton`) and one at the foot of the connect form. The form's goes.
+`SessionLinkControl`'s own note already argues the case from the other side: the
+session pane's button exists because that is the screen an operator watches
+while talking. And since APP-16 the status panel names the destination, so the
+session button is not a blind second entry point. The form keeps **Save**, which
+is the thing only it can do.
+
+**4. iOS: the channel list gets the screen, and choosing takes you to the
+radio.** The Channels tab currently splits into a list capped at 320 points and
+a connect form under it, so the list is squished when it is the most important
+thing and the form is cramped when it is needed. With the form's Connect gone
+(3) the split has less to justify it. The list takes the tab, and the channel
+details move behind navigation — a push from the row, which is the iPhone idiom
+for list-then-detail. **Selecting a channel goes to the Session tab**, which is
+the pattern the Stations and Reflectors tabs already use (`onChosen:`, today
+pointing at `.channels`; it points at `.session`). A left popover was considered
+and not taken: that is what the split layout already is on iPad and Mac, and on
+iPhone it is a non-idiom that would need building.
+
+**Not in scope:** the split layout's arrangement (Mac and iPad are the case that
+works), and anything about what a channel *is* — APP-19 and APP-22 settled that
+and this task changes no storage rule.
+
+**What landed.** `RadioSession.switchChannel(to:)` is the sequence for (2): it
+hangs up, selects, and answers whether the caller should dial, with `RootView`
+placing the call so the EchoLink proxy is sourced the one way it already is.
+`select(_:)`'s refusal is untouched, and the tests that pin it still pass — the
+sequence reaches the new channel legally rather than by relaxing the invariant.
+The link state is preserved rather than forced: tapping a row while connected
+moves the call, tapping one while disconnected only selects, because a single tap
+in a list must not key a transmitter.
+
+Two things worth knowing for the next reader:
+
+* **The strip is drawn without an `NSView` of its own**, so on macOS the pane
+  container is still the only child AppKit is handed — inset 55 points from the
+  top. `WindowSizingTests` asserted on that child's *height*, which silently
+  became "55 short of the window" once the strip was permanent. The assertions
+  are about where the region **ends** now, which answers the same question in
+  both layouts. BU-12's canary is untouched.
+* **The ⓘ is disabled while a link is up, and the row is not.** The details form
+  edits the draft, the draft follows the selection, and selecting is refused
+  mid-call — so an enabled ⓘ would open the form on somewhere other than the row
+  that was tapped. The row has no such problem, because going somewhere includes
+  hanging up.
+
+Verified with 680 tests on macOS and an iOS device build. **The iPhone layout has
+not been driven by hand** — no XCUITest reaches iOS (see APP-21) and this
+machine's automation grant has lapsed, so the push, the ⓘ and the jump to the
+Session tab are covered by the hosted-view and view-model tests rather than by a
+run on the phone.
 ## Phase 5 — BLE PTT (after APP-2)
 
 ✅ **DELIVERED — but in the app, under APP-5, not as BLE-1 … BLE-3.** The three

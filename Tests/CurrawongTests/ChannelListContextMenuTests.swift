@@ -70,7 +70,10 @@ final class ChannelListContextMenuTests: XCTestCase {
         // rule that the long note below is about.
         let hosted = ViewHost(
             NavigationSplitView {
-                ChannelListView(session: harness.session)
+                // As `RootView.splitLayout` hosts it: choosing is a real action
+                // there, and no `onInspect`, because the details sit beside the
+                // list rather than behind a push (APP-23).
+                ChannelListView(session: harness.session, onChoose: { _ in })
             } detail: {
                 Text("detail")
             },

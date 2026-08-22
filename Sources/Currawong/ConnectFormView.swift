@@ -55,9 +55,6 @@ struct ConnectFormView: View {
     @Binding var identity: OperatorIdentity
 
     let isEditable: Bool
-    let connectTitle: String
-    let isBusy: Bool
-    let connectAction: () -> Void
 
     /// **BU-9.** Whether this channel differs from what is stored under it.
     ///
@@ -108,28 +105,22 @@ struct ConnectFormView: View {
 
             unsavedChangesNotice
 
-            HStack(spacing: 10) {
-                // Save is beside Connect rather than in place of it because they
-                // are different questions — "keep this" and "go there" — and
-                // BU-9 is what happens when one is quietly answered by the
-                // other. Not prominent: connecting is still the action an
-                // operator came here for.
-                Button("Save", action: saveAction)
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .disabled(!hasUnsavedChanges || !isEditable)
-
-                Button(action: connectAction) {
-                    HStack {
-                        if isBusy { ProgressView().controlSize(.small) }
-                        Text(connectTitle)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
+            // **APP-23: Save, and only Save.** There were two Connect buttons —
+            // this one and ``SessionLinkButton`` under the PTT slab — and one of
+            // them had to go. This one did, for the reason `SessionLinkControl`
+            // already gives from the other side: the session pane is the screen
+            // an operator watches while talking, and a control that places or
+            // ends a call belongs where they are looking. Since APP-16 the
+            // status panel above that button names the destination, its address
+            // and its mode, so it is not a blind second entry point either.
+            //
+            // What is left here is the question only this form can answer —
+            // "keep this" — kept separate from "go there" because BU-9 is what
+            // happens when one is quietly answered by the other.
+            Button("Save", action: saveAction)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(isBusy)
-            }
+                .disabled(!hasUnsavedChanges || !isEditable)
         }
         .onAppear {
             portText = String(settings.port)

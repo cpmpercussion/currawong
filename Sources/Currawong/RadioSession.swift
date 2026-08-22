@@ -801,6 +801,59 @@ final class RadioSession: ObservableObject {
         persistChannels()
     }
 
+    /// **APP-23.** Go to a channel, whatever the link is doing: hang up if
+    /// there is a call, select, and report whether the caller should dial the
+    /// new one.
+    ///
+    /// ## Why this exists rather than relaxing ``select(_:)``
+    ///
+    /// `select(_:)`'s refusal is not a policy that got in the way, it is the
+    /// invariant: the selection *is* what the status panel, the connect form
+    /// and the link button all describe, so moving it under a live call would
+    /// leave every one of them naming a node the audio is not coming from.
+    /// That stays exactly as it was. What changes is that the operator's
+    /// gesture — tap a channel to go there — is now answered by a sequence that
+    /// reaches the same place legally, instead of being refused with a label
+    /// telling them to do the sequence by hand.
+    ///
+    /// ## The link state is preserved, not forced
+    ///
+    /// Connected to one channel and tapping another puts the operator on the
+    /// new one connected; tapping one while disconnected only selects it. A tap
+    /// in a list is "go here", not "call this" — an app that placed a call from
+    /// a single tap on a list row would key a transmitter from the same gesture
+    /// that scrolls past it.
+    ///
+    /// ## Why the dialling is the caller's half
+    ///
+    /// Connecting is not only ``connect(proxy:)``: an EchoLink channel needs a
+    /// proxy sourced first, and ``RootView`` is the one place that knows the
+    /// whole sequence. Returning a Bool rather than taking a connect closure
+    /// keeps that knowledge where it already lives — two call sites for one
+    /// sequence is how the form and the link button would come to disagree
+    /// about what connecting means.
+    ///
+    /// - Returns: `true` when a call was up and the caller should now place one
+    ///   to the newly selected channel.
+    @discardableResult
+    func switchChannel(to id: UUID) async -> Bool {
+        guard channels.channels.contains(where: { $0.id == id }) else { return false }
+        // Already there, in both senses `select(_:)` means it — the row is
+        // highlighted *and* the form is describing it. Hanging up and redialling
+        // the channel the operator is already talking on is the one outcome this
+        // must never produce.
+        guard id != channels.selectedID || settings.id != id else { return false }
+
+        let wasLinked = connection != .disconnected
+        if wasLinked { await disconnect() }
+        select(id)
+        // `select(_:)` has its own guards, and a selection that did not move
+        // must not be followed by a call. This is also what makes the sequence
+        // safe if `disconnect()` ever leaves the link short of `.disconnected`:
+        // the dial is conditional on having actually arrived.
+        return wasLinked && channels.selectedID == id
+    }
+
     /// Whether the draft differs from the channel it belongs to — the one
     /// question the Save action and the "unsaved changes" indicator are asking
     /// (BU-9).

@@ -14,7 +14,8 @@ import SwiftUI
 /// ``SettingsView``), and what is left here is the part that cannot be moved
 /// into any one of them:
 ///
-/// * **``TransmitBanner``, outside the pane container.** SF-4. It is a sibling
+/// * **``TransmitBanner``, outside the pane container and always present.**
+///   SF-4. It is a sibling
 ///   of the `TabView`/`NavigationSplitView`, not a child, so that no tab, no
 ///   column and no scroll offset can hide it. This is the single most important
 ///   structural fact about this file.
@@ -73,16 +74,25 @@ struct RootView: View {
     /// ``detailPane`` for the same choice.
     @State private var selectedTab: Tab = .channels
 
+    /// **APP-23.** Whether the Channels tab has the details form pushed. Tab
+    /// layout only; the split layout shows the same form in its detail column,
+    /// where it is never pushed and never dismissed.
+    @State private var showsChannelDetails = false
+
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // SF-4: above the pane container, never inside it.
-            if status.isTransmitting {
-                TransmitBanner(source: session.activeSource)
-            }
+            // SF-4: above the pane container, never inside it — and **APP-23:
+            // always in it**. Inserting the banner at key-down moved every
+            // control below it down the screen, the PTT button under the
+            // operator's finger included. The strip is permanent now and says
+            // which state it is in by colour and wording.
+            TransmitBanner(
+                isTransmitting: status.isTransmitting,
+                source: session.activeSource)
 
             panes
         }
@@ -240,33 +250,50 @@ struct RootView: View {
     /// tab gets instead is the whole screen for the channel list, which is what
     /// this tab is for.
     private var channelsPane: some View {
-        VStack(spacing: 0) {
-            ChannelListView(session: session)
+        NavigationStack {
+            ChannelListView(
+                session: session,
+                onChoose: { id in
+                    // Choosing takes the operator to the radio. It is what they
+                    // came to the list to do, and the alternative — landing back
+                    // on the list with a link coming up somewhere off-screen —
+                    // is how an operator ends up talking to a node they cannot
+                    // see the state of.
+                    Task { await switchChannel(to: id) }
+                    selectedTab = .session
+                },
+                onInspect: { _ in showsChannelDetails = true })
                 .padding(.top, 12)
-                // The list takes what it needs up to a third of the screen and
-                // no more, *while the form is under it*: beyond that it scrolls
-                // internally, so a long channel list never pushes the form — and
-                // the Connect button at the bottom of it — off the bottom of the
-                // tab. With no form, the cap has nothing to protect and the list
-                // takes the tab.
-                .frame(maxHeight: showsConnectForm ? 320 : .infinity, alignment: .top)
-
-            if showsConnectForm {
-                Divider()
-
-                // Not capped. An earlier `maxHeight` here left slack in the
-                // stack, which a `VStack` centres, and the pane opened with a
-                // band of empty space above the channel list. The form takes the
-                // remainder.
-                ScrollView {
-                    connectForm
-                        .padding(20)
-                        .paneColumn()
+                .frame(maxHeight: .infinity, alignment: .top)
+                .navigationDestination(isPresented: $showsChannelDetails) {
+                    channelDetails
                 }
-            }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .animation(.default, value: showsConnectForm)
+    }
+
+    /// The connect form, pushed. **APP-23.**
+    ///
+    /// It used to be the bottom half of the Channels tab, with the list capped
+    /// at 320 points above it — which gave the list a third of the screen when
+    /// it is the thing the operator is reading, and gave the form two thirds of
+    /// one when it is a form they need all of. Neither half was the size it
+    /// wanted, in either state.
+    ///
+    /// A push is the iPhone idiom for list-then-detail, and it is what makes the
+    /// two sizes independent: the list gets the tab, the form gets a screen.
+    /// The split layout does not need this and does not have it — its detail
+    /// column *is* the pushed screen, permanently.
+    private var channelDetails: some View {
+        ScrollView {
+            connectForm
+                .padding(20)
+                .paneColumn()
+        }
+        .navigationTitle(session.settings.displayName.isEmpty
+            ? "New channel" : session.settings.displayName)
+        #if !os(macOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     /// **APP-18.** Whether the connect form is on screen at all.
@@ -300,7 +327,11 @@ struct RootView: View {
             // `fixedSize` in `ChannelListView`; the note there says why) an empty
             // list sits at the top of the column, where a sidebar's contents
             // belong, rather than centred in it.
-            ChannelListView(session: session)
+            // No `onInspect` here: the details are the Connect pane, on screen
+            // beside this list already, so an ⓘ would push what is visible.
+            ChannelListView(
+                session: session,
+                onChoose: { id in Task { await switchChannel(to: id) } })
                 .padding(.top, 12)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
@@ -563,9 +594,6 @@ struct RootView: View {
             webTransceiverToken: $session.webTransceiverToken,
             identity: $session.identity,
             isEditable: session.connection == .disconnected,
-            connectTitle: connectTitle,
-            isBusy: session.connection.isBusy || proxyPicker.isSearching,
-            connectAction: { Task { await connectOrDisconnect() } },
             // BU-9: the form's own Save, which is the only thing that writes an
             // edit over the channel it came from.
             hasUnsavedChanges: session.isDraftDirty,
@@ -589,6 +617,24 @@ struct RootView: View {
     /// with "enter the proxy's host name", which is both wrong — the app was
     /// looking for one and every public proxy was busy — and the opposite of
     /// useful, since it names a field the operator was never meant to fill in.
+    /// **APP-23.** What a tap on a channel row does: go there.
+    ///
+    /// ``RadioSession/switchChannel(to:)`` does the hanging up and the
+    /// selecting, and answers whether a call was up. The dialling is here
+    /// because it is here that a proxy gets sourced — the same reason
+    /// ``sessionLinkAction()`` goes back through ``connectOrDisconnect()``
+    /// rather than calling `session.connect()`.
+    ///
+    /// The link state is preserved rather than forced: connected to one channel
+    /// and tapping another leaves the operator connected to the new one, while
+    /// tapping one from a standing start only selects it. A single tap in a
+    /// list must not place a call.
+    private func switchChannel(to id: UUID) async {
+        if await session.switchChannel(to: id) {
+            await connectOrDisconnect()
+        }
+    }
+
     private func connectOrDisconnect() async {
         var proxy: EchoLinkProxyRoute?
         if session.connection == .disconnected, session.settings.mode.usesProxy {
