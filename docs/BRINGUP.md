@@ -1347,6 +1347,31 @@ phone's mic with the accessory at the operator's mouth, which is the "sounds
 like a pocket" fault `BU-13` warns about, and this is the first sight of the
 mechanism that would cause it.
 
+> 🔧 **The library half is done: `RC-12`, swift-hamvoip#48 (draft).** It adds
+> `AudioSessionPolicy.listening` (`.playback`, `.default`, no options) and
+> `activateSession(_:)` taking a policy. **The category differs from `radio`, not
+> just the options** — that is the whole point, because this item showed a
+> `.playAndRecord` session keeps *returning* to HFP: the category requires an
+> input and HFP is the only Bluetooth one on offer. Adding `allowBluetoothA2DP`
+> to a recording category does not help, and RC-12 pins that option as unused so
+> nobody tries.
+>
+> **What is left here is deciding when to switch**, and it waits on a released
+> tag — the dependency is versioned, and the commented-out path dependency in
+> `project.yml` must not be committed swapped.
+>
+> **The hazard to respect when doing it.** `AVAudioEngine` never revisits its
+> input format, so an engine built while idling under `listening` reports 0 Hz
+> for the life of the process — `BU-1` again. `AudioPipelineIO` already rebuilds
+> once on a failed `startCapture`, and that is the machinery this must lean on:
+> switch to `radio` *before* building, and treat the first press after any
+> receive as a case that may need the rebuild. Do not add a second rebuild path.
+>
+> Note also that this makes the audio route change at every key-down and key-up
+> **by design**, which is exactly the signal `BU-14`'s repair watches. The quiet
+> period added for `BU-16`'s sibling defect is what keeps the two from fighting;
+> check it still holds once this lands.
+
 **Closed when** the accessory's LED is out whenever the app is not transmitting,
 and the route is A2DP between overs. That is the same change as the iOS
 harmonisation in `BLUETOOTH-AUDIO.md` — **and it is gated on the release-edge
