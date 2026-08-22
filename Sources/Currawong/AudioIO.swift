@@ -157,20 +157,73 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
 
     private let makePipeline: @Sendable () -> CapturePipeline
 
-    /// Guards ``current`` and ``forwarder``. Both are touched from
-    /// ``RadioSession`` on the main actor today, but `stopCapture()` is the
-    /// call every safety path funnels through and it must not acquire a
-    /// dependency on who is calling it.
+    /// Applies an audio-session policy (RC-12). Injectable so the policy
+    /// switching below is testable without an `AVAudioSession` (AU-5); the
+    /// default reaches the library on iOS and does nothing on macOS, where
+    /// CoreAudio manages the route itself and gets it right.
+    private let applyPolicy: @Sendable (AudioSessionPolicy) throws -> Void
+
+    /// How long ``stopCapture()`` waits before handing the route back to
+    /// listening. See ``listeningLingerNanoseconds`` for why a wait exists at
+    /// all; injectable so tests can step it rather than sleep it.
+    private let listeningLinger: @Sendable () async -> Void
+
+    /// Guards ``current`` and ``forwarder`` — and the policy state below. All
+    /// are touched from ``RadioSession`` on the main actor today, but
+    /// `stopCapture()` is the call every safety path funnels through and it
+    /// must not acquire a dependency on who is calling it, and the lingered
+    /// hand-back runs off a detached task by construction.
     private let lock = NSLock()
     private var current: CapturePipeline?
     private var forwarder: Task<Void, Never>?
+
+    /// The policy last applied, so an over that begins inside the linger — the
+    /// automatic resume after a route change, most importantly — finds the
+    /// session already on radio and does **not** re-apply the category. A
+    /// redundant category change is not harmless: it is a fresh route-change
+    /// cascade, and re-triggering the cascade from inside its own recovery is
+    /// the loop that killed `BU-17`'s first attempt.
+    private var appliedPolicy: AudioSessionPolicy?
+
+    /// True between ``startCapture(onFrame:)`` and ``stopCapture()``. A linger
+    /// that expires while this is true must not touch the session.
+    private var isCapturing = false
+
+    /// Cancels stale hand-backs: every escalation and every new hand-back bumps
+    /// it, and a lingered task only acts if its generation is still current.
+    private var handbackGeneration = 0
 
     /// SF-3, decoupled from any one pipeline's lifetime. See the type note.
     let signals: AsyncStream<AudioSessionSignal>
     private let signalContinuation: AsyncStream<AudioSessionSignal>.Continuation
 
-    init(makePipeline: @escaping @Sendable () -> CapturePipeline = { AudioPipeline() }) {
+    /// The linger between the microphone closing and the route being handed
+    /// back to listening (BU-17).
+    ///
+    /// macOS keeps SCO up for ~2.1 s after the last capture client closes
+    /// (measured 2026-08-22), and that linger is what makes its per-over HFP
+    /// behaviour feel instant in a quick exchange. This reproduces it, a little
+    /// longer, for a second reason macOS does not have: the drop-and-resume
+    /// that SF-3 performs when the escalation's own route-change cascade lands
+    /// mid-over takes up to ~1 s (300 ms settle plus engine start plus the
+    /// cascade tail), and the hand-back must comfortably outlast it so the
+    /// resume re-keys into a session still on radio.
+    static let listeningLingerNanoseconds: UInt64 = 3_000_000_000
+
+    init(
+        makePipeline: @escaping @Sendable () -> CapturePipeline = { AudioPipeline() },
+        applyPolicy: @escaping @Sendable (AudioSessionPolicy) throws -> Void = { policy in
+            #if os(iOS)
+                try AudioPipeline.activateSession(policy)
+            #endif
+        },
+        listeningLinger: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: AudioPipelineIO.listeningLingerNanoseconds)
+        }
+    ) {
         self.makePipeline = makePipeline
+        self.applyPolicy = applyPolicy
+        self.listeningLinger = listeningLinger
         var escaped: AsyncStream<AudioSessionSignal>.Continuation!
         self.signals = AsyncStream { escaped = $0 }
         self.signalContinuation = escaped
@@ -277,7 +330,23 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         // `AudioPipeline.init` is also where the SF-3 interruption observers are
         // registered, and those should be listening from the moment the session
         // exists rather than from the moment somebody keys up.
+        //
+        // **And it must be built under the *radio* policy** (BU-17): an engine
+        // whose input unit is instantiated under a playback-only category
+        // reports 0 Hz for the life of the process and never recovers. That is
+        // `BU-1`, and this ordering is what keeps `AudioSessionPolicy.listening`
+        // from bringing it back.
         _ = pipeline()
+
+        // Then hand the accessory straight back to listening (BU-17, RC-12) —
+        // no linger, because configuration happens with nothing on air, so the
+        // route-change cascade this causes lands while idle and SF-3 has
+        // nothing to drop. Until this existed, configuring the session was
+        // what pinned the route to HFP for the whole call: 16 kHz receive
+        // audio, a speaker-mic whose "in a call" light never went out, and —
+        // the root cause proven on 2026-08-22 — a PTT button the accessory
+        // itself mutes for as long as that idle call is held.
+        handRouteBack(afterLinger: false)
     }
 
     /// The session half of ``configureSession()``, on its own so the repair path
@@ -295,32 +364,102 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// on macOS, where input and output device selection is the user's, via
     /// System Settings, and there is nothing for the app to configure.
     private func activateSession() throws {
-        #if os(iOS)
-        try AudioPipeline.activateSession(AudioSessionPolicy.radio)
-        #endif
+        lock.lock()
+        handbackGeneration += 1
+        lock.unlock()
+        try applyPolicy(AudioSessionPolicy.radio)
+        lock.lock()
+        appliedPolicy = AudioSessionPolicy.radio
+        lock.unlock()
     }
 
-    // **`AudioSessionPolicy.listening` is still not used here.** `BU-17` has
-    // now been attempted twice.
+    // **Third attempt at `BU-17`, and the first with the mechanism in hand.**
     //
     // The first attempt failed because a category change is a route change and
-    // SF-3 dropped the transmission it was enabling. RC-13 put the *cause* on
-    // the signal to fix exactly that, and the second attempt used it — correctly
-    // ignoring `categoryChange` for SF-3, 23 times in one session, with the route
-    // genuinely reaching `Playback` at 44100 Hz.
+    // SF-3 dropped the transmission it was enabling — and then looped, because
+    // the drop's own `stopCapture()` handed the route straight back, so the
+    // automatic resume re-escalated and re-triggered the cascade every cycle.
+    // The second attempt (RC-13's cause) failed because one deliberate switch
+    // produces a cascade — `categoryChange`, `override`, `newDeviceAvailable`,
+    // `engineConfigurationChange` — and only the first is self-evidently ours;
+    // the rest are indistinguishable from an accessory being unplugged, and
+    // SF-3 must drop transmit for those.
     //
-    // It still failed, because **one deliberate switch produces a cascade**:
-    // `categoryChange`, then `override`, then `newDeviceAvailable`, then
-    // `engineConfigurationChange`. Only the first is self-evidently ours. The
-    // rest are indistinguishable from an accessory being unplugged, and SF-3
-    // must drop transmit for those — so it did, and keying stayed broken.
+    // This attempt changes neither SF-3 nor the cascade. It removes the loop:
+    // the hand-back to listening happens on a **linger** rather than inside
+    // `stopCapture()`, so SF-3's transient drop-and-resume completes inside it
+    // and re-keys into a session still on radio — no category change, no fresh
+    // cascade, convergence. The residual cost is one `BU-15`-style drop-and-
+    // resume on the first over after each hand-back, which is SF-3 performing
+    // exactly as specified and is the same dance macOS does on a cold SCO link.
     //
-    // The cause alone is therefore not enough. What would be needed is for the
-    // app to say "I am about to change the route, expect a cascade" and have that
-    // window respected — which is a suppression window on the transmit path, i.e.
-    // precisely where SF-3 must hold. That is a requirements decision, not an
-    // implementation one, and it is not to be taken by whoever next opens this
-    // file.
+    // Why per-over switching is worth that residual, and is not merely the
+    // receive-quality nicety it was first costed as: **the Q2L mutes its own
+    // BLE PTT notifications for as long as its Classic side sits in an idle
+    // HFP call** — proven 2026-08-22 by holding the BLE link from a Mac while
+    // the phone held the call. Handing the route back between overs is what
+    // lets the button live. That finding is the requirements decision the
+    // previous version of this comment said must be taken deliberately: taken
+    // 2026-08-22, with the operator, on that evidence — and note that SF-3 is
+    // *not* suppressed anywhere in it.
+
+    /// Ask for the radio policy before opening the microphone, skipping the
+    /// category change when the session is already there — see
+    /// ``appliedPolicy`` for why the skip is load-bearing, not an optimisation.
+    private func escalateForCapture() throws {
+        lock.lock()
+        handbackGeneration += 1
+        isCapturing = true
+        let alreadyRadio = appliedPolicy == AudioSessionPolicy.radio
+        lock.unlock()
+        guard !alreadyRadio else { return }
+        try applyPolicy(AudioSessionPolicy.radio)
+        lock.lock()
+        appliedPolicy = AudioSessionPolicy.radio
+        lock.unlock()
+    }
+
+    /// Hand the route back to listening: `.playback`, which asks for no input,
+    /// so iOS stops choosing the hands-free profile, the SCO link drops, and
+    /// the accessory — which mutes its PTT while the call idles — comes back.
+    ///
+    /// **Best effort, and deliberately not throwing.** Every caller is either a
+    /// stop path or the tail of configuration, and failing to get back to
+    /// listening is a quality regression — narrowband receive audio, a lit
+    /// accessory light, a muted button — not a safety one. It is
+    /// `stopCapture()`'s job to shut the microphone, and nothing may get in the
+    /// way of that.
+    private func handRouteBack(afterLinger: Bool) {
+        lock.lock()
+        isCapturing = false
+        handbackGeneration += 1
+        let generation = handbackGeneration
+        lock.unlock()
+
+        guard afterLinger else {
+            completeHandback(generation)
+            return
+        }
+        let linger = listeningLinger
+        Task.detached { [weak self] in
+            await linger()
+            self?.completeHandback(generation)
+        }
+    }
+
+    /// The second half of ``handRouteBack(afterLinger:)``. The lock is held
+    /// across the policy application so an escalation cannot interleave between
+    /// the staleness check and the apply — `applyPolicy` never touches this
+    /// class, so the lock cannot re-enter.
+    private func completeHandback(_ generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == handbackGeneration, !isCapturing,
+            appliedPolicy != AudioSessionPolicy.listening
+        else { return }
+        guard (try? applyPolicy(AudioSessionPolicy.listening)) != nil else { return }
+        appliedPolicy = AudioSessionPolicy.listening
+    }
 
     /// Opens the microphone, repairing the audio stack once if the first attempt
     /// fails.
@@ -341,12 +480,23 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// the second failure is more useful reported than retried.
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
         do {
+            // The route is on listening between overs (BU-17), which has no
+            // input at all, so the hands-free profile has to be asked for
+            // before the microphone can be opened. This is where the SCO link
+            // comes up, which is what the accessory's light reports — and it
+            // is a no-op inside the linger, which is what keeps SF-3's
+            // drop-and-resume from re-triggering its own cascade.
+            try escalateForCapture()
             try pipeline().startCapture(onFrame: onFrame)
         } catch let first {
             do {
                 try activateSession()
                 try rebuildPipeline().startCapture(onFrame: onFrame)
             } catch let second {
+                // The key-down failed outright: nothing is capturing, so hand
+                // the route back now rather than leaving the accessory in a
+                // call nobody is having.
+                handRouteBack(afterLinger: false)
                 throw CaptureUnavailable(
                     first: first, afterRebuild: second, audioState: Self.audioStateDescription())
             }
@@ -362,6 +512,12 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         let pipeline = current
         lock.unlock()
         pipeline?.stop()
+        // Microphone shut first, route handed back second — after the linger,
+        // never inline. The order matters twice over: the stop is the
+        // safety-relevant half and must not wait on anything, and an inline
+        // hand-back here is what turned SF-3's one drop into a loop (this is
+        // also every SF-3 stop path, not only the operator's release).
+        handRouteBack(afterLinger: true)
     }
 
     func enqueuePlayback(_ pcm: [Int16]) {

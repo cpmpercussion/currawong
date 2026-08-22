@@ -215,3 +215,180 @@ final class AudioPipelineIOTests: XCTestCase {
         XCTAssertTrue(poisoned.played.isEmpty, "the discarded engine must not still be fed")
     }
 }
+
+/// Records every session-policy application, in order.
+private final class PolicyRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedApplied: [AudioSessionPolicy] = []
+
+    var apply: @Sendable (AudioSessionPolicy) throws -> Void {
+        { [self] policy in
+            lock.lock()
+            storedApplied.append(policy)
+            lock.unlock()
+        }
+    }
+
+    var applied: [AudioSessionPolicy] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedApplied
+    }
+
+    func clear() {
+        lock.lock()
+        storedApplied = []
+        lock.unlock()
+    }
+}
+
+/// A linger the test releases by hand. Opening lets every wait — current and
+/// future — through.
+private final class LingerGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    var wait: @Sendable () async -> Void {
+        { [self] in
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if isOpen {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    waiting.append(continuation)
+                    lock.unlock()
+                }
+            }
+        }
+    }
+
+    func open() {
+        lock.lock()
+        isOpen = true
+        let resuming = waiting
+        waiting = []
+        lock.unlock()
+        resuming.forEach { $0.resume() }
+    }
+}
+
+/// **BU-17.** The session-policy governance in ``AudioPipelineIO``: radio only
+/// while capturing, listening otherwise, with the hand-back on a linger so
+/// SF-3's drop-and-resume cannot re-trigger its own route-change cascade.
+final class AudioPipelineIOPolicyTests: XCTestCase {
+
+    private func makeIO(gate: LingerGate = LingerGate()) -> (
+        AudioPipelineIO, PolicyRecorder
+    ) {
+        let recorder = PolicyRecorder()
+        let io = AudioPipelineIO(
+            makePipeline: { FakeCapturePipeline() },
+            applyPolicy: recorder.apply,
+            listeningLinger: gate.wait)
+        return (io, recorder)
+    }
+
+    /// Configuration builds the engine under radio — that ordering is `BU-1` —
+    /// and then hands the route straight back, so an app that never transmits
+    /// never holds the accessory in a call.
+    func testConfigureSessionEndsOnListening() throws {
+        let (io, recorder) = makeIO()
+
+        try io.configureSession()
+
+        XCTAssertEqual(recorder.applied, [.radio, .listening])
+    }
+
+    /// Key-down asks for radio before the microphone opens — this is where the
+    /// SCO link comes up, and what the accessory's light reports.
+    func testStartCaptureEscalatesToRadio() throws {
+        let (io, recorder) = makeIO()
+        try io.configureSession()
+        recorder.clear()
+
+        try io.startCapture { _ in }
+
+        XCTAssertEqual(recorder.applied, [.radio])
+    }
+
+    /// Key-up shuts the microphone but does **not** hand the route back inline:
+    /// the hand-back waits out the linger. An inline hand-back here is what
+    /// turned SF-3's one drop into a loop in `BU-17`'s first attempt.
+    func testStopCaptureHandsTheRouteBackOnlyAfterTheLinger() async throws {
+        let gate = LingerGate()
+        let (io, recorder) = makeIO(gate: gate)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        recorder.clear()
+
+        io.stopCapture()
+        XCTAssertEqual(recorder.applied, [], "the hand-back must wait out the linger")
+
+        gate.open()
+        await waitUntil("route handed back") { recorder.applied == [.listening] }
+    }
+
+    /// **The loop killer.** A key-down inside the linger — the automatic resume
+    /// after SF-3's drop, most importantly — finds the session still on radio
+    /// and must not re-apply the category: a redundant category change is a
+    /// fresh route-change cascade, and re-triggering the cascade from inside
+    /// its own recovery is the loop that killed the first attempt. And the
+    /// stale linger, once it elapses, must not pull the route out from under
+    /// the live capture.
+    func testAKeyDownDuringTheLingerKeepsRadioWithoutReapplyingIt() async throws {
+        let gate = LingerGate()
+        let (io, recorder) = makeIO(gate: gate)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        io.stopCapture()
+        recorder.clear()
+
+        try io.startCapture { _ in }
+        XCTAssertEqual(recorder.applied, [], "the session is already on radio")
+
+        gate.open()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(
+            recorder.applied, [],
+            "a stale linger must not hand the route back under a live capture")
+    }
+
+    /// A key-down that fails outright hands the route back immediately: nothing
+    /// is capturing, so the accessory must not be left in a call nobody is
+    /// having, waiting on a linger for an over that never happened.
+    func testAFailedKeyDownHandsTheRouteBackImmediately() throws {
+        let recorder = PolicyRecorder()
+        let io = AudioPipelineIO(
+            makePipeline: {
+                FakeCapturePipeline(startCaptureError: StubError(description: "no mic"))
+            },
+            applyPolicy: recorder.apply,
+            listeningLinger: LingerGate().wait)
+        try io.configureSession()
+        recorder.clear()
+
+        XCTAssertThrowsError(try io.startCapture { _ in })
+
+        XCTAssertEqual(recorder.applied.last, .listening)
+    }
+
+    /// Two overs inside one linger produce exactly one hand-back once the
+    /// linger after the *last* of them elapses.
+    func testOnlyTheLastLingerHandsTheRouteBack() async throws {
+        let gate = LingerGate()
+        let (io, recorder) = makeIO(gate: gate)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        io.stopCapture()
+        try io.startCapture { _ in }
+        io.stopCapture()
+        recorder.clear()
+
+        gate.open()
+        await waitUntil("route handed back") { !recorder.applied.isEmpty }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(recorder.applied, [.listening], "one hand-back, not one per over")
+    }
+}
