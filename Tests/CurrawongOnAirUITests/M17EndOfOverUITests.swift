@@ -91,8 +91,16 @@ final class M17EndOfOverUITests: XCTestCase {
         replace(reflector, in: field("connect.host", in: app))
         replace(module, in: field("connect.module", in: app))
 
-        let connect = app.buttons["Connect"]
-        XCTAssertTrue(connect.waitForExistence(timeout: 5), "no Connect button")
+        // **APP-23: the form's Connect button is gone**, and `app.buttons["Connect"]`
+        // must not be reached for again — the pane switcher has a radio button
+        // with that exact label, so the query still matches and clicking it
+        // changes pane instead of placing a call. The one control that connects
+        // is the link button under the PTT slab, and it names its destination
+        // (APP-17), which is what makes this query unambiguous.
+        let connect = app.buttons["Connect to \(channelName)"].firstMatch
+        XCTAssertTrue(
+            connect.waitForExistence(timeout: 5),
+            "no link button naming this channel — the session pane's Connect is the only one now")
         connect.click()
 
         // The link is up when the PTT control stops saying "Connect to a node
@@ -106,25 +114,30 @@ final class M17EndOfOverUITests: XCTestCase {
 
         ptt.press(forDuration: overDuration)
 
-        // The banner renders only while transmitting, so its disappearance is
-        // the app's own statement that the over ended. Give SwiftUI a moment
-        // before believing either answer: a snapshot taken the instant the
-        // press returns still shows the banner, which reads like a stuck key
-        // and is only a frame that has not re-rendered.
+        // **APP-23: the strip no longer disappears**, so its absence has stopped
+        // being the app's statement that the over ended — it is permanent now,
+        // and what changes is what it says. The statement is the wording: it
+        // reads "Not transmitting" once the key is up.
+        //
+        // Give SwiftUI a moment before believing either answer: a snapshot taken
+        // the instant the press returns still shows the keyed strip, which reads
+        // like a stuck key and is only a frame that has not re-rendered.
         //
         // Narrow query, deliberately: a `descendants(matching: .any)` with a
-        // predicate takes minutes against this tree and times out.
-        // Match on `value`, not on the subscript: SwiftUI `Text` arrives with an
-        // empty accessibility *label* and its string in `value`, so
-        // `app.staticTexts["On air."]` matches nothing at all and every
-        // assertion built on it passes vacuously. That mistake is why an
-        // earlier run of this test reported the release as confirmed when it
-        // had checked nothing.
-        let onAir = app.staticTexts.matching(
-            NSPredicate(format: "value == %@", "On air.")).firstMatch
+        // predicate takes minutes against this tree and times out. The strip is
+        // one combined accessibility element carrying
+        // `TransmitBanner.accessibilityDescription`, so it is matched on the
+        // label here — but `value` is checked too, because a SwiftUI `Text`
+        // arrives with an empty label and its string in `value`, and an earlier
+        // version of this test reported a release it had never checked because
+        // it matched neither.
+        let idleStrip = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "label BEGINSWITH %@ OR value BEGINSWITH %@",
+                "Not transmitting", "Not transmitting")).firstMatch
         XCTAssertTrue(
-            waitUntil(timeout: 5) { !onAir.exists },
-            "the app still shows a transmit banner after PTT was released")
+            waitUntil(timeout: 5) { idleStrip.exists },
+            "the transmit strip still does not say the radio is unkeyed after PTT was released")
 
 
         // Hold the session open long enough for the observer to have printed,
@@ -140,9 +153,13 @@ final class M17EndOfOverUITests: XCTestCase {
         // switcher has a radio button labelled "Connect" too, so
         // `app.buttons["Connect"].exists` is true the whole time and waiting on
         // it silently waits for nothing.
+        // APP-23 reworded this label — switching is no longer refused, only the
+        // operations that change what the list contains — and a stale string
+        // here would wait for nothing and pass vacuously, which is the exact
+        // failure mode the note above is about.
         XCTAssertTrue(
             waitUntil(timeout: 30) {
-                !app.staticTexts["Disconnect to switch, add or delete channels."].exists
+                !app.staticTexts["Disconnect to add, edit or delete channels."].exists
             },
             "the channel list stayed locked after Disconnect")
 
