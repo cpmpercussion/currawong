@@ -20,6 +20,15 @@ day — four overs from the app, each seen to *end* by an independent observer �
 and `BU-9` records what trying to automate that turned up about the channel
 model.
 
+**Inflection point, 2026-08-22.** After two failed attempts at `BU-17`, the
+operator settled the priority: a permanently lit accessory LED is acceptable if
+the button works. **The LED is not what blocks the button** — after a fresh
+reconnect the button works with the LED lit and the route on HFP, and it stayed
+dead after the LED went out. So `BU-17` is deprioritised rather than solved, its
+receive-quality cost becomes an accepted iOS limitation, and `BU-14` — making the
+accessory link survive the HFP transition or recover from it unnoticed — is the
+work. See `BLUETOOTH-AUDIO.md`, which now leads with this.
+
 **Added 2026-08-21: the first accessory.** A TIDRADIO Q2L speaker-mic with a PTT
 button is in hand, and neither half of it works for long — `BU-13` (the audio
 stops after keying) and `BU-14` (the button stops keying). **Probed properly on

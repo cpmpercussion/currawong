@@ -234,7 +234,63 @@ time — which is all the time that matters, because the *press* is what has to
 get through. On iOS SCO is up for the whole session, so the button is dead for
 the whole session.
 
-### `BU-14`: the BLE subscription dies silently and never recovers
+### Inflection point, 2026-08-22: reliability over the indicator
+
+After two failed attempts at `BU-17`, the operator settled the priority:
+
+> "I might be ok with red light all the time as long as PTT worked."
+
+That reorders the remaining work, and it is worth stating plainly because most of
+this document was written while chasing the other goal.
+
+### The LED is not what blocks the button
+
+They look linked and are not. Both are consequences of one event:
+
+* The LED tracks the **SCO link**, which lights when the session activates HFP.
+* The button dies **at that transition**, not because HFP is up.
+
+The decisive pair of observations, both measured on the phone:
+
+1. After a fresh reconnect the button works **perfectly with the LED lit** and the
+   route on `BluetoothHFP` at 16 kHz — press, release and the duplicate release
+   all delivered.
+2. The button stayed dead **after** the LED went out and the route returned to
+   A2DP, until the link was rebuilt.
+
+So HFP state does not gate the button. The HFP *transition* kills the BLE
+subscription and nothing recovers it; the LED stays lit for the same reason the
+session stays active. Correlated, not causal.
+
+### What follows
+
+* **`BU-17` is deprioritised, not solved.** Its remaining route needs a
+  suppression window on the transmit path — an SF-3 decision — and the operator
+  does not want the thing it buys badly enough to pay that. The two partial
+  options stay recorded for whoever wants the battery and idle-LED win later.
+* **`BU-14` is the work.** Not "stop HFP being held" but "make the accessory
+  link survive the transition, or recover from it without the operator
+  noticing".
+* **The receive-quality cost stands and is now a known, accepted limitation on
+  iOS**: 16 kHz mono for the whole call, where macOS gives 44.1 kHz between
+  overs. It is a documented platform difference rather than an open defect.
+
+### Where reliability work should go next
+
+The repair as it stands fires once per route change, with a four-second cooldown
+and **no check that it worked** — and it demonstrably does not always work: a
+full reconnect was observed completing and leaving the button dead. The obvious
+next move, and the one the evidence supports:
+
+> **Escalate.** After a repair, if nothing has arrived on the link within a few
+> seconds, repair again — bounded, a small number of attempts, and only ever
+> while idle so `SF-2` is untouched. Give up loudly rather than quietly, since
+> `isButtonVerified` already drives an honest indicator and a Reconnect button.
+
+That is safe in a way `BU-17` was not: it runs between overs, never on the
+transmit path, and touches no requirement.
+
+## `BU-14`: the BLE subscription dies silently and never recovers
 
 **Established 2026-08-22, second phone session.** The accessory's notifications
 stop arriving and the app never notices:
