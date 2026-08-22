@@ -10,7 +10,7 @@ import SwiftUI
 /// `ConnectFormView` edits whichever of these is selected;
 /// this decides which that is.
 ///
-/// ## Everything here is refused while a link is up
+/// ## What a live link refuses, and what it no longer does
 ///
 /// `RadioSession.select(_:)`, `newChannel(_:)` and `deleteChannel(_:)` all
 /// return early unless the connection is `.disconnected`, because changing the
@@ -19,6 +19,14 @@ import SwiftUI
 /// part the operator sees, and it **says so** rather than presenting live
 /// controls that silently do nothing — a tap that produces no effect and no
 /// explanation is the worst of the three possible behaviours.
+///
+/// **APP-23: choosing a channel is no longer one of the refused things.** The
+/// whole list used to grey out mid-call, which made the ordinary radio gesture —
+/// tap another channel to go there — into disconnect, choose, connect. A tap now
+/// calls ``onChoose``, which hangs up on the way, so the selection still only
+/// moves while disconnected and the invariant above is untouched. What stays
+/// locked is everything that changes what the list *contains*: adding, editing,
+/// deleting, reordering. None of those is "take me there now".
 ///
 /// ## One list, two platforms
 ///
@@ -31,7 +39,35 @@ import SwiftUI
 struct ChannelListView: View {
     @ObservedObject var session: RadioSession
 
-    /// Whether the session will accept a change to the list at all.
+    /// **APP-23.** What a tap on a row means: *go to this channel*.
+    ///
+    /// Not `session.select(_:)` any more, and the difference is the whole of
+    /// the change. Selecting is refused while a link is up — rightly, see the
+    /// note above — so the list used to grey itself out and tell the operator
+    /// to disconnect first. Going somewhere is a sequence that includes hanging
+    /// up, and only ``RootView`` knows the whole of it, because dialling an
+    /// EchoLink channel needs a proxy sourced first.
+    let onChoose: (UUID) -> Void
+
+    /// **APP-23.** Show this channel's details — the ⓘ, and where `Add channel`
+    /// lands. `nil` where the details are already on screen beside the list,
+    /// which is the split layout on iPad and Mac.
+    ///
+    /// The channel is selected before this is called, so the form (which edits
+    /// the *draft*, and the draft follows the selection) is describing the row
+    /// that was tapped. That is also why the button is disabled while a link is
+    /// up: selecting is refused there, so an enabled ⓘ would open the form on
+    /// somewhere other than the row that was tapped.
+    var onInspect: ((UUID) -> Void)?
+
+    /// Whether the session will accept a change to the *list* — adding,
+    /// deleting, reordering, editing.
+    ///
+    /// **Choosing a channel is no longer one of these (APP-23).** A tap on a row
+    /// goes there, hanging up on the way if it has to, so the rows themselves
+    /// stay live while a call is up. What is still refused is everything that
+    /// changes what the list contains, because none of those is "take me there
+    /// now" and all of them would edit the channel under a live call.
     private var isMutable: Bool { session.connection == .disconnected }
 
     var body: some View {
@@ -42,8 +78,13 @@ struct ChannelListView: View {
             if !isMutable {
                 // No `.fixedSize(horizontal: false, vertical: true)` here or in
                 // the empty state, and that is BU-12's fix — see the note below.
+                //
+                // **APP-23: switching is no longer in this list.** Tapping a row
+                // now hangs up and dials the new channel, so the label names
+                // only what is still refused — the operations that change what
+                // the list contains.
                 Label(
-                    "Disconnect to switch, add or delete channels.",
+                    "Disconnect to add, edit or delete channels.",
                     systemImage: "lock")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -73,6 +114,95 @@ struct ChannelListView: View {
     /// up with the row text under it rather than nearly lining up with it.
     private static let inset: CGFloat = 20
 
+    /// Select, then show. The order matters: the details form edits the draft
+    /// and the draft follows the selection, so a form opened before the
+    /// selection moved would describe the previous channel.
+    private func inspect(_ id: UUID) {
+        session.select(id)
+        onInspect?(id)
+    }
+
+    /// One stored channel's row.
+    ///
+    /// **APP-23: two controls side by side**, the way a Wi-Fi list is — the row
+    /// means "go there", the ⓘ means "show me what this is". They cannot be one
+    /// control, because the first is live while a call is up and the second is
+    /// not.
+    ///
+    /// A method rather than more `List` body: with both controls inline the
+    /// builder became one expression the type-checker gave up on.
+    @ViewBuilder
+    private func storedRow(_ channel: NodeSettings) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                onChoose(channel.id)
+            } label: {
+                row(for: channel)
+            }
+            .buttonStyle(.plain)
+            // **No `.disabled(!isMutable)` (APP-23).** This is the tap that now
+            // hangs up and redials, so a live call is the state it is most for,
+            // not the state it is refused in.
+            .contextMenu { menu(for: channel) }
+
+            if onInspect != nil {
+                Button {
+                    inspect(channel.id)
+                } label: {
+                    Image(systemName: "info.circle").imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .disabled(!isMutable)
+                .accessibilityLabel("Details for \(channel.listDisplayName)")
+            }
+        }
+    }
+
+    private func row(for channel: NodeSettings) -> ChannelRow {
+        ChannelRow(
+            channel: channel,
+            // **APP-19: the highlight follows the form, not the stored
+            // selection.** The two can differ — a directory browse and
+            // `Add channel` both point the form at a channel that is not in this
+            // list — and when they do, no row is highlighted, which is the
+            // honest answer: what the form is describing is not one of these
+            // yet. Highlighting the channel the operator has just left made
+            // `Add channel` look like it had done nothing.
+            isSelected: channel.id == session.settings.id,
+            // BU-9: the row shows the *stored* channel, and an edit no longer
+            // reaches it on its own — so where the two disagree the list has to
+            // say so, or the operator is reading a description of somewhere
+            // they are not about to call.
+            hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
+            // The *connected* row is still the selected one, which is the
+            // channel the call was placed to — a connection cannot be to a
+            // draft that is in no list.
+            isConnected: channel.id == session.channels.selectedID
+                && session.connection != .disconnected,
+            connectionLabel: session.connection.label)
+    }
+
+    @ViewBuilder
+    private func menu(for channel: NodeSettings) -> some View {
+        if onInspect != nil {
+            Button {
+                inspect(channel.id)
+            } label: {
+                Label("Channel details", systemImage: "info.circle")
+            }
+            .disabled(!isMutable)
+        }
+        // macOS has no swipe-to-delete; iOS gets this as a long press, which is
+        // harmless duplication.
+        Button(role: .destructive) {
+            session.deleteChannel(channel.id)
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .disabled(!isMutable)
+    }
+
     private var header: some View {
         HStack {
             Text("Channels")
@@ -89,7 +219,14 @@ struct ChannelListView: View {
             #endif
 
             Button {
-                session.newChannel()
+                // **APP-23.** The provisional row is still what `+` produces
+                // (APP-22); what is new is that where the details live behind
+                // navigation, the button also opens them. A button that adds a
+                // blank row and leaves the operator on the list has put them
+                // one undiscoverable tap away from the fields it exists to let
+                // them fill in.
+                let id = session.newChannel()
+                if let id { onInspect?(id) }
             } label: {
                 Label("Add channel", systemImage: "plus")
             }
@@ -124,8 +261,10 @@ struct ChannelListView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No saved channels")
                 .font(.subheadline.weight(.medium))
+            // APP-23: `Add channel` is named because it is now the way in on a
+            // phone, where the form is behind it rather than under this list.
             Text(
-                "Fill in the connect form and connect. The details are saved as a channel, and "
+                "Add a channel and fill in where it goes. Connecting saves it, and "
                 + "coming back to it later is one tap.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -171,46 +310,7 @@ struct ChannelListView: View {
     private var list: some View {
         List {
             ForEach(session.channels.channels) { channel in
-                Button {
-                    session.select(channel.id)
-                } label: {
-                    ChannelRow(
-                        channel: channel,
-                        // **APP-19: the highlight follows the form, not the
-                        // stored selection.** The two can differ — a directory
-                        // browse and `Add channel` both point the form at a
-                        // channel that is not in this list — and when they do,
-                        // no row is highlighted, which is the honest answer:
-                        // what the form is describing is not one of these yet.
-                        // Highlighting the channel the operator has just left
-                        // made `Add channel` look like it had done nothing.
-                        isSelected: channel.id == session.settings.id,
-                        // BU-9: the row shows the *stored* channel, and an edit
-                        // no longer reaches it on its own — so where the two
-                        // disagree the list has to say so, or the operator is
-                        // reading a description of somewhere they are not about
-                        // to call.
-                        hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
-                        // The *connected* row is still the selected one, which
-                        // is the channel the call was placed to — a connection
-                        // cannot be to a draft that is in no list, and while one
-                        // is up neither of the two paths above can run.
-                        isConnected: channel.id == session.channels.selectedID
-                            && session.connection != .disconnected,
-                        connectionLabel: session.connection.label)
-                }
-                .buttonStyle(.plain)
-                .disabled(!isMutable)
-                .contextMenu {
-                    // macOS has no swipe-to-delete; iOS gets this as a long
-                    // press, which is harmless duplication.
-                    Button(role: .destructive) {
-                        session.deleteChannel(channel.id)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .disabled(!isMutable)
-                }
+                storedRow(channel)
             }
             .onDelete { offsets in
                 // Offsets rather than ids, so map before deleting: each
@@ -240,8 +340,11 @@ struct ChannelListView: View {
             // loop would shift every index by one.
             if session.isDraftAnUnsavedChannel {
                 Button {
-                    // Already showing it; a tap is not a no-op only because the
-                    // form may have been scrolled away from on a phone.
+                    // Already selected, so there is nothing to choose — but
+                    // where the details live behind navigation (APP-23) this is
+                    // the only way back to the half-filled form, and on a phone
+                    // that is the whole point of the row.
+                    onInspect?(session.settings.id)
                 } label: {
                     ChannelRow(
                         channel: session.settings,

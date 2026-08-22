@@ -136,6 +136,83 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertEqual(harness.session.channels.selectedID, other.id)
     }
 
+    // MARK: - APP-23, switching to a channel
+
+    /// The gesture the greyed-out list used to refuse: connected to one channel,
+    /// tap another, end up there. `select(_:)`'s own refusal is untouched — the
+    /// sequence hangs up first, so the selection still only moves while
+    /// disconnected.
+    func testSwitchingWhileConnectedHangsUpSelectsAndAsksForACall() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        await harness.connect()
+        XCTAssertEqual(harness.session.connection, .connected)
+
+        let shouldDial = await harness.session.switchChannel(to: other.id)
+
+        XCTAssertTrue(shouldDial, "a call was up, so the caller must place a new one")
+        XCTAssertEqual(harness.session.connection, .disconnected, "the old call must be down")
+        XCTAssertEqual(harness.session.channels.selectedID, other.id)
+        XCTAssertEqual(harness.session.settings.id, other.id)
+        XCTAssertTrue(harness.client.calls.contains(.disconnect))
+    }
+
+    /// From a standing start it only selects. A single tap on a list row must
+    /// not place a call — that is the gesture that scrolls past it.
+    func testSwitchingWhileDisconnectedOnlySelects() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+
+        let shouldDial = await harness.session.switchChannel(to: other.id)
+
+        XCTAssertFalse(shouldDial, "nothing was up, so nothing should be dialled")
+        XCTAssertEqual(harness.session.channels.selectedID, other.id)
+        XCTAssertEqual(harness.session.connection, .disconnected)
+    }
+
+    /// The one outcome this must never produce: hanging up on the channel the
+    /// operator is already talking on, because they tapped its row.
+    func testSwitchingToTheChannelAlreadyConnectedDoesNothing() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        await harness.connect()
+
+        let shouldDial = await harness.session.switchChannel(to: allStar.id)
+
+        XCTAssertFalse(shouldDial)
+        XCTAssertEqual(harness.session.connection, .connected, "the live call must survive")
+        XCTAssertFalse(harness.client.calls.contains(.disconnect))
+    }
+
+    func testSwitchingToAnUnknownChannelChangesNothing() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar], selectedID: allStar.id)
+        await harness.connect()
+
+        let shouldDial = await harness.session.switchChannel(to: UUID())
+
+        XCTAssertFalse(shouldDial)
+        XCTAssertEqual(harness.session.connection, .connected)
+        XCTAssertEqual(harness.session.channels.selectedID, allStar.id)
+    }
+
+    /// A transmission in progress is not a reason to refuse the switch, but it
+    /// must not survive it: `disconnect()` unkeys on the way through, and this
+    /// is the assertion that says the switch inherits that.
+    func testSwitchingWhileKeyedUnkeysFirst() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        await harness.connect()
+        await harness.keyDown()
+        XCTAssertTrue(harness.client.isTransmitting)
+
+        _ = await harness.session.switchChannel(to: other.id)
+
+        XCTAssertFalse(harness.client.isTransmitting, "the switch must not carry a keyed radio")
+        XCTAssertFalse(harness.session.isTransmitting)
+        XCTAssertFalse(harness.audio.isCapturing)
+    }
+
     func testSelectingAnUnknownChannelChangesNothing() {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
 
