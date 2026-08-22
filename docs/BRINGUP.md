@@ -125,7 +125,7 @@ keep treating the app as unproven on air.
 | BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE PROVEN 2026-08-22 (evening): the accessory itself suppresses its BLE notifications while its Classic side sits in an idle HFP call.** Cross-tested with the Mac holding the BLE link while the phone held the call: zero notifications with the LED red, the same subscription delivering again the moment call mode ended — no reconnect, no re-subscribe. Reads answered throughout, which is how every probe lied. iOS shows it and macOS never did because iOS holds the session forever (`BU-17`) while macOS drops SCO ~2.1 s after capture — so `BU-14` **is** `BU-17`, and the fix is releasing the session when idle. Not fixable by link repair; the day's two probe-machinery bugs are fixed regardless. **Fix verified on air the same evening** (see BU-17): ten-plus consecutive overs, every press after a completed hand-back delivered — the press that always died. Still open for the closure criteria only: an over with the app backgrounded and the phone locked (stage with `BU-10`) |
 | BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link |
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
-| BU-15 | **The first transmit after launch does a visible dance** — press PTT, handset beeps, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS, Q2L) | **Diagnosed 2026-08-22, not yet fixed.** Bringing HFP up changes the engine's configuration (A2DP device → HFP device, 44100 → 16000 Hz), `AVAudioEngineConfigurationChange` fires `.routeChanged`, and `resumeAcrossRouteChange()` correctly drops transmit and keys back down. The machinery is working as specified; the operator should not have to watch it |
+| BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, not yet fixed. Two triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it |
 
 ---
 
@@ -1259,16 +1259,27 @@ button is being fought with.
 overs, with the app backgrounded and the phone locked for at least one of them,
 and the operator can tell from the screen whether letting go will unkey them.
 
-### BU-15 — the first transmit after launch does a visible dance 🔬 DIAGNOSED 2026-08-22
+### BU-15 — the first transmit of an over does a visible dance 🔬 DIAGNOSED 2026-08-22
 
-**What the operator sees**, on macOS with the Q2L, first transmit of a session:
-press PTT → the handset beeps → a pause → the UI flashes red → back to not-red
-→ then red, and actually transmitting. Subsequent transmits do not do it, or do
-it less. Nothing is broken at the end of it; it just looks like the app changed
-its mind.
+**What the operator sees**, first transmit of an over: press PTT → a pause →
+the UI flashes red → back to not-red → then red, and actually transmitting. On
+macOS with the Q2L the handset also beeps at the start of it. Subsequent
+transmits do not do it, or do it less. Nothing is broken at the end of it; it
+just looks like the app changed its mind.
 
-**Diagnosed, and every step is a component behaving as specified.** The
-sequence:
+**One mechanism, two triggers.** In both cases the act of keying causes a route
+change, SF-3 correctly treats that route change as real, and the resume is the
+flash. Every step is a component behaving as specified.
+
+The shared tail, from the route change onwards:
+
+* `RadioSession.handle(_:)` routes `.routeChanged` to
+  `resumeAcrossRouteChange()`, which does exactly what SF-3 and its own doc
+  comment promise: **stop transmitting** (red off), wait
+  `routeSettleNanoseconds` for the graph to settle, then key back down (red on).
+
+**Trigger A — the SCO bring-up (macOS, and any Bluetooth accessory).** This is
+what the item was first written from, on 2026-08-22:
 
 1. Key-down. `beginTransmit` → `audio.startCapture(...)` opens the input.
 2. Opening the accessory's input brings the HFP SCO link up. The handset beeps
@@ -1279,44 +1290,67 @@ sequence:
    observer for that is **not** inside `#if os(iOS)`
    (`RadioCore/AudioPipeline.swift:1158`), so it yields `.routeChanged` on macOS
    too — correctly, since the graph really was rebuilt.
-5. `RadioSession.handle(_:)` routes `.routeChanged` to
-   `resumeAcrossRouteChange()`, which does exactly what SF-3 and its own
-   doc comment promise: **stop transmitting** (red off), wait
-   `routeSettleNanoseconds` for the graph to settle, then key back down (red on).
+
+**Trigger B — the category escalation (iOS, no Bluetooth required).** Added by
+`BU-17` later the same day, and the reason this item is no longer a
+Bluetooth story:
+
+1. Key-down. `AudioIO.escalateForCapture()`
+   (`Sources/Currawong/AudioIO.swift:458`) switches the session from
+   `AudioSessionPolicy.listening` to `.radio` before opening the microphone —
+   `.playback`/`.default`/no options → `.playAndRecord`/`.voiceChat`/
+   `[allowBluetooth, defaultToSpeaker]`.
+2. **A category change is a route change**, with no accessory involved at all.
+   It produces the cascade the `BU-17` comment in that same file enumerates:
+   `categoryChange`, `override`, `newDeviceAvailable`,
+   `engineConfigurationChange` — and only the first is self-evidently ours.
+3. Same tail, same flash. The comment at `AudioIO.swift:441` already says so:
+   "one `BU-15`-style drop-and-resume on the first over after each hand-back …
+   the same dance macOS does on a cold SCO link."
 
 So the flash is SF-3 firing on a route change that the act of keying caused.
 **Nothing here is a bug in isolation** — which is why it needs writing down
 rather than fixing in passing.
 
-> ⚠️ **On iOS the same flash has a *different* cause, found 2026-08-22.** A tap
-> outruns the key-down path, so the transmitter keys after the button is already
-> released. That is `BU-16`, it is not this item, and on the phone it — not the
-> route-change resume — is what the operator was seeing. Diagnose which one is
-> in play before treating a flash as this item.
+> ⚠️ **On iOS a flash has three possible causes; diagnose which is in play.**
+> Trigger B above (this item). `BU-16` — a tap outruns the key-down path, so the
+> transmitter keys after the button is already released; that needs the ~163 ms
+> SCO bring-up to outrun, so it does not apply with no accessory connected.
+> Or trigger A, if an accessory is connected. An earlier version of this section
+> said the iOS flash was *always* `BU-16`; that was written before `BU-17`
+> introduced trigger B, and it is no longer true.
 
-**Why mostly the first one.** The dance needs the configuration change to land
-*while the engine is already running*. On a warm link — inside the ~2.1 s SCO
-linger, or when SCO comes up before the engine finishes starting — there is no
-change to observe, so no drop. That makes it timing-dependent rather than
-strictly once-per-launch, and an operator on a slow first key-up may see it
-again later. **Not measured; inferred.** If this item is picked up, measure
-before designing: log every `.routeChanged` with its cause against key-down
-timestamps for a dozen presses.
+**Why the first one of an over, not the first of a session.** The dance needs
+the route change to land *while the engine is already running*. For trigger A
+that means a cold SCO link: on a warm one — inside the ~2.1 s SCO linger, or
+when SCO comes up before the engine finishes starting — there is no change to
+observe, so no drop. For trigger B, `escalateForCapture()` skips the category
+change when the session is already `radio`, so back-to-back overs are clean and
+an over that starts after the `listeningLingerNanoseconds` hand-back (3 s,
+`AudioIO.swift:236`) re-escalates and dances again. Both make it
+timing-dependent rather than once-per-launch — the original "first transmit
+after launch" framing was the macOS symptom, not the rule. **Not measured;
+inferred.** If this item is picked up, measure before designing: log every
+`.routeChanged` with its cause against key-down timestamps for a dozen presses,
+on both platforms.
 
 **Why it matters beyond cosmetics.**
 
 * Each resume is a **real key-down** and starts its own SF-1 watchdog. The
   transmission the operator thinks they started is not the one being timed.
 * `automaticResumes` is capped at `maximumAutomaticResumes` per hold. Spending
-  one of those on every first key-up spends a safety budget on a self-inflicted
-  route change.
+  one of those on the first key-down of every over spends a safety budget on a
+  self-inflicted route change — and with trigger B that is *every* over that
+  follows an idle gap, not an occasional cold link.
 * It puts a red/not-red flicker in front of the operator at exactly the moment
   they are deciding whether they are on air. The `TransmitActivityRequest` for
   a route-change resume already says "keep holding" rather than blinking the
   banner — the same care has not been taken for the main UI.
 * **It blocks the iOS harmonisation** in `BLUETOOTH-AUDIO.md`, which would
   deliberately cause a route change on every key-down. On top of an unresolved
-  BU-15 that would move the dance from the first over to all of them.
+  BU-15 that would move the dance from the first over to all of them — and
+  trigger B has already taken the first step down that road, so the "solve
+  BU-15 first" instruction there is now overdue rather than precautionary.
 
 **Where the fix probably is** — not decided, and deliberately not:
 
@@ -1328,14 +1362,20 @@ timestamps for a dozen presses.
   change inside the window still drops transmit.
 * **Let the route settle before keying at all** — bring the input up, wait for
   configuration to stop changing, then `startTransmit()`. Honest, and pushes the
-  163 ms out to maybe 300 ms, which is the cost the operator would actually feel.
+  163 ms out to maybe 300 ms, which is the cost the operator would actually
+  feel. Note that `BU-16`'s fix deliberately went the other way — link first,
+  capture catches up — so this option now argues against a decision already
+  taken on air, and would have to be costed against it rather than in the
+  abstract. Measure the settle time for a category change separately from a
+  cold SCO link; they are not the same number.
 * **Accept it and make it legible** — do not surface the intermediate state to
   the UI at all until the first resume has settled. Does not touch the safety
   path, and is probably the smallest honest change.
 
-**Closed when** the first transmit of a session looks like every other one, with
-SF-3 still demonstrably dropping transmit on a route change the app did not
-cause.
+**Closed when** the first transmit of an over looks like every other one — on
+iOS with no accessory connected *and* on macOS with the Q2L, since the two
+triggers are fixed or not fixed independently — with SF-3 still demonstrably
+dropping transmit on a route change the app did not cause.
 
 ### BU-16 — a tap outruns the key-down, so the radio keys after you let go ✅ FIXED 2026-08-22
 
