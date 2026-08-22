@@ -1074,7 +1074,18 @@ independent, is unknown.
 > **closed**: releases arrive fine over an established SCO link. See
 > `BLUETOOTH-AUDIO.md`.
 >
-> 🔧 **Fix implemented 2026-08-22, not yet verified on air.** On an audio route
+> 🔧 **Tried on air 2026-08-22 and revised.** Nine repairs fired and reconnects
+> completed in 1.1–1.3 s, but two things were wrong. It **felt slow** — the 1.5 s
+> settle was on the critical path — so the repair is now leading-edge with a 4 s
+> cooldown. And **a reconnect is not reliable either**: one completed in full and
+> the button was still dead. So the goal changed from guaranteeing the link to
+> never lying about it: `isButtonVerified` is false until data actually arrives,
+> the panel says **"Accessory untested"** instead of "Accessory ready", and the
+> pane offers a **Reconnect** button and points at the on-screen PTT. The old
+> behaviour — panel claiming ready, LED lit, no possible way to key — was the
+> real defect. **Still open: no host-side action reliably restores this link.**
+>
+> 🔧 **First attempt, superseded by the above.** On an audio route
 > change that finds the session **idle**, the accessory link is rebuilt: the
 > session decides idleness (`!isTransmitting`, no hold, no resume in flight) so
 > SF-2 stays unconditional, and the controller waits 1.5 s for the route to go

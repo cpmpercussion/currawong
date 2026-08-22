@@ -156,6 +156,24 @@ struct AccessoryPane: View {
                     .accessibilityLabel("Last signal heard from the accessory")
             }
 
+            if accessory.linkState.isConnected, !accessory.isButtonVerified {
+                // The operator's way out of BU-14's dead end. Connected and
+                // silent is exactly the state that used to read as "ready" and
+                // leave them with no button and nothing to press.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Connected, but nothing has been heard from the button yet.")
+                        .font(.caption)
+                    Text(
+                        "Press it to check. If it does nothing, rebuild the link — "
+                            + "and the on-screen button always works.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button("Reconnect") { accessory.reconnectAccessory() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .accessibilityElement(children: .combine)
+            }
+
             if case .failed = accessory.linkState {
                 Button("Try again") { accessory.retryConnection() }
                     .buttonStyle(.bordered)

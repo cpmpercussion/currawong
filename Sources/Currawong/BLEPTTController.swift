@@ -101,6 +101,23 @@ final class BLEPTTController: ObservableObject {
     /// second press edge.
     @Published private(set) var isAccessoryKeyed = false
 
+    /// **Whether anything has actually arrived on this link since it came up.**
+    ///
+    /// The honest answer to "is the button going to work?", and the reason it
+    /// exists is that every other answer the app can give is unreliable.
+    /// Measured on a phone, 2026-08-22: after the audio route moves to HFP the
+    /// accessory's notifications stop, and `CBPeripheral` still reports
+    /// connected, no disconnection is delivered, and a re-subscribe *reports
+    /// success* while delivering nothing. So `.connected` is not evidence, and a
+    /// successful subscribe is not evidence. **Only arriving data is evidence.**
+    ///
+    /// False from the moment a link is established or rebuilt until the first
+    /// notification arrives. The UI must not promise a working button while this
+    /// is false — saying "Accessory ready" over a dead button is worse than
+    /// saying nothing, because it sends the operator on air believing they can
+    /// key.
+    @Published private(set) var isButtonVerified = false
+
     /// The last notification seen from the connected accessory, whether or not
     /// it matched the mapping. Diagnostic: an operator whose accessory has
     /// stopped working can see whether anything is arriving at all.
@@ -127,14 +144,8 @@ final class BLEPTTController: ObservableObject {
     /// Injected so a test does not wait real seconds between retries.
     private let retryDelay: @Sendable () async -> Void
 
-    /// How long the audio route must be quiet before a repair reconnect is
-    /// attempted. Injected for the same reason as ``retryDelay``.
-    ///
-    /// A delay rather than an immediate reaction because route changes arrive in
-    /// **bursts** — `BU-17` has them flapping `override` → `newDeviceAvailable`
-    /// roughly once a second — and one reconnect per burst is wanted, not one
-    /// per notification.
-    private let routeSettleDelay: @Sendable () async -> Void
+    /// The clock, injected so a test does not wait real seconds for a cooldown.
+    private let now: @Sendable () -> Date
 
     // MARK: - Private state
 
@@ -148,9 +159,16 @@ final class BLEPTTController: ObservableObject {
     private var consecutiveFailures = 0
     private var isScanning = false
 
-    /// The in-flight repair, so a burst of route changes coalesces into one
-    /// reconnect instead of one per change.
-    private var repairTask: Task<Void, Never>?
+    /// When the last repair was started, so a burst of route changes coalesces
+    /// into one reconnect instead of one per change.
+    private var lastRepairAt: Date?
+
+    /// How long after a repair further route changes are ignored.
+    ///
+    /// Long enough to cover a reconnect (about 1.2 s measured on a phone) and
+    /// `BU-17`'s once-a-second flapping, short enough that a genuine second
+    /// failure is not stonewalled.
+    static let repairCooldown: TimeInterval = 4
 
     // MARK: - Init
 
@@ -160,20 +178,17 @@ final class BLEPTTController: ObservableObject {
         retryDelay: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         },
-        routeSettleDelay: @escaping @Sendable () async -> Void = {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-        }
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
-        self.routeSettleDelay = routeSettleDelay
+        self.now = now
         self.mapping = store.loadMapping()
     }
 
     deinit {
         eventTask?.cancel()
-        repairTask?.cancel()
     }
 
     // MARK: - Lifecycle
@@ -332,6 +347,7 @@ final class BLEPTTController: ObservableObject {
         wantedAccessory = nil
         mapping = nil
         learner = nil
+        isButtonVerified = false
         store.saveMapping(nil)
         linkState = idleLinkState
     }
@@ -382,6 +398,26 @@ final class BLEPTTController: ObservableObject {
     /// Repairing between overs is also the right *moment*: the button is needed
     /// for the **next** press, not this one.
     func audioRouteDidChange() {
+        repair(reason: "route changed", force: false)
+    }
+
+    /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
+    /// because a person pressing a button has better information than a timer.
+    func reconnectAccessory() {
+        repair(reason: "operator asked", force: true)
+    }
+
+    /// Rebuild the link now.
+    ///
+    /// **Leading edge, not trailing.** An earlier version waited 1.5 s for the
+    /// route to go quiet before repairing, which put that wait on the critical
+    /// path: the operator pressed the button and found it dead for 1.5 s plus a
+    /// 1.2 s reconnect. Reported as "when it works it feels slow", and the
+    /// complaint was right — the wait bought nothing that a cooldown does not.
+    ///
+    /// So: repair on the *first* change of a burst and ignore the rest for
+    /// ``repairCooldown``. Same coalescing, none of the latency.
+    private func repair(reason: String, force: Bool) {
         // No accessory in use, or no link to repair: nothing to do. In
         // particular this must not fire during learn mode, where the operator is
         // mid-sequence and a reconnect would restart it under them.
@@ -389,27 +425,20 @@ final class BLEPTTController: ObservableObject {
             !isAccessoryKeyed, let id = wantedAccessory
         else { return }
 
-        repairTask?.cancel()
-        let settle = routeSettleDelay
-        repairTask = Task { @MainActor [weak self] in
-            await settle()
-            guard !Task.isCancelled, let self else { return }
-            // Re-checked after the wait: the route may have settled into a
-            // transmission, the operator may have pressed the button, or the
-            // accessory may have been forgotten while this was pending.
-            guard self.mapping != nil, self.learner == nil,
-                self.linkState.isConnected, !self.isAccessoryKeyed,
-                self.wantedAccessory == id
-            else { return }
-
-            Diagnostics.route(
-                "accessory repair: route settled, reconnecting a link that may "
-                    + "have stopped delivering")
-            // Disconnect only. The `.disconnected` event drives the reconnect
-            // through `handle(_:)`, which is the same path a real link drop
-            // takes — so there is exactly one reconnection routine, not two.
-            self.central?.disconnect(id)
+        if !force, let last = lastRepairAt,
+            now().timeIntervalSince(last) < Self.repairCooldown
+        {
+            return
         }
+        lastRepairAt = now()
+
+        // The link is not to be trusted again until something arrives on it.
+        isButtonVerified = false
+        Diagnostics.route("accessory repair (\(reason)): rebuilding the link")
+        // Disconnect only. The `.disconnected` event drives the reconnect
+        // through `handle(_:)`, which is the same path a real link drop takes —
+        // so there is exactly one reconnection routine, not two.
+        central?.disconnect(id)
     }
 
     // MARK: - Events
@@ -448,6 +477,9 @@ final class BLEPTTController: ObservableObject {
             // A reconnect starts from "button up". Whatever the accessory was
             // doing when the link dropped, the app does not assume it.
             isAccessoryKeyed = false
+            // And it starts from "unproven": a connection is not a working
+            // button, which is the whole lesson of BU-14.
+            isButtonVerified = false
             linkState = .connected
             central?.subscribeToAllNotifyingCharacteristics(id)
 
@@ -471,6 +503,7 @@ final class BLEPTTController: ObservableObject {
             // the safety requirements exist to prevent.
             sink?.accessoryLinkLost()
             isAccessoryKeyed = false
+            isButtonVerified = false
             // ────────────────────────────────────────────────────────────────
 
             Diagnostics.route(
@@ -494,6 +527,11 @@ final class BLEPTTController: ObservableObject {
 
         case .notified(let id, let signal):
             guard id == wantedAccessory else { return }
+            // Data arrived, which is the only proof this link works.
+            if !isButtonVerified {
+                isButtonVerified = true
+                Diagnostics.route("accessory link verified by arriving data")
+            }
             lastSignal = signal
             Diagnostics.route(
                 "accessory notify \(signal.path.service)/\(signal.path.characteristic) "
