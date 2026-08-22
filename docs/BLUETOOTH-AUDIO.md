@@ -164,8 +164,24 @@ The accessory's PTT notifications are delivered when the route is A2DP and are
 | App backgrounded (session deactivated) | `BluetoothA2DPOutput` 44100 Hz | ~25 | **all delivered** |
 | Foreground + connected again | `BluetoothHFP` 16000 Hz | several | **one**, at the transition instant, then none |
 
-Four transitions, and the button tracked the route every time. The link never
-reported a disconnection — `linkState` stayed `.connected` throughout, and the
+Four transitions, and the button tracked the route every time.
+
+> **Read the "one" in that table carefully — it corrects the row above it.** The
+> single cycle delivered after `categoryChange` was a *complete* one: press,
+> release **and** the duplicate release, all three delivered with the route
+> already `BluetoothHFP`. So the discriminator is **not** the route label. It is
+> whether the **SCO link is actually established**, which happens when IO starts
+> — during the key-down — and lags the category change by the ~163 ms measured
+> above. That press landed before SCO was up; its release, 90 ms later, was still
+> inside the setup window; everything after SCO settled was starved.
+>
+> **This inverts which case is dangerous.** A tap's release outruns SCO and gets
+> through. A real over — hold for several seconds, release long after SCO is
+> established — releases squarely into the starved window. The failure mode is
+> therefore worst for *normal operating practice*, and any experiment must use a
+> multi-second hold. A tap will look fine and prove nothing.
+
+The link never reported a disconnection — `linkState` stayed `.connected` throughout, and the
 accessory pane went on saying so while nothing arrived. **The link-state
 indicator alone cannot be trusted to tell you the button is alive.**
 
@@ -227,9 +243,12 @@ adds a constraint that breaks the obvious implementation.
 > can no longer hear.** It is the precise failure `SF-2` exists to prevent, and
 > it would be *caused* by the change meant to fix `BU-14`.
 >
-> On the observed evidence this is a real risk, not a hypothetical: the one
-> press that got through on HFP got through at the transition instant, and
-> nothing after it did.
+> **On the observed evidence this is a real risk, and the evidence is subtler
+> than it first looked.** The one cycle that got through after the route became
+> HFP delivered its release fine — but it did so *before SCO had finished coming
+> up*, because a tap is shorter than the 163 ms setup. That is not reassurance;
+> it is the mechanism showing that only *short* releases survive. A held press
+> released after SCO settles is the untested case, and it is the normal one.
 >
 > So the accessory PTT on iOS **must not depend on the release edge arriving
 > over a live SCO link.** Options, none chosen:
@@ -244,13 +263,22 @@ adds a constraint that breaks the obvious implementation.
 >   button keeps working, the operator keeps hi-fi receive — and speaks into the
 >   phone, which for a speaker-mic in the hand is close to absurd. Listed
 >   because it is safe, not because it is good.
-> * **Establish whether the starvation is symmetric.** If the mechanism is the
->   handset changing mode rather than radio coexistence, the release may in fact
->   be delivered and the whole hazard evaporates. **This is the cheap
->   experiment and it should come first:** key down over the accessory on
->   macOS — where SCO rises on the transmit path already — and see whether the
->   release edge arrives while SCO is up. macOS reportedly works, which is
->   weak evidence that it does.
+> * **Establish whether a release survives an established SCO link.** This is
+>   the cheap experiment and it comes first, before any of the above is chosen.
+>   **It must use a multi-second hold**, for the reason in the box above: a tap
+>   releases inside the SCO setup window and will pass whether or not the hazard
+>   is real.
+>
+>   Two ways to run it, in order of cost:
+>
+>   1. **On iOS, no re-pairing needed.** Background the app so SCO drops and the
+>      button is alive; **press and hold**; bring the app to the foreground while
+>      still holding, so SCO rises under a held button; keep holding for several
+>      seconds; then release. If the `RELEASE edge` line appears, the release
+>      survives an established SCO link and the hazard is closed.
+>   2. **On macOS**, where SCO already rises on the transmit path: hold the
+>      accessory PTT for several seconds and confirm the release unkeys. Costs
+>      re-pairing the accessory away from the phone.
 >
 > Until that experiment is run, **do not implement the switch.**
 

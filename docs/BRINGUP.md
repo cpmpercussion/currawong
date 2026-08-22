@@ -1060,6 +1060,14 @@ independent, is unknown.
 > the session deactivated, zero delivered once `categoryChange` put the route on
 > `BluetoothHFP` at 16 kHz, and the link reporting `.connected` throughout.
 > "Keys for a while and then stops" is *keys until the audio session comes up*.
+> **Refined the same day:** the discriminator is not the route being HFP but the
+> **SCO link being established**. One complete cycle — press, release *and*
+> duplicate — was delivered with the route already `BluetoothHFP`, because a tap
+> outruns the ~163 ms SCO setup. Starvation begins once SCO settles, so the
+> danger is worst for a *held* press released seconds later, which is normal
+> operating practice. **Any test must use a multi-second hold; a tap proves
+> nothing.**
+>
 > Mechanism — radio coexistence starvation versus the handset changing mode —
 > is not yet distinguished, and which it is decides whether the fix is safe:
 > see the release-edge hazard in `BLUETOOTH-AUDIO.md`, which must be read before
@@ -1427,6 +1435,19 @@ node (`55553`) is the obvious place for check 1: hold the button, let it time
 out, and nobody else's channel is occupied while it happens.
 
 ### BU-10 — nobody has seen the Live Activity
+
+> ✅ **First evidence, 2026-08-22, from the `BU-14` session.** "An accessory keys
+> a backgrounded app" is no longer unobserved: ~25 accessory press/release pairs
+> were delivered to Currawong **while it was in the background**, logged edge by
+> edge. That answers the delivery half of this item. The Live Activity itself
+> still has not been watched on a locked phone.
+>
+> ⚠️ **And the obvious instrument does not reach that case.** Locking the phone
+> drops the `devicectl ... --console` tunnel — observed the same day as
+> `CoreDeviceError 3`, "the connection was invalidated" — and that also kills the
+> app it launched. So the log cannot be read across the very transition this item
+> is about. Either the diagnostics become readable *on the device*, or this item
+> is observed by eye rather than by log.
 
 **Opened 2026-08-20 with APP-3.** The code is there and every path that ends
 transmission is unit-tested against a recording presenter, on both platforms.
