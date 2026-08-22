@@ -20,6 +20,14 @@ day — four overs from the app, each seen to *end* by an independent observer �
 and `BU-9` records what trying to automate that turned up about the channel
 model.
 
+> 📄 **Handing over: read `HANDOFF-BU14.md` first.** Written at the end of the
+> 2026-08-22 session, which produced a new bug after each old one and is being
+> handed to a fresh pair of eyes. It carries the established hardware facts, what
+> is and is not proven about the fault, a table of eleven attempts and why each
+> failed, and the cheap experiments that would establish the cause — which is
+> still unknown. Everything built so far is *recovery* on top of an unknown cause,
+> which is why it kept producing new failure modes.
+
 **Inflection point, 2026-08-22.** After two failed attempts at `BU-17`, the
 operator settled the priority: a permanently lit accessory LED is acceptable if
 the button works. **The LED is not what blocks the button** — after a fresh
