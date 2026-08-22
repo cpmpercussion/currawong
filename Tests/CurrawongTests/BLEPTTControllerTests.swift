@@ -105,10 +105,11 @@ final class BLEPTTControllerTests: XCTestCase {
             "a healthy link must not be torn down to find out that it is healthy")
     }
 
-    /// The probe's answer as the device actually sends it: an empty value on
-    /// the readable characteristic, not a button signal.
+    /// The probe's answer as the central now reports it: tagged as the answer
+    /// to the read it issued, never as a notification — an empty value on the
+    /// readable characteristic, not a button signal.
     private func probeEcho(_ mapping: BLEPTTMapping) -> BLECentralEvent {
-        .notified(
+        .probeAnswered(
             id: mapping.accessoryID,
             signal: BLESignal(path: TestSignals.press.path, payload: Data()))
     }
@@ -129,10 +130,15 @@ final class BLEPTTControllerTests: XCTestCase {
     }
 
     /// Whether the controller has consumed this event yet — observable through
-    /// `lastSignal`, which every arriving signal updates.
+    /// `lastSignal`, which every arriving signal updates, probe answers
+    /// included.
     private func controllerSaw(_ controller: BLEPTTController, _ event: BLECentralEvent) -> Bool {
-        guard case .notified(_, let signal) = event else { return false }
-        return controller.lastSignal == signal
+        switch event {
+        case .notified(_, let signal), .probeAnswered(_, let signal):
+            return controller.lastSignal == signal
+        default:
+            return false
+        }
     }
 
     /// A probe that fails is what buys a rebuild.
@@ -237,6 +243,159 @@ final class BLEPTTControllerTests: XCTestCase {
         // The answer still resolves the check — the next route change may probe
         // again rather than being skipped as in-flight.
         central.clearCalls()
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
+    }
+
+    /// **A stray failure is not a probe's failure.** An errored characteristic
+    /// update with no check in flight answers no question anyone asked; acting
+    /// on it force-rebuilt a healthy link on one transient ATT error.
+    func testAnUnsolicitedProbeFailureLeavesTheLinkAlone() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        central.emit(.probeFailed(id: mapping.accessoryID, reason: "transient ATT error"))
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertFalse(
+            central.calls.contains(.disconnect(mapping.accessoryID)),
+            "an error with no probe outstanding must not tear down the link")
+        XCTAssertEqual(controller.linkState, .connected)
+    }
+
+    /// **A deadline is only evidence when a read actually went out.** The Q2L's
+    /// Classic half connecting fires a route change while its BLE half is
+    /// mid-discovery, so the probe silently cannot run — and the expiring
+    /// deadline must read that as silence, not death.
+    func testADeadlineWithNoReadIssuedLeavesTheLinkAlone() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, neverFiringBackstop: gate)
+
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
+        central.clearCalls()
+
+        // No `.probeIssued` arrives — nothing readable was discovered — and the
+        // deadline elapses.
+        gate.open()
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertFalse(
+            central.calls.contains(.disconnect(mapping.accessoryID)),
+            "a probe that never ran is silence, and silence is not evidence")
+
+        // And the check has ended rather than jammed: a later route change is
+        // free to ask again.
+        central.clearCalls()
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
+    }
+
+    /// **A probe's answer must never key the radio.** The Q2L's readable
+    /// characteristic answers with an empty payload only by luck; learn mode
+    /// accepts arbitrary accessories, and one whose press characteristic reads
+    /// back the press payload would otherwise be keyed by every post-over
+    /// probe — with no release ever coming.
+    func testAProbeAnswerThatEchoesThePressPayloadKeysNothing() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        let echo = BLECentralEvent.probeAnswered(
+            id: mapping.accessoryID, signal: TestSignals.press)
+        central.emit(echo)
+        await waitUntil("answer processed") { self.controllerSaw(controller, echo) }
+
+        XCTAssertEqual(sink.calls, [], "a read answer is the app asking, not the button")
+        XCTAssertFalse(controller.isAccessoryKeyed)
+        XCTAssertFalse(
+            controller.isButtonVerified,
+            "and it does not verify the button either — reads survive HFP call mode")
+    }
+
+    /// **The stale-deadline race.** Reconnect pressed inside a pending check's
+    /// deadline: the rebuild re-raises the in-flight flag the stale deadline
+    /// checks, so the deadline must die when the rebuild commits — or it fires
+    /// mid-rebuild and disconnects the link being rebuilt.
+    func testReconnectDuringAPendingCheckKillsTheStaleDeadline() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, neverFiringBackstop: gate)
+
+        controller.audioRouteDidChange()
+        central.emit(.probeIssued(id: mapping.accessoryID))
+        for _ in 0..<10 { await Task.yield() }
+        central.clearCalls()
+
+        controller.reconnectAccessory()
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+
+        // The stale deadline elapses mid-rebuild. Cancelled, it does nothing;
+        // alive, it would end the rebuild it knows nothing about.
+        gate.open()
+        for _ in 0..<20 { await Task.yield() }
+
+        let disconnects = central.calls.filter { $0 == .disconnect(mapping.accessoryID) }
+        XCTAssertEqual(disconnects.count, 1, "the stale deadline must not fire mid-rebuild")
+
+        // And the rebuild is still in flight, so a route change is coalesced —
+        // a probe here means the stale deadline falsely ended the rebuild.
+        central.clearCalls()
+        controller.audioRouteDidChange()
+        XCTAssertEqual(
+            central.calls, [],
+            "the stale deadline must not have cleared the rebuild's in-flight state")
+    }
+
+    /// **The absorbing state BU-14 could produce.** A link that dies silently
+    /// mid-press delivers neither the release nor a disconnection, so the
+    /// "accessory keyed" claim can never be withdrawn by an event — and it
+    /// guards every repair path. The operator's Reconnect is the escape: it
+    /// lets go of the claim (which can only unkey) and rebuilds.
+    func testReconnectClearsAStuckKeyedClaimAndRebuilds() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
+        await waitUntil("keyed") { controller.isAccessoryKeyed }
+        sink.clear()
+        central.clearCalls()
+
+        // The link now dies silently: no release, no disconnection. The
+        // operator presses Reconnect.
+        controller.reconnectAccessory()
+
+        XCTAssertFalse(controller.isAccessoryKeyed)
+        XCTAssertEqual(
+            sink.calls, [.released(.accessory, .accessoryReleased)],
+            "letting go of the claim must release the radio, never key it")
+        XCTAssertEqual(
+            central.calls, [.disconnect(mapping.accessoryID)],
+            "and the rebuild must actually run — the claim was the guard blocking it")
+    }
+
+    /// **SF-1 as the claim's backstop.** The watchdog fires precisely when no
+    /// release has arrived, so it is the one event that can withdraw a keyed
+    /// claim whose release is never coming — and withdrawing it brings the
+    /// repair machinery back to life.
+    func testAnExternalUnkeyWithdrawsTheKeyedClaim() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
+        await waitUntil("keyed") { controller.isAccessoryKeyed }
+        sink.clear()
+        central.clearCalls()
+
+        controller.radioUnkeyedExternally()
+
+        XCTAssertFalse(controller.isAccessoryKeyed)
+        XCTAssertEqual(
+            sink.calls, [],
+            "the radio has already unkeyed — this is the controller catching up, not an edge")
+
+        // With the claim withdrawn, a route change may check the link again.
         controller.audioRouteDidChange()
         XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
     }

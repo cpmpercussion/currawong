@@ -74,13 +74,16 @@ struct AccessoryIndicator: Equatable {
     ///     since it came up. **A connected link is not a working button** — see
     ///     `BLEPTTController.isButtonVerified` — and this indicator must not
     ///     claim otherwise, because an operator who believes they can key and
-    ///     cannot is worse off than one who knows they cannot.
+    ///     cannot is worse off than one who knows they cannot. No default, and
+    ///     deliberately not the once-default `true`: a call site that forgot
+    ///     the question would have compiled cleanly into "Accessory ready" over
+    ///     an unproven button, which is the exact lie the parameter removes.
     init(
         linkState: BLEPTTController.LinkState,
         isAccessoryConfigured: Bool,
         isAccessoryKeyed: Bool,
         isRemoteCommandEnabled: Bool,
-        isButtonVerified: Bool = true
+        isButtonVerified: Bool
     ) {
         // Keyed first: while a button is held, what it is doing outranks how it
         // got connected.
@@ -115,6 +118,13 @@ struct AccessoryIndicator: Equatable {
             systemImage = "dot.circle"
             title = "Accessory untested"
             emphasis = .working
+            // Its own label, not the fall-through "connected" one below: a
+            // VoiceOver operator asking this question needs the same honesty
+            // the glyph carries, and "connected" is the claim being avoided.
+            accessibilityLabel =
+                "PTT accessory: connected, but nothing has arrived from it yet — "
+                + "the button is untested"
+            return
         case .connected:
             systemImage = "dot.circle.fill"
             title = "Accessory ready"

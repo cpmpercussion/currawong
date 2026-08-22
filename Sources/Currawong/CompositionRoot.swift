@@ -255,6 +255,13 @@ final class CompositionRoot {
         accessory.isRebuildSafe = { [weak session] in
             session?.isIdleForAccessoryRepair ?? false
         }
+        // And the claim's backstop: the SF-1 watchdog fires precisely when no
+        // release has arrived, so it is the one event that can withdraw an
+        // accessory-keyed claim whose release is never coming — without it the
+        // claim guards every repair path closed, Reconnect included.
+        session.onWatchdogUnkey = { [weak accessory] in
+            accessory?.radioUnkeyedExternally()
+        }
     }
 
     /// Starts everything with a process-long lifetime. Idempotent, and called

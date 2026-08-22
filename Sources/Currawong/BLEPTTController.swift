@@ -208,6 +208,16 @@ final class BLEPTTController: ObservableObject {
     /// a verify window that measured how recently the operator pressed the button.
     private var isRebuildInFlight = false
 
+    /// Whether the current check or rebuild has actually issued a read.
+    ///
+    /// The deadline needs the distinction: a probe that was issued and never
+    /// answered is a dead link, but a probe that could not run — nothing
+    /// readable discovered yet — is silence, and silence is not evidence.
+    /// Treating the two alike is how the Q2L's Classic half connecting (a route
+    /// change fired while its BLE half was still mid-discovery) got a healthy
+    /// link torn down on a one-second clock.
+    private var hasProbeBeenIssued = false
+
     /// Repairs attempted since the link last produced anything, so escalation is
     /// bounded. Reset by data arriving, and by the operator asking directly.
     private var repairAttempts = 0
@@ -500,6 +510,10 @@ final class BLEPTTController: ObservableObject {
         }
 
         isRebuildInFlight = true
+        // The deadline is armed now, so a link whose probe never answers is
+        // still bounded — but whether its expiry *means* anything depends on a
+        // read having actually been issued, which `.probeIssued` reports.
+        hasProbeBeenIssued = false
         Diagnostics.route("accessory check (\(reason)): probing before rebuilding")
         central?.probeForLiveness(id)
         armProbeDeadline()
@@ -508,11 +522,38 @@ final class BLEPTTController: ObservableObject {
     /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
     /// because a person pressing a button has better information than a timer.
     func reconnectAccessory() {
+        // A keyed claim the accessory can no longer withdraw is let go of
+        // first. Every ordinary clear path needs an event from the link — a
+        // release, a disconnection — and a link that died silently mid-press
+        // (the BU-14 signature) delivers neither, so without this the claim
+        // held the `!isAccessoryKeyed` guard closed forever and the one button
+        // meant to fix a dead link was the one thing it disabled. Fail-safe:
+        // this can only ever *unkey* the radio.
+        if isAccessoryKeyed {
+            isAccessoryKeyed = false
+            sink?.pttReleased(from: .accessory, reason: .accessoryReleased)
+        }
         // A fresh budget: the operator pressing a button is new information, and
         // whatever exhausted the automatic attempts may since have changed.
         repairAttempts = 0
         isRebuildInFlight = false
         repair(reason: "operator asked", force: true)
+    }
+
+    /// **The radio stopped transmitting without the accessory saying so** — the
+    /// SF-1 watchdog, via the composition root.
+    ///
+    /// The claim is withdrawn because nothing else can withdraw it: the
+    /// watchdog fires precisely when no release has arrived, and a link that
+    /// died silently mid-press delivers neither a release nor a disconnection.
+    /// Left standing, the claim keeps the repair guards closed and the
+    /// indicator saying "Accessory keyed" over a radio that is no longer
+    /// transmitting. No sink call — the radio has already unkeyed; this is the
+    /// controller catching up, not a release edge.
+    func radioUnkeyedExternally() {
+        guard isAccessoryKeyed else { return }
+        isAccessoryKeyed = false
+        Diagnostics.keying("accessory keyed claim withdrawn: the radio unkeyed without it")
     }
 
     /// Rebuild the link now.
@@ -553,6 +594,15 @@ final class BLEPTTController: ObservableObject {
         lastRepairAt = now()
         repairAttempts += 1
         isRebuildInFlight = true
+        hasProbeBeenIssued = false
+
+        // A deadline armed for an earlier check dies here. The rebuild takes a
+        // measured 1.6–2.6 s and the deadline fires at one, so a stale one left
+        // running would expire mid-rebuild — falsely clearing the in-flight
+        // flag, or worse, issuing a second disconnect into the link being
+        // rebuilt. The rebuild's own deadline is armed when its probe actually
+        // goes out, after the new link subscribes.
+        escalationTask?.cancel()
 
         // The link is not to be trusted again until something arrives on it.
         isButtonVerified = false
@@ -608,6 +658,18 @@ final class BLEPTTController: ObservableObject {
         escalationTask = Task { @MainActor [weak self] in
             await deadline()
             guard !Task.isCancelled, let self, self.isRebuildInFlight else { return }
+            guard self.hasProbeBeenIssued else {
+                // No read ever went out — nothing readable had been discovered
+                // when the probe ran. That is silence, not evidence: acting on
+                // it tore down a healthy link whose Classic half had just fired
+                // a route change while its BLE half was mid-discovery. The
+                // check simply ends; a later route change is free to ask again.
+                Diagnostics.route(
+                    "accessory probe could not run before the deadline; "
+                        + "silence is not evidence, leaving the link alone")
+                self.isRebuildInFlight = false
+                return
+            }
             Diagnostics.route("accessory probe did not answer in time")
             self.handleProbeOutcome(alive: false, detail: "no answer within the deadline")
         }
@@ -715,28 +777,58 @@ final class BLEPTTController: ObservableObject {
                 armProbeDeadline()
             }
 
-        case .probeFailed(let id, let reason):
+        case .probeIssued(let id):
             guard id == wantedAccessory else { return }
-            Diagnostics.route("accessory probe failed: \(reason ?? "no reason")")
-            handleProbeOutcome(alive: false, detail: reason)
+            hasProbeBeenIssued = true
+            // Re-armed from the moment a read actually went out, so the wait
+            // bounds the answer rather than the discovery that preceded it.
+            if isRebuildInFlight { armProbeDeadline() }
 
-        case .notified(let id, let signal):
+        case .probeAnswered(let id, let signal):
             guard id == wantedAccessory else { return }
-            // Anything arriving answers an outstanding probe: the link
-            // demonstrably carries data. This must not be gated on
-            // `isButtonVerified` — when it was, a probe's answer on an
+            lastSignal = signal
+            Diagnostics.route(
+                "accessory probe answered "
+                    + "\(signal.path.service)/\(signal.path.characteristic) "
+                    + "= \(signal.payloadDescription)")
+            // The answer resolves the check whatever the verification state.
+            // When this was gated on `isButtonVerified`, a probe's answer on an
             // already-verified link was swallowed, the deadline was never
             // cancelled, and every post-over route change tore down a healthy
             // link one second after it had answered (measured on device
             // 2026-08-22, three overs in a row).
+            //
+            // And that is *all* it does. The answer travels the read path,
+            // which the accessory keeps serving even while it suppresses
+            // notifications in HFP call mode, so it never verifies the button —
+            // and it never reaches the runtime mapping, because a device whose
+            // press characteristic reads back the press payload would otherwise
+            // be keyed by every post-over probe, with no release ever coming.
             if isRebuildInFlight {
                 handleProbeOutcome(alive: true, detail: nil)
             }
-            // But only the button's own signals verify the *button*. A probe's
-            // answer travels the read path, which the accessory keeps serving
-            // even while it suppresses notifications in HFP call mode (Mac
-            // cross-test, 2026-08-22) — counting it as verification is how a
-            // dead button was labelled "ready".
+
+        case .probeFailed(let id, let reason):
+            guard id == wantedAccessory else { return }
+            Diagnostics.route("accessory probe failed: \(reason ?? "no reason")")
+            // Only a probe this controller has in flight can fail. The central
+            // filters too, but the belt matters: acting on a stray failure
+            // force-rebuilds a healthy link and clears its verification.
+            guard isRebuildInFlight else { return }
+            handleProbeOutcome(alive: false, detail: reason)
+
+        case .notified(let id, let signal):
+            guard id == wantedAccessory else { return }
+            // A notification during a check is the accessory speaking, which
+            // answers the liveness question at least as well as the probe does:
+            // the link demonstrably carries data.
+            if isRebuildInFlight {
+                handleProbeOutcome(alive: true, detail: nil)
+            }
+            // And only the button's own signals verify the *button* — the
+            // accessory serves other traffic even while it suppresses the
+            // button's notifications in HFP call mode (Mac cross-test,
+            // 2026-08-22), so a battery level proves the link, not the button.
             if !isButtonVerified, isButtonSignal(signal) {
                 isButtonVerified = true
                 // Restores the full budget for the next time the link dies.

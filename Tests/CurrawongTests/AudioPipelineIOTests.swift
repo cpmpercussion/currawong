@@ -164,7 +164,9 @@ final class AudioPipelineIOTests: XCTestCase {
         let first = FakeCapturePipeline(startCaptureError: StubError(description: "first no"))
         let second = FakeCapturePipeline(startCaptureError: StubError(description: "second no"))
         let factory = PipelineFactory([first, second])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        // The discard on, explicitly: the third engine below is the iOS
+        // hand-back's, and these tests run on macOS, where it is off by default.
+        let io = AudioPipelineIO(makePipeline: factory.make, discardsEngineOnHandback: true)
 
         do {
             try io.startCapture { _ in }
@@ -269,11 +271,21 @@ private final class LingerGate: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting: [CheckedContinuation<Void, Never>] = []
     private var isOpen = false
+    private var storedWaitsBegun = 0
+
+    /// How many lingers have been entered, ever — a deferred hand-back is
+    /// observable as a second linger where there would have been one.
+    var waitsBegun: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWaitsBegun
+    }
 
     var wait: @Sendable () async -> Void {
         { [self] in
             await withCheckedContinuation { continuation in
                 lock.lock()
+                storedWaitsBegun += 1
                 if isOpen {
                     lock.unlock()
                     continuation.resume()
@@ -408,7 +420,10 @@ final class AudioPipelineIOPolicyTests: XCTestCase {
         let io = AudioPipelineIO(
             makePipeline: factory.make,
             applyPolicy: recorder.apply,
-            listeningLinger: gate.wait)
+            listeningLinger: gate.wait,
+            // Explicit: the default is platform truth, and these tests run on
+            // macOS, where the discard is off.
+            discardsEngineOnHandback: true)
         try io.configureSession()
         try io.startCapture { _ in }
         io.stopCapture()
@@ -450,6 +465,60 @@ final class AudioPipelineIOPolicyTests: XCTestCase {
         await waitUntil("route handed back on the retry") {
             recorder.applied == [.listening]
         }
+    }
+
+    /// **Reply audio is not discarded with the engine.** Far-side replies land
+    /// at a measured 1.6–2.6 s and the linger is 3 s, so the discard would
+    /// routinely fall mid-reply — and `playerNode.stop()` drops every scheduled
+    /// buffer. Audio arriving during the linger defers the hand-back for
+    /// another linger; one that passes quiet is a queue that has drained.
+    func testReplyAudioArrivingDuringTheLingerDefersTheHandback() async throws {
+        let gate = LingerGate()
+        let recorder = PolicyRecorder()
+        let factory = PipelineFactory([])
+        let io = AudioPipelineIO(
+            makePipeline: factory.make,
+            applyPolicy: recorder.apply,
+            listeningLinger: gate.wait,
+            discardsEngineOnHandback: true)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        let lingersBefore = gate.waitsBegun
+        io.stopCapture()
+
+        // The far side replies while the linger is still running.
+        io.enqueuePlayback([7])
+        gate.open()
+
+        await waitUntil("route handed back") { recorder.applied.last == .listening }
+        XCTAssertGreaterThanOrEqual(
+            gate.waitsBegun, lingersBefore + 2,
+            "audio during the linger must buy the reply another linger, not a discard")
+        // And the reply reached the engine that was playing it, not the bin.
+        XCTAssertEqual(factory.built.first?.played, [[7]])
+    }
+
+    /// The platform gate: told not to discard — the macOS default, where the
+    /// system manages its own routes — the hand-back still applies the policy
+    /// but leaves the engine, and the audio it holds, alone.
+    func testTheHandbackLeavesTheEngineAloneWhenDiscardIsOff() async throws {
+        let gate = LingerGate()
+        let recorder = PolicyRecorder()
+        let factory = PipelineFactory([])
+        let io = AudioPipelineIO(
+            makePipeline: factory.make,
+            applyPolicy: recorder.apply,
+            listeningLinger: gate.wait,
+            discardsEngineOnHandback: false)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        io.stopCapture()
+
+        gate.open()
+        await waitUntil("route handed back") { recorder.applied.last == .listening }
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(factory.built.count, 1, "no engine may be discarded or rebuilt")
     }
 
     /// Two overs inside one linger produce exactly one hand-back once the
