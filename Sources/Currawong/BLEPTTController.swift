@@ -175,16 +175,28 @@ final class BLEPTTController: ObservableObject {
     /// into one reconnect instead of one per change.
     private var lastRepairAt: Date?
 
-    /// **The only timer left, and it is a backstop rather than a mechanism.**
+    /// **How long to wait for a probe's answer, and why a wait is unavoidable.**
     ///
-    /// A probe answers or fails, and both arrive on their own — that is what
-    /// makes the ladder event-driven. But if CoreBluetooth ever produced neither,
-    /// the controller would sit in ``isRebuildInFlight`` forever and never repair
-    /// again, which is silent permanent breakage of exactly the kind this whole
-    /// item is about. So there is one long wait whose *only* job is to unstick
-    /// that. If it is firing in practice, something is wrong with the seam, not
-    /// with the length of the wait.
-    private let stuckProbeBackstop: @Sendable () async -> Void
+    /// A read that succeeds calls back quickly — 205 ms, measured on the device.
+    /// A read on a **dead** link calls back not at all: CoreBluetooth does not
+    /// time reads out, so there is no failure event to wait for. Silence *is* the
+    /// negative answer, and silence can only be recognised by deciding how long
+    /// is long enough.
+    ///
+    /// So this is not one of the timing guesses that were removed from this class.
+    /// Those inferred behaviour from durations — how long a route takes to settle,
+    /// how long before an operator would have pressed the button. This one bounds
+    /// a wait for an answer that may never come, which is a different thing and
+    /// genuinely required.
+    ///
+    /// **Short on purpose.** It was ten seconds when it was only a backstop
+    /// against a seam that misbehaved, and with probe-first that became the
+    /// recovery time for a dead link: "red LED, no button, then it gets sorted
+    /// after a while", and the while was the backstop. A second is comfortably
+    /// more than a healthy read needs and turns a dead link's cost into roughly a
+    /// second plus a rebuild — better than the 1.6-2.6 s that an unconditional
+    /// rebuild cost after *every* over, healthy or not.
+    private let probeDeadline: @Sendable () async -> Void
 
     /// Whether a rebuild is between its disconnect and its answer.
     ///
@@ -223,15 +235,15 @@ final class BLEPTTController: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         },
         now: @escaping @Sendable () -> Date = Date.init,
-        stuckProbeBackstop: @escaping @Sendable () async -> Void = {
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
+        probeDeadline: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     ) {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
         self.now = now
-        self.stuckProbeBackstop = stuckProbeBackstop
+        self.probeDeadline = probeDeadline
         self.mapping = store.loadMapping()
     }
 
@@ -487,7 +499,7 @@ final class BLEPTTController: ObservableObject {
         isRebuildInFlight = true
         Diagnostics.route("accessory check (\(reason)): probing before rebuilding")
         central?.probeForLiveness(id)
-        armStuckProbeBackstop()
+        armProbeDeadline()
     }
 
     /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
@@ -548,7 +560,7 @@ final class BLEPTTController: ObservableObject {
         // through `handle(_:)`, which is the same path a real link drop takes —
         // so there is exactly one reconnection routine, not two.
         central?.disconnect(id)
-        armStuckProbeBackstop()
+        armProbeDeadline()
     }
 
     /// **The rebuild's answer arrived: act on it.**
@@ -577,18 +589,16 @@ final class BLEPTTController: ObservableObject {
         repair(reason: "probe failed: \(detail ?? "no reason")", force: true)
     }
 
-    /// Arm the one remaining timer, whose only job is to unstick a probe that
-    /// never answered *or* failed. See ``stuckProbeBackstop``.
-    private func armStuckProbeBackstop() {
+    /// Bound the wait for a probe's answer. See ``probeDeadline`` for why a bound
+    /// is required rather than merely convenient.
+    private func armProbeDeadline() {
         escalationTask?.cancel()
-        let backstop = stuckProbeBackstop
+        let deadline = probeDeadline
         escalationTask = Task { @MainActor [weak self] in
-            await backstop()
+            await deadline()
             guard !Task.isCancelled, let self, self.isRebuildInFlight else { return }
-            Diagnostics.route(
-                "accessory probe never answered — unsticking. This should not "
-                    + "happen; the seam owes an answer either way.")
-            self.handleProbeOutcome(alive: false, detail: "probe never answered")
+            Diagnostics.route("accessory probe did not answer in time")
+            self.handleProbeOutcome(alive: false, detail: "no answer within the deadline")
         }
     }
 
