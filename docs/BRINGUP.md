@@ -122,9 +122,9 @@ keep treating the app as unproven on air.
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
-| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE FOUND 2026-08-22: the iOS audio session.** Notifications are delivered on A2DP and *not at all* on HFP — four transitions, ~25 presses delivered with the session down, zero with it up, link reporting `.connected` throughout. "Stops" = "the audio session came up". Fix is the iOS harmonisation, gated on the release-edge hazard in `BLUETOOTH-AUDIO.md` |
+| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE PROVEN 2026-08-22 (evening): the accessory itself suppresses its BLE notifications while its Classic side sits in an idle HFP call.** Cross-tested with the Mac holding the BLE link while the phone held the call: zero notifications with the LED red, the same subscription delivering again the moment call mode ended — no reconnect, no re-subscribe. Reads answered throughout, which is how every probe lied. iOS shows it and macOS never did because iOS holds the session forever (`BU-17`) while macOS drops SCO ~2.1 s after capture — so `BU-14` **is** `BU-17`, and the fix is releasing the session when idle. Not fixable by link repair; the day's two probe-machinery bugs are fixed regardless |
 | BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race |
-| BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. Blocks BU-14: the button is starved for as long as HFP is up |
+| BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. The harmonisation is the fix for both, and it is safety-relevant now, not cosmetic |
 | BU-15 | **The first transmit after launch does a visible dance** — press PTT, handset beeps, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS, Q2L) | **Diagnosed 2026-08-22, not yet fixed.** Bringing HFP up changes the engine's configuration (A2DP device → HFP device, 44100 → 16000 Hz), `AVAudioEngineConfigurationChange` fires `.routeChanged`, and `resumeAcrossRouteChange()` correctly drops transmit and keys back down. The machinery is working as specified; the operator should not have to watch it |
 
 ---
@@ -1068,13 +1068,65 @@ the order the code makes likely — not findings.
 **Closed when** a full QSO is held through the accessory — heard both ways, more
 than one over, with the last over as good as the first.
 
-### BU-14 — the accessory's PTT button keys for a while and then stops 🔧 OPEN 2026-08-21
+### BU-14 — the accessory's PTT button keys for a while and then stops 🔬 ROOT CAUSE PROVEN 2026-08-22
 
 **What the operator sees.** The button can be got working — "starts working a
 bit" — and then stops. Whether this is BU-13's fault wearing a second face, or
 independent, is unknown.
 
+> ### ✅ ROOT CAUSE PROVEN 2026-08-22 (evening, cross-transport test): the
+> ### accessory suppresses its own BLE notifications while in HFP call mode
+>
+> The decisive experiment split the Q2L's two halves across two machines: the
+> **Mac** held the BLE link (subscribed to `FF00/FF01`, receiving clean
+> press/release edges), while the **phone** ran Currawong and brought the HFP
+> call up on the Classic side via an on-screen over. Result:
+>
+> * LED red (call up, over ended): PTT presses produced **zero notifications at
+>   the Mac** — a different central, OS, and Bluetooth stack from the one that
+>   ever showed the fault. The BLE link never dropped.
+> * Currawong quit, SCO down, LED cleared: the **same** Mac connection and
+>   **same** subscription delivered the next presses immediately. No reconnect,
+>   no re-subscribe, nothing repaired.
+>
+> So the suppression is in the accessory (firmware or its single 2.4 GHz
+> radio's scheduling), it is gated on the Classic side being in an **idle**
+> call — notifications flow fine *during* an over with SCO streaming, which is
+> why release edges always arrived mid-over — and it is fully reversible the
+> moment call mode ends. Reads are answered throughout, which is why a liveness
+> probe can never see it (§3's "different paths", now explained).
+>
+> **This resolves the whole contradiction pile below.** The first session's
+> "root cause: the audio session" was *right*; its retraction was reasonable on
+> the evidence then available but wrong. Why macOS never showed it: macOS drops
+> SCO ~2.1 s after capture stops, so the accessory exits call mode and
+> self-heals before the next press. iOS never releases the session — `BU-17` —
+> so call mode persists indefinitely and the button stays dead indefinitely.
+> **`BU-14` and `BU-17` are one fault**, and the fix is `BU-17`'s: release or
+> downgrade the audio session when idle (the RC-12 `.listening` policy and
+> RC-13 route-change causes exist for exactly this). Why a reconnect "usually"
+> recovered it: a fresh subscribe pokes the accessory into pushing again even
+> in call mode — a workaround that explains the repair machinery's partial
+> successes, not a fix.
+>
+> The same evening's instrumented run also found and fixed **two deterministic
+> bugs in the repair machinery itself** (`BLEPTTController`): a probe's answer
+> on an already-verified link was swallowed — the deadline-cancel lived inside
+> the unverified→verified transition — so every post-over route change tore
+> down a healthy link one second after it had answered; and `isButtonVerified`
+> was set by *any* arriving data including the probe's own read echo, which is
+> how a dead button was labelled "Accessory ready". Verification now requires
+> the button's own signals; a probe answer only ends the repair ladder. Every
+> apparent "death" in that run was the first bug, not the underlying fault.
+>
+> Evidence: `experiment-data/q2l-ble-probe/ios-session12-*.log` (the app side,
+> console attached from t=0) and `mac-crosstest-1.log` (the Mac side), with the
+> advert witness in `witness-session1.log`.
+
 > ### ⛔ Corrected 2026-08-22 (second session): it is **not** the audio session
+> *(superseded in turn by the cross-transport proof above: the observations
+> here are all real, but "the subscription dies" was the wrong reading of a
+> muted accessory — the subscription was alive the whole time)*
 >
 > **The BLE subscription dies silently and never recovers.** Notifications stop,
 > `linkState` stays `.connected`, and **no `.disconnected` event is delivered** —
