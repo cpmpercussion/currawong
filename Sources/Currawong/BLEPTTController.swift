@@ -559,8 +559,14 @@ final class BLEPTTController: ObservableObject {
         // Disconnect only. The `.disconnected` event drives the reconnect
         // through `handle(_:)`, which is the same path a real link drop takes —
         // so there is exactly one reconnection routine, not two.
+        // **No deadline armed here.** A rebuild has not issued a probe — probes
+        // go out when the new link finishes subscribing, which is after the
+        // reconnection. Arming it here started the clock about a second before
+        // the probe existed, so the deadline expired 2 ms after reconnect and
+        // escalated into a link that was still being built. Three rebuilds in
+        // four seconds, each killing what the last one made. Measured
+        // 2026-08-22; invisible while the wait was ten seconds, fatal at one.
         central?.disconnect(id)
-        armProbeDeadline()
     }
 
     /// **The rebuild's answer arrived: act on it.**
@@ -697,6 +703,11 @@ final class BLEPTTController: ObservableObject {
             if repairAttempts > 0, learner == nil {
                 Diagnostics.route("accessory liveness probe: reading the link")
                 central?.probeForLiveness(id)
+                // Re-armed per probe, deliberately. Characteristic discovery
+                // arrives service by service and the earliest probes of a
+                // rebuild cannot issue a read at all — so the deadline must be
+                // measured from the *last* probe attempted, not the first.
+                armProbeDeadline()
             }
 
         case .probeFailed(let id, let reason):
