@@ -1549,14 +1549,12 @@ final class RadioSession: ObservableObject {
                 lastStopReason = .transmitFailed
                 transmitState = link.transmitState()
                 refreshActivity()
-                Diagnostics.keying.error(
-                    "key-down FAILED: \(String(describing: error), privacy: .public)")
+                Diagnostics.keyingFailure("key-down FAILED: \(error)")
                 present(title: "Could not transmit", message: "\(error)")
                 return
             }
             isTransmitting = true
-            Diagnostics.keying.info(
-                "key-down on air: \(self.audio.audioStateDescription, privacy: .public)")
+            Diagnostics.keying("key-down on air: \(audio.audioStateDescription)")
             // Each key-down starts its own watchdog, including one this class
             // made after a route change.
             watchdogDeadline = now().addingTimeInterval(transmitTimeout.seconds)
@@ -1564,6 +1562,11 @@ final class RadioSession: ObservableObject {
             transmitState = link.transmitState()
             refreshActivity()
         } else {
+            // Captured before the stop, for the log below only: this branch runs
+            // on every apply with `transmitDesired == false`, including ones
+            // where nothing was ever keyed, and a key-up line for those is noise
+            // that buries the real ones.
+            let wasTransmitting = isTransmitting
             // Unconditional rather than guarded by `isTransmitting`. Both
             // calls are documented as safe when nothing is running, and the
             // failure mode of a redundant stop is nothing at all, while the
@@ -1576,8 +1579,9 @@ final class RadioSession: ObservableObject {
             // After the stop, deliberately: the interesting question is what the
             // route looks like once the engine has gone down, which is where
             // BU-13 expects to see `oldDeviceUnavailable`.
-            Diagnostics.keying.info(
-                "key-up: \(self.audio.audioStateDescription, privacy: .public)")
+            if wasTransmitting {
+                Diagnostics.keying("key-up: \(audio.audioStateDescription)")
+            }
         }
     }
 
@@ -1610,8 +1614,10 @@ final class RadioSession: ObservableObject {
         // Logged before the switch, so a signal that is deliberately ignored
         // still leaves a trace. "Arriving and being ignored" versus "not
         // arriving at all" is the distinction BU-13 turns on.
-        Diagnostics.route.info(
-            "signal \(String(describing: signal), privacy: .public) isTransmitting=\(self.isTransmitting, privacy: .public) held=\(self.heldSource != nil, privacy: .public) resumes=\(self.automaticResumes, privacy: .public) audio=\(self.audio.audioStateDescription, privacy: .public)")
+        Diagnostics.route(
+            "signal \(signal) isTransmitting=\(isTransmitting) "
+                + "held=\(heldSource != nil) resumes=\(automaticResumes) "
+                + "audio=\(audio.audioStateDescription)")
         switch signal {
         case .interruptionBegan:
             endTransmit(reason: .audioInterrupted)

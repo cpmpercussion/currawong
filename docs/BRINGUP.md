@@ -25,7 +25,11 @@ button is in hand, and neither half of it works for long — `BU-13` (the audio
 stops after keying) and `BU-14` (the button stops keying). **Probed properly on
 2026-08-22**, which answered the question both items were waiting on — the
 device attaches as *two* Bluetooth devices, and the PTT is BLE rather than a
-media key — and turned up `BU-15` on the way. The transport map, the measured
+media key — and turned up `BU-15` on the way. **Then, on the phone the same day,
+`BU-14`'s root cause: the button's BLE notifications are not delivered while the
+audio session holds HFP up, which on iOS is always.** `BU-16` and `BU-17` came
+out of that session too, and `BU-10` got its first evidence — the accessory does
+reach a backgrounded app. The transport map, the measured
 HFP costs, and why macOS is the reference behaviour rather than the odd one out
 are in `BLUETOOTH-AUDIO.md`; read it before either item. Every one of PT-1 …
 PT-4 shipped under APP-5 against a fake, so this is bring-up of the input and
@@ -97,7 +101,9 @@ keep treating the app as unproven on air.
 | BU-11 | An empty rounded panel hangs under the Channel name field on launch, with no interaction | **Diagnosed 2026-08-21, and it is not ours.** It is AppKit's *one-time-code* AutoFill panel — `NSAutoFillHeuristicController` → `SPSafariPlatformSupport`, remote content from `com.apple.SafariPlatformSupport.Helper` — shown with nothing to offer. It goes when the app is re-signed with no entitlements. No public API turns it off; **no app-side fix, and nothing to do but decide whether to report it** |
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
-| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | Open, 2026-08-21. **Which input answered 2026-08-22: BLE GATT** (`FF00/FF01`, `01`/`00`, real edges), so the PT-4 traps are ruled out and the suspects are in `BLEPTTController`. See `BLUETOOTH-AUDIO.md` |
+| BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE FOUND 2026-08-22: the iOS audio session.** Notifications are delivered on A2DP and *not at all* on HFP — four transitions, ~25 presses delivered with the session down, zero with it up, link reporting `.connected` throughout. "Stops" = "the audio session came up". Fix is the iOS harmonisation, gated on the release-edge hazard in `BLUETOOTH-AUDIO.md` |
+| BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race |
+| BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. Blocks BU-14: the button is starved for as long as HFP is up |
 | BU-15 | **The first transmit after launch does a visible dance** — press PTT, handset beeps, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS, Q2L) | **Diagnosed 2026-08-22, not yet fixed.** Bringing HFP up changes the engine's configuration (A2DP device → HFP device, 44100 → 16000 Hz), `AVAudioEngineConfigurationChange` fires `.routeChanged`, and `resumeAcrossRouteChange()` correctly drops transmit and keys back down. The machinery is working as specified; the operator should not have to watch it |
 
 ---
@@ -1047,6 +1053,26 @@ than one over, with the last over as good as the first.
 bit" — and then stops. Whether this is BU-13's fault wearing a second face, or
 independent, is unknown.
 
+> ✅ **ROOT CAUSE FOUND 2026-08-22 — `BU-14` is the iOS audio session.**
+> The button's notifications are delivered while the route is A2DP and **not
+> delivered at all** while it is HFP. Observed across four transitions on the
+> phone with `Diagnostics` streaming: ~25 consecutive presses all delivered with
+> the session deactivated, zero delivered once `categoryChange` put the route on
+> `BluetoothHFP` at 16 kHz, and the link reporting `.connected` throughout.
+> "Keys for a while and then stops" is *keys until the audio session comes up*.
+> Mechanism — radio coexistence starvation versus the handset changing mode —
+> is not yet distinguished, and which it is decides whether the fix is safe:
+> see the release-edge hazard in `BLUETOOTH-AUDIO.md`, which must be read before
+> anything is implemented. **The fix is the iOS harmonisation, and it is not
+> the cosmetic change it looked like.**
+>
+> Two things follow immediately. **The link-state indicator cannot be trusted**
+> — this item's own advice was to look at it when the button stops, and it says
+> `connected` while nothing arrives. And **the accessory does reach a
+> backgrounded app**: the ~25 delivered presses were all with Currawong in the
+> background, which is the first evidence on that question and belongs to
+> `BU-10`.
+
 **Answered 2026-08-22: it is BLE GATT.** The button is `FF00/FF01` on the
 accessory's BLE peripheral — `0x01` press, `0x00` release, with real edges
 (3.088 s measured for a three-second hold, 0.090 s for a tap). So **the second
@@ -1127,6 +1153,12 @@ So the flash is SF-3 firing on a route change that the act of keying caused.
 **Nothing here is a bug in isolation** — which is why it needs writing down
 rather than fixing in passing.
 
+> ⚠️ **On iOS the same flash has a *different* cause, found 2026-08-22.** A tap
+> outruns the key-down path, so the transmitter keys after the button is already
+> released. That is `BU-16`, it is not this item, and on the phone it — not the
+> route-change resume — is what the operator was seeing. Diagnose which one is
+> in play before treating a flash as this item.
+
 **Why mostly the first one.** The dance needs the configuration change to land
 *while the engine is already running*. On a warm link — inside the ~2.1 s SCO
 linger, or when SCO comes up before the engine finishes starting — there is no
@@ -1169,6 +1201,95 @@ timestamps for a dozen presses.
 **Closed when** the first transmit of a session looks like every other one, with
 SF-3 still demonstrably dropping transmit on a route change the app did not
 cause.
+
+### BU-16 — a tap outruns the key-down, so the radio keys after you let go 🔬 DIAGNOSED 2026-08-22
+
+**Observed on iOS**, accessory PTT, one quick tap, in this order:
+
+```
+accessory notify FF00/FF01 = 01  → PRESS edge
+accessory notify FF00/FF01 = 00  → RELEASE edge (wasKeyed=true)
+key-down on air                            ← keys AFTER the release
+accessory notify FF00/FF01 = 00  → RELEASE edge (wasKeyed=false)
+key-up
+```
+
+The press begins an asynchronous key-down — `audio.startCapture(...)` and then
+`await link.startTransmit()` — and on a Bluetooth accessory `startCapture` alone
+costs ~163 ms while the SCO link comes up (`BLUETOOTH-AUDIO.md`). A tap shorter
+than that completes before the key-down does, so the transmitter goes on air
+*after* the operator has let go and comes off a moment later.
+
+**It is safe and it is still wrong.** Safe because the release set
+`transmitDesired = false` and the following apply unkeyed it — no stuck
+microphone, and the existing flag ordering is what saved it. Wrong because the
+operator transmitted something they did not ask to transmit, after releasing,
+and because on screen it is indistinguishable from `BU-15`'s route-change flash
+while having nothing to do with it.
+
+**Not a race in the ordinary sense.** Nothing here is unsynchronised — every
+step is on the main actor, in the documented order. It is a *latency* fault: the
+button's edges are 90 ms apart (measured on this device) and the key-down path
+is longer than that.
+
+**Where the fix probably is** — not decided:
+
+* **Do not go on air for a press that has already been released.** Re-check
+  `transmitDesired` after `startCapture` returns and before
+  `link.startTransmit()`. Cheap, and it turns the unwanted over into nothing at
+  all. The care needed is the actor-reentrancy rule: the re-check and the
+  decision must sit in the same isolated region with no `await` between them.
+* **Require a minimum hold** before keying. Rejected on sight for a radio: it
+  adds latency to every deliberate press to fix an accidental one.
+* **Leave it and let the UI stop lying**, i.e. do not show red until on air is
+  confirmed. Does not stop the transmission.
+
+**Closed when** a tap shorter than the key-down path produces either a complete
+short over or nothing at all, and never a transmission that starts after the
+release.
+
+### BU-17 — the audio session is never released, so the accessory is held in a call forever 🔬 DIAGNOSED 2026-08-22
+
+**What the operator sees.** The accessory's LED stays lit whenever Currawong is
+in the foreground, whether or not a channel is connected. Disconnecting from a
+reflector puts it out for a moment and then it comes back **with nothing
+connected at all**.
+
+**What the log says.** On disconnect:
+
+```
+route changed: reason=override           in=BluetoothHFP      out=BluetoothHFP  16000 Hz
+route changed: reason=override           in=MicrophoneBuiltIn out=Speaker       48000 Hz
+route changed: reason=newDeviceAvailable in=BluetoothHFP      out=BluetoothHFP  16000 Hz
+```
+
+The session is deactivated and reactivated; `.defaultToSpeaker` briefly wins;
+then HFP is re-offered and taken again. An active `.playAndRecord` +
+`.allowBluetooth` session does not merely *start* on HFP, it **keeps returning**
+to it, because the category demands an input route and HFP is the only Bluetooth
+one available.
+
+**Three costs, and the third is the one that matters.**
+
+1. The accessory is held in a hands-free call indefinitely — battery, and an LED
+   that reports nothing useful.
+2. Receive audio is 16 kHz mono the whole time (`BLUETOOTH-AUDIO.md`).
+3. **It keeps `BU-14` unfixable by any means short of releasing the session.**
+   The button is starved for exactly as long as HFP is up, and on iOS today that
+   is "always". Disconnecting is not enough.
+
+**Note the `MicrophoneBuiltIn` line.** For the moment `.defaultToSpeaker` wins,
+the input route is the *phone's own microphone*. Harmless here because nothing
+was keyed — but the same flap during an over is the app transmitting from the
+phone's mic with the accessory at the operator's mouth, which is the "sounds
+like a pocket" fault `BU-13` warns about, and this is the first sight of the
+mechanism that would cause it.
+
+**Closed when** the accessory's LED is out whenever the app is not transmitting,
+and the route is A2DP between overs. That is the same change as the iOS
+harmonisation in `BLUETOOTH-AUDIO.md` — **and it is gated on the release-edge
+hazard recorded there.** Do not close this one by making the session shorter
+without reading it.
 
 ### BU-12 — the app is taller than its window, and the overflow is centred ✅ FIXED 2026-08-21
 
