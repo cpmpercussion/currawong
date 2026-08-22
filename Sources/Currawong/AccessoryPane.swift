@@ -434,6 +434,7 @@ private final class PreviewBLECentral: BLECentral, @unchecked Sendable {
     func connect(_ id: UUID) {}
     func disconnect(_ id: UUID) {}
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {}
+    func probeForLiveness(_ id: UUID) {}
 }
 
 private final class PreviewRemoteSource: RemoteCommandSource, @unchecked Sendable {

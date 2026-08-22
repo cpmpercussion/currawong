@@ -119,6 +119,22 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
         }
     }
 
+    func probeForLiveness(_ id: UUID) {
+        guard let peripheral = peripherals[id], peripheral.state == .connected else {
+            return
+        }
+        // Any readable characteristic will do: the question is whether the link
+        // carries bytes, not what the bytes say. The first one found keeps this
+        // cheap — a probe is issued after every rebuild.
+        for service in peripheral.services ?? [] {
+            for characteristic in service.characteristics ?? [] {
+                guard characteristic.properties.contains(.read) else { continue }
+                peripheral.readValue(for: characteristic)
+                return
+            }
+        }
+    }
+
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {
         queue.async { [weak self] in
             guard let self, let peripheral = self.peripherals[id] else { return }
@@ -307,6 +323,7 @@ final class CoreBluetoothCentral: BLECentral, @unchecked Sendable {
     func connect(_ id: UUID) {}
     func disconnect(_ id: UUID) {}
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {}
+    func probeForLiveness(_ id: UUID) {}
 }
 
 #endif
