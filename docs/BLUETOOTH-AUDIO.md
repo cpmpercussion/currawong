@@ -547,6 +547,27 @@ The "requirements decision" the section below insists on has been taken:
 2026-08-22, with the operator, on the cross-transport evidence — and it did
 not require the suppression window after all, only the linger.
 
+**✅ Verified on air the same evening**, after two more rounds each found one
+bug the tests could not: received audio restarting an engine that had captured
+re-raised HFP through its input unit (the hand-back now discards that engine
+and adopts a playback-only one), and the library's `activateSession`'s
+redundant `setActive(true)` was refused with `'!pri'` — OSStatus 561017449,
+insufficient priority — during the post-over route shuffle (the downgrade is
+now category-only and retries on the linger, bounded at five; a category-only
+entry point in `RadioCore` would be the tidier home, a future RC). Ten-plus
+consecutive overs then cycled cleanly: every press after a completed hand-back
+delivered, LED red only while keyed, receive on A2DP between overs. A rapid
+second press inside the linger correctly found the session still on radio and
+skipped the category change.
+
+**The residual, measured by ear:** the escalation dance costs roughly the
+first second of the first over after each hand-back — an ECHOTEST read of a
+callsign twice came back missing its first words. That is transmit truncation
+by the drop-and-resume, not receive truncation by the hand-back (the hand-back
+fires ~3 s after the *release*, which lands mid-echo; the missing audio was
+the *start*). Shrinking it is `BU-15`/`BU-16` work and the RC-13 causes —
+merged in the library, unreleased — are the tool.
+
 ### Attempted twice and reverted twice, 2026-08-22. The cause is not enough
 
 **Second attempt, on top of `RC-13`.** With the cause on the signal,
