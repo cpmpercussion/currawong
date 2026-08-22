@@ -1011,6 +1011,15 @@ the order the code makes likely — not findings.
   hardware rate and the **route's input port types**. Today it is only reached
   from the failure alert. Log it on every key and unkey and this item is either
   diagnosed or narrowed in one session.
+  ✅ **Built 2026-08-22.** `Diagnostics` logs it on key-down, key-up and failed
+  key-down, plus every `AudioSessionSignal` as it arrives with the transmit state
+  around it, plus (iOS) the route-change reason code. It is on the `AudioIO`
+  protocol so `RadioSession` can reach it, and it announces itself at launch so
+  silence can be told from a dead instrument:
+  `log stream --predicate 'subsystem == "au.charlesmartin.currawong"' --style compact --info`.
+  **What to look for first: the hardware rate while idle.** 16000 Hz between
+  overs means iOS is holding HFP up and `BLUETOOTH-AUDIO.md` applies; 44100 Hz
+  means it is not.
 * `AVAudioSession.routeChangeNotification` and its reason code, logged the same
   way. `oldDeviceUnavailable` around an unkey would close the question.
 * **Run the same thing on macOS.** There the accessory is an ordinary input and

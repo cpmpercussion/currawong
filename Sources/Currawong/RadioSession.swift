@@ -1549,10 +1549,14 @@ final class RadioSession: ObservableObject {
                 lastStopReason = .transmitFailed
                 transmitState = link.transmitState()
                 refreshActivity()
+                Diagnostics.keying.error(
+                    "key-down FAILED: \(String(describing: error), privacy: .public)")
                 present(title: "Could not transmit", message: "\(error)")
                 return
             }
             isTransmitting = true
+            Diagnostics.keying.info(
+                "key-down on air: \(self.audio.audioStateDescription, privacy: .public)")
             // Each key-down starts its own watchdog, including one this class
             // made after a route change.
             watchdogDeadline = now().addingTimeInterval(transmitTimeout.seconds)
@@ -1569,6 +1573,11 @@ final class RadioSession: ObservableObject {
             isTransmitting = false
             transmitState = link.transmitState()
             refreshActivity()
+            // After the stop, deliberately: the interesting question is what the
+            // route looks like once the engine has gone down, which is where
+            // BU-13 expects to see `oldDeviceUnavailable`.
+            Diagnostics.keying.info(
+                "key-up: \(self.audio.audioStateDescription, privacy: .public)")
         }
     }
 
@@ -1598,6 +1607,11 @@ final class RadioSession: ObservableObject {
     // MARK: - SF-3
 
     private func handle(_ signal: AudioSessionSignal) {
+        // Logged before the switch, so a signal that is deliberately ignored
+        // still leaves a trace. "Arriving and being ignored" versus "not
+        // arriving at all" is the distinction BU-13 turns on.
+        Diagnostics.route.info(
+            "signal \(String(describing: signal), privacy: .public) isTransmitting=\(self.isTransmitting, privacy: .public) held=\(self.heldSource != nil, privacy: .public) resumes=\(self.automaticResumes, privacy: .public) audio=\(self.audio.audioStateDescription, privacy: .public)")
         switch signal {
         case .interruptionBegan:
             endTransmit(reason: .audioInterrupted)
