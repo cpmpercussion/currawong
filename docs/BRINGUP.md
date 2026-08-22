@@ -1053,7 +1053,37 @@ than one over, with the last over as good as the first.
 bit" — and then stops. Whether this is BU-13's fault wearing a second face, or
 independent, is unknown.
 
-> ✅ **ROOT CAUSE FOUND 2026-08-22 — `BU-14` is the iOS audio session.**
+> ### ⛔ Corrected 2026-08-22 (second session): it is **not** the audio session
+>
+> **The BLE subscription dies silently and never recovers.** Notifications stop,
+> `linkState` stays `.connected`, and **no `.disconnected` event is delivered** —
+> logging added specifically to check that stayed silent through both dead
+> periods. The button was dead with SCO up *and* dead after SCO dropped and the
+> route returned to A2DP. **Forget-and-retrain fixed it twice, and immediately
+> afterwards notifications flowed with the route on `BluetoothHFP`** — the state
+> that supposedly starved them.
+>
+> So the HFP *transition* is the trigger (the button died right after
+> `categoryChange` in both sessions, plausibly the accessory renegotiating its
+> BLE link on entering call mode) but the HFP *state* is not the mechanism. The
+> fault is that **the app trusts `.connected` and cannot notice that a
+> subscription has stopped delivering.**
+>
+> **The iOS harmonisation is therefore not this item's fix.** It stays the fix
+> for `BU-17` and receive quality. And the release-edge hazard that gated it is
+> **closed**: releases arrive fine over an established SCO link. See
+> `BLUETOOTH-AUDIO.md`.
+>
+> **Next, and cheap:** both recoveries were forget-and-retrain, which
+> disconnects, reconnects *and* re-subscribes. Whether a bare re-subscribe
+> suffices — `restartLearning()` already does one without reconnecting — decides
+> whether the fix is a re-subscribe on route change or a full reconnect cycle.
+> Answer that before designing.
+
+> ~~**ROOT CAUSE FOUND 2026-08-22 — `BU-14` is the iOS audio session.**~~
+> *(superseded by the correction above; the observations were right, the
+> conclusion was not — with no `.subscribed` logging at the time, a dead
+> subscription and a starved link looked identical)*
 > The button's notifications are delivered while the route is A2DP and **not
 > delivered at all** while it is HFP. Observed across four transitions on the
 > phone with `Diagnostics` streaming: ~25 consecutive presses all delivered with
@@ -1410,6 +1440,25 @@ list, status panel at the top where APP-18 says it stays, "Channels" and `Add
 channel` at the top of the sidebar, and the caption wrapping to three lines.
 
 ### BU-7 — the two safety behaviours nobody has watched fire
+
+> ✅ **Half of this is done: the SF-1 watchdog has been observed, 2026-08-22.**
+> With the timeout set to 10 s and the accessory's button held down, on an iPhone
+> against `m17-cbr`:
+>
+> ```
+> [214.772] key-down on air
+> [224.827] endTransmit reason=watchdogExpired wasTransmitting=true held=true
+> [297.434] key-down on air
+> [307.440] endTransmit reason=watchdogExpired wasTransmitting=true held=true
+> ```
+>
+> 10.055 s and 10.006 s after key-down, twice, unkeying a button that was still
+> physically held (`held=true`) — which is precisely the case this item exists
+> for and which had never been seen. It also arrived *before* the release edge in
+> both instances, so the watchdog, not the operator, ended both transmissions.
+>
+> **Still unobserved: a phone call dropping transmit** (SF-3 by interruption).
+> That is the remaining half, and it needs someone to ring the phone mid-over.
 
 **Deliberately deferred, 2026-08-20.** Wanted before any public beta; not
 wanted badly enough to hold up the testing phase that follows `BU-2`.
