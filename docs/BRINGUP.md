@@ -1347,7 +1347,42 @@ phone's mic with the accessory at the operator's mouth, which is the "sounds
 like a pocket" fault `BU-13` warns about, and this is the first sight of the
 mechanism that would cause it.
 
-> 🔧 **Implemented 2026-08-22, not yet verified on air.** Against `v0.5.4`:
+> ### ⛔ Tried on air and REVERTED, 2026-08-22. Read this before trying again.
+>
+> Switching policy on the transmit path made the app unusable for transmitting:
+> "tx just doesn't work, like it switches for a second and then turns off", an
+> "audio route changed" notice over and over, the transmit banner and the layout
+> reflowing repeatedly, and sometimes a state where the operator could not even
+> disconnect.
+>
+> **The mechanism, and it is structural rather than a tuning problem.** A
+> category change *is* a route change. `SF-3` requires transmit to be dropped on
+> a route change, and `RadioSession` correctly does exactly that. So:
+>
+> ```
+> key down -> activateSession(radio) -> route change -> SF-3 drops transmit
+>          -> resumeAcrossRouteChange keys back down -> route change -> ...
+> ```
+>
+> Every component behaved as specified, and the loop is the consequence. **No
+> amount of tuning fixes it**: the quiet period guards `BU-14`'s repair, not
+> SF-3, and widening it would not help because SF-3 must not be widened.
+>
+> **What is actually missing, and it is a library capability.**
+> `AudioSessionSignal.routeChanged` carries no reason, so nothing above the
+> library can tell *"the category changed because we just asked for it"* from
+> *"the accessory went away"*. The first must not drop transmit; the second must,
+> unconditionally. Until the library can distinguish them — a new task there,
+> not a workaround here — the switch cannot be made from the app.
+>
+> `RC-12` and the `v0.5.4` bump stay: the policy is correct and additive, and
+> nothing uses it yet. The app-side switch is reverted; `BU-17` is **open**.
+>
+> **Do not** attempt this again by suppressing SF-3 around the key path. SF-3 is
+> the requirement that stops a microphone being left open by a route that moved,
+> and a suppression window on the transmit path is precisely where it must hold.
+>
+> ~~🔧 Implemented 2026-08-22, not yet verified on air.~~ Against `v0.5.4`:
 > `configureSession()` still activates the **radio** policy and builds the engine
 > under it — that ordering is `BU-1` and must not change — and then switches to
 > **listening**. `startCapture` asks for the radio policy again before opening

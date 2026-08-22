@@ -277,20 +277,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         // `AudioPipeline.init` is also where the SF-3 interruption observers are
         // registered, and those should be listening from the moment the session
         // exists rather than from the moment somebody keys up.
-        //
-        // **And it must be built under the *radio* policy** (BU-17): an engine
-        // whose input unit is instantiated under a playback-only category
-        // reports 0 Hz for the life of the process and never recovers. That is
-        // `BU-1`, and this ordering is what keeps `AudioSessionPolicy.listening`
-        // from bringing it back.
         _ = pipeline()
-
-        // Then hand the accessory back to A2DP until something is actually
-        // transmitted (BU-17, RC-12). Until this existed, configuring the
-        // session was what pinned the route to HFP for the whole call — 16 kHz
-        // receive audio, and a speaker-mic whose "in a call" light never went
-        // out.
-        activateListeningSession()
     }
 
     /// The session half of ``configureSession()``, on its own so the repair path
@@ -313,20 +300,13 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         #endif
     }
 
-    /// Hand the route back to A2DP: `.playback`, which asks for no input, so iOS
-    /// stops choosing the hands-free profile and the SCO link drops (RC-12).
-    ///
-    /// **Best effort, and deliberately not throwing.** Every caller is either a
-    /// stop path or the tail of configuration, and failing to get back to A2DP is
-    /// a quality regression — narrowband receive audio, a lit accessory light —
-    /// not a safety one. Throwing from a stop path to report that would be the
-    /// wrong trade: it is `stopCapture()`'s job to shut the microphone, and
-    /// nothing may get in the way of that.
-    private func activateListeningSession() {
-        #if os(iOS)
-        try? AudioPipeline.activateSession(AudioSessionPolicy.listening)
-        #endif
-    }
+    // **`AudioSessionPolicy.listening` is deliberately not used here.** See
+    // `BU-17`: switching to it on the transmit path was implemented, tried, and
+    // reverted the same day. A category change *is* a route change, SF-3 requires
+    // dropping transmit on a route change, and so keying became a loop — key up,
+    // route change, transmit dropped, resume, route change. The library owes this
+    // a way to tell a category change the app asked for from a device that went
+    // away, and until it has one the switch cannot be made from up here.
 
     /// Opens the microphone, repairing the audio stack once if the first attempt
     /// fails.
@@ -347,11 +327,6 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// the second failure is more useful reported than retried.
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
         do {
-            // The route is on A2DP between overs (BU-17), which has no input at
-            // all, so the hands-free profile has to be asked for again before
-            // the microphone can be opened. This is where the SCO link comes up,
-            // and it is what the accessory's light should be reporting.
-            try activateSession()
             try pipeline().startCapture(onFrame: onFrame)
         } catch let first {
             do {
@@ -373,9 +348,6 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         let pipeline = current
         lock.unlock()
         pipeline?.stop()
-        // Microphone shut first, route handed back second. The order matters:
-        // the stop is the safety-relevant half and must not wait on anything.
-        activateListeningSession()
     }
 
     func enqueuePlayback(_ pcm: [Int16]) {

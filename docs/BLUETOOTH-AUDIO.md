@@ -402,7 +402,37 @@ on HFP, it **keeps returning** to it, because the category demands an input rout
 and HFP is the only Bluetooth one on offer. Disconnecting is not enough; only
 deactivating the session, or changing the category, releases the accessory.
 
-### Harmonised, 2026-08-22 — implemented against `v0.5.4`
+### Attempted and reverted, 2026-08-22 — and why the plan below is not enough
+
+**The switch was implemented against `v0.5.4`, tried on a phone, and reverted the
+same day.** It made transmitting unusable: keying produced a second of audio and
+then stopped, with a route-change notice and the transmit banner cycling.
+
+**A category change is a route change.** `SF-3` requires transmit to be dropped
+on a route change, so asking for the radio policy at key-down drops the very
+transmission it was enabling, and the automatic resume then does it again:
+
+```
+key down → activateSession(radio) → route change → SF-3 drops transmit
+         → resumeAcrossRouteChange keys back down → route change → …
+```
+
+Every component did what it is specified to do. **The missing piece is a library
+capability, not an app fix:** `AudioSessionSignal.routeChanged` carries no reason,
+so nothing above the library can tell "the category changed because we asked"
+from "the accessory went away". The first must not drop transmit; the second must,
+unconditionally. That distinction has to exist before this section can be
+implemented, and it belongs in `RadioCore` beside the policy it accompanies.
+
+**Not to be worked around by suppressing SF-3 on the key path.** That is exactly
+where SF-3 has to hold: it is the requirement that stops a microphone being left
+open when the route moves under a live transmission.
+
+`RC-12` stays — the policy is right and additive, and nothing uses it yet.
+
+### The plan as written, still accurate about the goal
+
+#### Harmonised, 2026-08-22 — implemented against `v0.5.4`
 
 **Done, and it is smaller than the plan below feared**, because the release-edge
 hazard turned out to be closed and because `configureSession()` already built the
