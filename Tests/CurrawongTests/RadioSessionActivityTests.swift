@@ -310,6 +310,36 @@ final class RadioSessionActivityTests: XCTestCase {
             "a repair was requested while the operator was holding the button")
     }
 
+    /// **The regression that made the repair worse than the fault.** Unkeying
+    /// stops the whole engine, and stopping the engine is a route change — so the
+    /// first version of `BU-14`'s repair fired after *every over*, tearing down a
+    /// link the operator had just keyed with and leaving the accessory "untested"
+    /// after every quick press. Reported from a phone, 2026-08-22, by trying a
+    /// fast key-up and key-down.
+    ///
+    /// A link that just carried a press needs no repair. Uses the real clock:
+    /// the quiet period is seconds and this test takes milliseconds.
+    func testARouteChangeJustAfterAnOverDoesNotAskForARepair() async {
+        let harness = SessionHarness()
+        var repairRequests = 0
+        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
+        harness.session.start()
+        await harness.connect()
+
+        await harness.keyDown()
+        harness.session.endTransmit(reason: .released)
+        await harness.settleAll()
+        XCTAssertFalse(harness.client.isTransmitting, "setup: the over has ended")
+
+        // The route change that unkeying itself causes.
+        harness.audio.emit(.routeChanged)
+        await harness.settleAll()
+
+        XCTAssertEqual(
+            repairRequests, 0,
+            "a link that has just carried a press must not be rebuilt")
+    }
+
     /// And the other side of it: with nothing keyed, a route change is exactly
     /// when the link should be rebuilt, because the button is needed for the
     /// *next* press and this is the moment nobody is using it.
