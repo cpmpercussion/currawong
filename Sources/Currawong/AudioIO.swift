@@ -221,7 +221,22 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         makePipeline: @escaping @Sendable () -> CapturePipeline = { AudioPipeline() },
         applyPolicy: @escaping @Sendable (AudioSessionPolicy) throws -> Void = { policy in
             #if os(iOS)
-                try AudioPipeline.activateSession(policy)
+                if policy == .radio {
+                    try AudioPipeline.activateSession(policy)
+                } else {
+                    // Category-only, no `setActive(true)`: the session is
+                    // already active when the route is handed back, and the
+                    // redundant re-activation is what refused with `'!pri'`
+                    // (insufficient priority, OSStatus 561017449) during the
+                    // post-over route shuffle — measured on air 2026-08-22. A
+                    // category change on an active session takes effect on its
+                    // own. The values are still the library's policy, not a
+                    // copy (RC-11).
+                    try AVAudioSession.sharedInstance().setCategory(
+                        AVAudioSession.Category(rawValue: policy.category),
+                        mode: AVAudioSession.Mode(rawValue: policy.mode),
+                        options: AVAudioSession.CategoryOptions(rawValue: policy.options))
+                }
             #endif
         },
         listeningLinger: @escaping @Sendable () async -> Void = {
@@ -446,18 +461,23 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         lock.unlock()
 
         guard afterLinger else {
-            completeHandback(generation)
+            completeHandback(generation, attempt: 1)
             return
         }
         let linger = listeningLinger
         Task.detached { [weak self] in
             await linger()
-            self?.completeHandback(generation)
+            self?.completeHandback(generation, attempt: 1)
         }
     }
 
-    /// The second half of ``handRouteBack(afterLinger:)``: apply the listening
-    /// policy, then discard the engine.
+    /// Attempts beyond this are pointless: five lingers is fifteen seconds,
+    /// and a session that still refuses has something structurally wrong that
+    /// the log now shows attempt by attempt.
+    private static let maximumHandbackAttempts = 5
+
+    /// The second half of ``handRouteBack(afterLinger:)``: discard the engine,
+    /// then apply the listening policy.
     ///
     /// **The discard is the half that was missing on the first on-air try.**
     /// After any capture the engine carries an instantiated input audio unit,
@@ -473,46 +493,59 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// that window the session is momentarily on listening under a live
     /// capture, and the capture's own retry path — reactivate, rebuild —
     /// repairs exactly that, so nothing is discarded under it here.
-    private func completeHandback(_ generation: Int) {
+    private func completeHandback(_ generation: Int, attempt: Int) {
         lock.lock()
-        let stale =
-            generation != handbackGeneration || isCapturing
-            || appliedPolicy == AudioSessionPolicy.listening
+        guard generation == handbackGeneration, !isCapturing,
+            appliedPolicy != AudioSessionPolicy.listening
+        else {
+            lock.unlock()
+            return
+        }
+        // Discard *before* the apply: an engine with a running input unit is a
+        // live recording client, exactly the kind of thing a session refuses a
+        // category change under. Only an engine a capture has been attempted
+        // on carries the input unit; one that has only played is already the
+        // engine we want and is kept. The fresh engine is built eagerly rather
+        // than lazily on the next frame, because `AudioPipeline` registers the
+        // SF-3 observers in its initialiser and a gap with no pipeline would
+        // be a gap in route-change observation.
+        if captureAttemptedOnCurrent {
+            current?.stop()
+            forwarder?.cancel()
+            forwarder = nil
+            _ = adoptLocked(makePipeline())
+            Diagnostics.route("audio hand-back: capture engine discarded")
+        }
         lock.unlock()
-        guard !stale else { return }
 
         do {
             try applyPolicy(AudioSessionPolicy.listening)
         } catch {
             // Best effort by design — a failed hand-back is a quality
-            // regression, not a safety one — but never silent: this failing
-            // invisibly cost an on-air session to diagnose.
-            Diagnostics.route("audio hand-back to listening failed: \(error)")
+            // regression, not a safety one — but never silent (that cost an
+            // on-air session), and never final: the refusal observed on air
+            // was transient, so try again after another linger.
+            Diagnostics.route(
+                "audio hand-back to listening failed "
+                    + "(attempt \(attempt)/\(Self.maximumHandbackAttempts)): \(error)")
+            guard attempt < Self.maximumHandbackAttempts else { return }
+            let linger = listeningLinger
+            Task.detached { [weak self] in
+                await linger()
+                self?.completeHandback(generation, attempt: attempt + 1)
+            }
             return
         }
 
         lock.lock()
-        guard generation == handbackGeneration, !isCapturing else {
-            lock.unlock()
-            return
+        // A key-down can race the apply; if one did, the session is
+        // momentarily on listening under a live capture, and the capture's own
+        // retry path — reactivate, rebuild — repairs exactly that.
+        if generation == handbackGeneration, !isCapturing {
+            appliedPolicy = AudioSessionPolicy.listening
         }
-        appliedPolicy = AudioSessionPolicy.listening
-        // Only an engine a capture has been attempted on carries the input
-        // unit; one that has only played is already the engine we want.
-        guard captureAttemptedOnCurrent else {
-            lock.unlock()
-            Diagnostics.route("audio route handed back to listening")
-            return
-        }
-        current?.stop()
-        forwarder?.cancel()
-        forwarder = nil
-        // Built eagerly rather than lazily on the next frame: `AudioPipeline`
-        // registers the SF-3 observers in its initialiser, and a gap with no
-        // pipeline would be a gap in route-change observation.
-        _ = adoptLocked(makePipeline())
         lock.unlock()
-        Diagnostics.route("audio route handed back to listening; capture engine discarded")
+        Diagnostics.route("audio route handed back to listening")
     }
 
     /// Opens the microphone, repairing the audio stack once if the first attempt

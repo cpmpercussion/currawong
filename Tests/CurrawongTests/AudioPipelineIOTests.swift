@@ -222,14 +222,29 @@ final class AudioPipelineIOTests: XCTestCase {
     }
 }
 
-/// Records every session-policy application, in order.
+/// Records every session-policy application, in order, refusing the first
+/// `failuresBeforeSuccess` applications of `listening` — the on-air `'!pri'`
+/// refusal, scripted.
 private final class PolicyRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storedApplied: [AudioSessionPolicy] = []
+    private var remainingFailures = 0
+
+    /// Refuse the next `count` applications of `listening`.
+    func failNext(_ count: Int) {
+        lock.lock()
+        remainingFailures = count
+        lock.unlock()
+    }
 
     var apply: @Sendable (AudioSessionPolicy) throws -> Void {
         { [self] policy in
             lock.lock()
+            if policy == .listening, remainingFailures > 0 {
+                remainingFailures -= 1
+                lock.unlock()
+                throw StubError(description: "!pri")
+            }
             storedApplied.append(policy)
             lock.unlock()
         }
@@ -410,6 +425,31 @@ final class AudioPipelineIOPolicyTests: XCTestCase {
         XCTAssertEqual(
             factory.built[builtBefore - 1].stopCount, 2,
             "the input-bearing engine was stopped when it was discarded")
+    }
+
+    /// A refused hand-back retries after another linger rather than giving up.
+    /// The refusal observed on air (`'!pri'`, insufficient priority, during the
+    /// post-over route shuffle) was transient — and a hand-back that gives up
+    /// leaves the accessory in a call forever, which is `BU-14` re-created by
+    /// its own fix.
+    func testARefusedHandbackRetries() async throws {
+        let gate = LingerGate()
+        let recorder = PolicyRecorder()
+        let io = AudioPipelineIO(
+            makePipeline: { FakeCapturePipeline() },
+            applyPolicy: recorder.apply,
+            listeningLinger: gate.wait)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        recorder.clear()
+        recorder.failNext(1)
+
+        io.stopCapture()
+        gate.open()
+
+        await waitUntil("route handed back on the retry") {
+            recorder.applied == [.listening]
+        }
     }
 
     /// Two overs inside one linger produce exactly one hand-back once the
