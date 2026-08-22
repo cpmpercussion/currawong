@@ -409,6 +409,26 @@ final class RadioSession: ObservableObject {
     /// a way of dropping the operator. Nothing downstream suppresses SF-2; this
     /// hook simply is not called unless nothing is keyed.
     var onIdleAudioRouteChange: (@MainActor () -> Void)?
+
+    /// When transmission last ended, for the quiet period below.
+    private var lastTransmitEndedAt: Date?
+
+    /// How long after an over a route change is assumed to be **our own doing**
+    /// rather than evidence of a broken accessory link.
+    ///
+    /// Unkeying stops the whole engine (see the `AudioIO` type note), and
+    /// stopping the engine *is* a route change. So every normal over is followed
+    /// within a second or two by exactly the signal the accessory repair watches
+    /// for — and repairing then tears down a link that has just demonstrably
+    /// worked, because the operator keyed with it. Observed doing precisely that
+    /// on 2026-08-22: a good over, then `override`, then a rebuild, leaving the
+    /// accessory "untested" after every quick press.
+    ///
+    /// The killing transition this repair exists for — the audio session being
+    /// configured, `reason=categoryChange` — does not follow a transmission, so a
+    /// quiet period separates the two without needing the reason code, which the
+    /// library's `AudioSessionSignal` does not carry.
+    static let repairQuietPeriodAfterTransmit: TimeInterval = 3
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
@@ -1462,6 +1482,7 @@ final class RadioSession: ObservableObject {
             Diagnostics.keying(
                 "endTransmit reason=\(reason) wasTransmitting=\(isTransmitting) "
                     + "held=\(heldSource != nil)")
+            lastTransmitEndedAt = now()
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }
@@ -1602,6 +1623,7 @@ final class RadioSession: ObservableObject {
             // route looks like once the engine has gone down, which is where
             // BU-13 expects to see `oldDeviceUnavailable`.
             if wasTransmitting {
+                lastTransmitEndedAt = now()
                 Diagnostics.keying("key-up: \(audio.audioStateDescription)")
             }
         }
@@ -1649,7 +1671,16 @@ final class RadioSession: ObservableObject {
             // making, and no automatic resume about to key back down. Checked
             // *after* `resumeAcrossRouteChange`, because that is what decides
             // whether a resume is in flight.
-            if !isTransmitting, heldSource == nil, !routeResumeInFlight {
+            //
+            // And **not right after an over**: unkeying stops the engine, which
+            // is itself a route change, so a repair here would rebuild a link the
+            // operator had just keyed with. See
+            // ``repairQuietPeriodAfterTransmit``.
+            let sinceTransmit = now().timeIntervalSince(
+                lastTransmitEndedAt ?? .distantPast)
+            if !isTransmitting, heldSource == nil, !routeResumeInFlight,
+                sinceTransmit >= Self.repairQuietPeriodAfterTransmit
+            {
                 onIdleAudioRouteChange?()
             }
         case .interruptionEnded:
