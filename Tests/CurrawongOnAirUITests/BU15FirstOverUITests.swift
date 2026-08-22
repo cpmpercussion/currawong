@@ -40,14 +40,27 @@ import XCTest
 ///     TEST_RUNNER_CURRAWONG_ONAIR_CALLSIGN=<yours> test
 /// ```
 ///
-/// ## What a pass and a failure mean
+/// ## What this asserts, and what it does not
 ///
-/// The hold is one continuous press. Any *interruption* of transmit inside it
-/// is the dance: the operator never let go, so the strip going from
-/// transmitting to not-transmitting and back is the app dropping and re-keying
-/// underneath them. Zero interruptions is the fixed behaviour. The count is
-/// printed on every run, so a partial improvement — three flaps down to one —
-/// is visible rather than just "still failing".
+/// **It does not count the flashes, and it cannot.** The dance happens inside
+/// one continuous press, and XCUITest will not let a test look at the app
+/// during its own gesture: `press(forDuration:)` blocks the main thread, and
+/// every route off it is refused — a backgrounded press throws
+/// `Must be called on the main thread`, and backgrounded sampling throws
+/// `Activity cannot be used after its scope has completed`, or
+/// `Current context must not be nil` if you wrap it in an activity of its own.
+/// All three were tried on the device on 2026-08-23.
+///
+/// So this produces **one repeatable, well-bounded over** and prints the window
+/// it happened in. Its own assertion is only that the key comes back up when
+/// the operator lets go — worth having, since a stuck key is the failure this
+/// app exists to prevent, but not what `BU-15` is about.
+///
+/// The count comes from the app's own instrument. `RadioSession` already logs
+/// every key-down, key-up and SF-3 signal — including `resumes=`, which is
+/// incremented by exactly the `resumeAcrossRouteChange()` that *is* the dance.
+/// `scripts/bu15-measure.sh` runs this test and then reads those lines back off
+/// the device for the printed window.
 final class BU15FirstOverUITests: XCTestCase {
 
     private let reflector = "m17-cbr.charlesmartin.au"
@@ -58,10 +71,6 @@ final class BU15FirstOverUITests: XCTestCase {
     /// recorded under `BU-17` is about a second — with room either side, and
     /// nowhere near SF-1's 180 s watchdog.
     private let overDuration: TimeInterval = 6
-
-    /// Fast enough to catch a flash the operator can see. The dance is on the
-    /// order of a second, so 100 ms samples it about ten times.
-    private let samplePeriod: TimeInterval = 0.1
 
     override func setUp() {
         continueAfterFailure = false
@@ -77,6 +86,7 @@ final class BU15FirstOverUITests: XCTestCase {
         replace(reflector, in: field("connect.host", in: app))
         replace(module, in: field("connect.module", in: app))
 
+        showSessionPane(in: app)
         let connect = app.buttons["Connect to \(channelName)"].firstMatch
         XCTAssertTrue(connect.waitForExistence(timeout: 5), "no link button naming this channel")
         connect.activate()
@@ -87,92 +97,47 @@ final class BU15FirstOverUITests: XCTestCase {
             waitUntil(timeout: 30) { ptt.isEnabled && ptt.isHittable },
             "the link never came up — PTT stayed disabled")
 
-        // **The hold and the sampling have to overlap**, and `press(forDuration:)`
-        // blocks for the whole hold. So the press goes to a background queue and
-        // the samples are taken here, which is the only way to see *inside* one
-        // continuous press. A test that keyed, released, and then looked would
-        // see the settled state and never the dance at all.
-        let holding = expectation(description: "the hold finished")
-        DispatchQueue.global(qos: .userInitiated).async {
-            ptt.press(forDuration: self.overDuration)
-            holding.fulfill()
-        }
+        // **One clean hold, and the clock around it.**
+        //
+        // The dance happens *inside* the press, and XCUITest cannot watch it:
+        // `press(forDuration:)` blocks the main thread for the whole hold, and
+        // XCTest refuses UI queries from anywhere else. Both ways round were
+        // tried on the device, 2026-08-23, and both throw —
+        // `Must be called on the main thread` for a backgrounded press, and
+        // `Activity cannot be used after its scope has completed` (then
+        // `Current context must not be nil`) for backgrounded sampling, with or
+        // without an explicit `XCTContext.runActivity`.
+        //
+        // So this test's job is to produce one repeatable, well-bounded over,
+        // and to print the window it happened in. The **count** of key-downs
+        // inside that window comes from the app's own instrument — the
+        // `Diagnostics` lines `RadioSession` already writes on every key-down,
+        // key-up and SF-3 signal, including `resumes=`. `scripts/bu15-measure.sh`
+        // runs this test and then reads them back off the device.
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        let samples = sampleTransmitState(in: app, for: overDuration)
-        wait(for: [holding], timeout: overDuration + 30)
+        let began = Date()
+        print("=== BU-15 hold began \(formatter.string(from: began))")
+        ptt.press(forDuration: overDuration)
+        let ended = Date()
+        print("=== BU-15 hold ended \(formatter.string(from: ended))")
+        print(
+            "=== BU-15 window \(formatter.string(from: began)) .. "
+                + "\(formatter.string(from: ended))")
 
-        // Trim to the part of the hold after transmit first came up: everything
-        // before that is the app getting started, not an interruption of
-        // something that was running.
-        guard let firstKeyed = samples.firstIndex(of: true) else {
-            XCTFail(
-                "transmit never started at all during a \(overDuration)s hold — that is not "
-                    + "BU-15, it is a dead PTT. Samples: \(render(samples))")
-            return
-        }
-        let afterKeyUp = Array(samples[firstKeyed...])
-        let interruptions = afterKeyUp.dropFirst().enumerated()
-            .filter { !$0.element && afterKeyUp[$0.offset] }
-            .count
-
-        print("=== BU-15 first over: \(interruptions) interruption(s) inside one hold")
-        print("=== BU-15 samples (\(Int(1 / samplePeriod))/s): \(render(samples))")
-
-        XCTAssertEqual(
-            interruptions, 0,
-            "BU-15: transmit was interrupted \(interruptions) time(s) during a single "
-                + "uninterrupted hold — the operator never let go. Samples: \(render(samples))")
-
-        disconnectAndTidy(app)
-    }
-
-    // MARK: - Sampling
-
-    /// Whether the transmit strip currently says the radio is keyed, sampled on
-    /// a fixed period for `duration`.
-    ///
-    /// The strip is one combined accessibility element carrying
-    /// `TransmitBanner.accessibilityDescription`. A SwiftUI `Text` can arrive
-    /// with an empty label and its string in `value`, so both are checked —
-    /// `M17EndOfOverUITests` reported a release it had never checked by
-    /// matching neither.
-    private func sampleTransmitState(in app: XCUIApplication, for duration: TimeInterval)
-        -> [Bool]
-    {
-        let idle = app.descendants(matching: .any).matching(
+        // What this test *can* see: the app is unkeyed once the operator lets
+        // go. A stuck key is the failure this whole app exists to prevent, so
+        // it is worth asserting even though it is not what BU-15 is about.
+        let idleStrip = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "label BEGINSWITH %@ OR value BEGINSWITH %@",
                 "Not transmitting", "Not transmitting")).firstMatch
-        // `TransmitBanner.accessibilityDescription` is "Transmitting. On air."
-        // when keyed and "Not transmitting. Standby." when not — so the keyed
-        // prefix is *"Transmitting"*, not "On air". `BEGINSWITH` is
-        // case-sensitive and anchored, which is what keeps this from also
-        // matching "Not transmitting"; a `CONTAINS` here would match both and
-        // score every sample as keyed.
-        let onAir = app.descendants(matching: .any).matching(
-            NSPredicate(
-                format: "label BEGINSWITH %@ OR value BEGINSWITH %@",
-                "Transmitting", "Transmitting")).firstMatch
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { idleStrip.exists },
+            "the transmit strip still does not say the radio is unkeyed after PTT was released")
 
-        var samples: [Bool] = []
-        let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
-            // Read "on air" positively rather than inferring it from the
-            // absence of the idle strip: mid-transition neither exists for a
-            // frame, and inferring would score that frame as keyed.
-            if onAir.exists {
-                samples.append(true)
-            } else if idle.exists {
-                samples.append(false)
-            }
-            Thread.sleep(forTimeInterval: samplePeriod)
-        }
-        return samples
-    }
-
-    /// `▔` keyed, `_` not — a shape that can be read at a glance in a log.
-    private func render(_ samples: [Bool]) -> String {
-        samples.map { $0 ? "▔" : "_" }.joined()
+        disconnectAndTidy(app)
     }
 
     // MARK: - Session

@@ -47,6 +47,66 @@ extension XCUIElement {
     }
 }
 
+/// Put the software keyboard away.
+///
+/// **On iPhone this is the difference between a test that works and one that
+/// silently taps the keyboard.** Measured 2026-08-23: with the keyboard up
+/// after filling the connect form, `Save` reports `exists=true hittable=false`
+/// and the tab bar is behind it, so a tap meant for `Session` lands on a key
+/// and nothing appears to happen. Nothing throws — the tap succeeds, just not
+/// on what the test meant.
+func dismissKeyboard(in app: XCUIApplication) {
+    #if !os(macOS)
+        guard app.keyboards.element(boundBy: 0).exists else { return }
+        let returnKey = app.keyboards.buttons["return"].firstMatch
+        if returnKey.exists {
+            returnKey.tap()
+        }
+        // Give the dismissal animation time to finish, or the very next tap is
+        // still aimed at where the keyboard was.
+        _ = waitForKeyboardToGo(in: app)
+    #endif
+}
+
+#if !os(macOS)
+    private func waitForKeyboardToGo(in app: XCUIApplication) -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if !app.keyboards.element(boundBy: 0).exists { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
+    }
+#endif
+
+/// Bring the session pane into view, where the link button, the PTT slab and
+/// Disconnect live.
+///
+/// **A no-op on macOS, and load-bearing on iPhone.** The Mac shows the channel
+/// list and the session pane side by side, so everything a test wants is on
+/// screen at once. iPhone puts them in separate tabs — measured 2026-08-23 on
+/// an iPhone 13 Pro: `Channels`, `Session`, `Keypad`, `Settings`, with
+/// `Channels` selected at launch. So a test that fills the form and then
+/// reaches for `Connect to <channel>` finds nothing, which is exactly how this
+/// first failed on the device.
+func showSessionPane(in app: XCUIApplication) {
+    #if !os(macOS)
+        dismissKeyboard(in: app)
+        let session = app.tabBars.buttons["Session"].firstMatch
+        if session.waitForExistence(timeout: 5) { session.tap() }
+    #endif
+}
+
+/// Bring the channel list into view — the other half of ``showSessionPane(in:)``,
+/// for counting rows and deleting the test's own channel.
+func showChannelList(in app: XCUIApplication) {
+    #if !os(macOS)
+        dismissKeyboard(in: app)
+        let channels = app.tabBars.buttons["Channels"].firstMatch
+        if channels.waitForExistence(timeout: 5) { channels.tap() }
+    #endif
+}
+
 /// Replaces a field's contents rather than appending to them: these come back
 /// from the app's saved settings, so they are rarely empty.
 ///

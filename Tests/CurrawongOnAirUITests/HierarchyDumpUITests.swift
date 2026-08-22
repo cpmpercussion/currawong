@@ -26,6 +26,60 @@ final class HierarchyDumpUITests: XCTestCase {
         print("=== FULL TREE ===")
         print(app.debugDescription)
     }
+
+    /// The tree at the point the on-air tests actually fail: form filled, and
+    /// looking for the link button. Transmits nothing — it stops before
+    /// connecting.
+    func testDumpAfterFillingTheForm() {
+        let app = IsolatedApp.launched()
+
+        let add = app.buttons["Add channel"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
+        add.activate()
+
+        let name = app.textFields["connect.channelName"].firstMatch
+        if name.waitForExistence(timeout: 5) { replace("Dump probe", in: name) }
+
+        for candidate in [
+            app.radioButtons["M17"].firstMatch,
+            app.segmentedControls.buttons["M17"].firstMatch,
+            app.buttons["M17"].firstMatch,
+        ] where candidate.waitForExistence(timeout: 2) {
+            candidate.activate()
+            break
+        }
+
+        for (identifier, text) in [
+            ("connect.callsign", "N0CALL"),
+            ("connect.host", "m17-cbr.charlesmartin.au"),
+            ("connect.module", "A"),
+        ] {
+            let field = app.textFields[identifier].firstMatch
+            if field.waitForExistence(timeout: 5) { replace(text, in: field) }
+        }
+
+        print("=== BUTTONS, form filled, still on the form ===")
+        for button in app.buttons.allElementsBoundByIndex {
+            print("button: id=\(button.identifier) label=\(button.label)")
+        }
+
+        dismissKeyboard(in: app)
+        let save = app.buttons["Save"].firstMatch
+        print("=== after dismissing the keyboard: Save hittable=\(save.isHittable)")
+
+        showSessionPane(in: app)
+        Thread.sleep(forTimeInterval: 1)
+
+        print("=== BUTTONS, after switching to the session pane ===")
+        for button in app.buttons.allElementsBoundByIndex {
+            print("button: id=\(button.identifier) label=\(button.label)")
+        }
+        let link = app.buttons["Connect to Dump probe"].firstMatch
+        print("=== link button without Save: exists=\(link.exists)")
+
+        print("=== SESSION TREE ===")
+        print(app.debugDescription)
+    }
 }
 
 /// One-off: put a channel's host and module back to given values. Not part of
