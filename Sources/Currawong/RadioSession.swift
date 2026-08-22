@@ -410,6 +410,17 @@ final class RadioSession: ObservableObject {
     /// hook simply is not called unless nothing is keyed.
     var onIdleAudioRouteChange: (@MainActor () -> Void)?
 
+    /// **Called when the SF-1 watchdog unkeys the radio.**
+    ///
+    /// Set by the composition root to the accessory controller's
+    /// `radioUnkeyedExternally()`, and a closure for the same reason as above.
+    /// The watchdog fires precisely when no release has arrived, and a link
+    /// that died silently mid-press delivers neither a release nor a
+    /// disconnection — so without this the controller's "accessory keyed"
+    /// claim outlives the transmission it described, and that claim is a guard
+    /// on every repair path, the operator's Reconnect included.
+    var onWatchdogUnkey: (@MainActor () -> Void)?
+
     /// **Whether the accessory link may be rebuilt right now.**
     ///
     /// A rebuild means a disconnection, and `SF-2` makes a disconnection unkey
@@ -1913,6 +1924,9 @@ final class RadioSession: ObservableObject {
             // SF-1. The client has already unkeyed itself; the app still has a
             // microphone open and a button that thinks it is held.
             endTransmit(reason: .watchdogExpired)
+            // Including, possibly, an accessory whose release will never
+            // arrive — see `onWatchdogUnkey`.
+            onWatchdogUnkey?()
             safetyNotice = SafetyNotice(
                 kind: .transmitWatchdog,
                 message:

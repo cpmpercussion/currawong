@@ -45,6 +45,15 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
     /// re-establish them without the layer above having to notice.
     private var wanted: Set<UUID> = []
 
+    /// The characteristic each peripheral's outstanding liveness probe read.
+    ///
+    /// A read and a notification are the same delegate callback, and this is
+    /// the only record of which is which — so a probe's answer can be reported
+    /// as a probe's answer rather than as the accessory speaking. Touched only
+    /// on ``queue``, like ``peripherals``; cleared on disconnection, so a stale
+    /// entry cannot swallow the rebuilt link's first real notification.
+    private var pendingProbes: [UUID: CBUUID] = [:]
+
     private var manager: CBCentralManager!
     private let queue = DispatchQueue(label: "au.charlesmartin.currawong.ble")
     private let lock = NSLock()
@@ -120,17 +129,28 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
     }
 
     func probeForLiveness(_ id: UUID) {
-        guard let peripheral = peripherals[id], peripheral.state == .connected else {
-            return
-        }
-        // Any readable characteristic will do: the question is whether the link
-        // carries bytes, not what the bytes say. The first one found keeps this
-        // cheap — a probe is issued after every rebuild.
-        for service in peripheral.services ?? [] {
-            for characteristic in service.characteristics ?? [] {
-                guard characteristic.properties.contains(.read) else { continue }
-                peripheral.readValue(for: characteristic)
-                return
+        // On the queue like every sibling method: `peripherals` and the
+        // peripheral's own state are mutated by the delegate callbacks on this
+        // queue, and this used to be the one method that read them from the
+        // caller's thread — an unsynchronized dictionary read under a reconnect
+        // burst, which is exactly when probes are issued most.
+        queue.async { [weak self] in
+            guard let self, let peripheral = self.peripherals[id],
+                peripheral.state == .connected
+            else { return }
+            // Any readable characteristic will do: the question is whether the
+            // link carries bytes, not what the bytes say. The first one found
+            // keeps this cheap — a probe is issued after every rebuild.
+            for service in peripheral.services ?? [] {
+                for characteristic in service.characteristics ?? [] {
+                    guard characteristic.properties.contains(.read) else { continue }
+                    self.pendingProbes[id] = characteristic.uuid
+                    peripheral.readValue(for: characteristic)
+                    // Announced so the caller can bound the wait for the
+                    // answer from the moment a read actually went out.
+                    self.continuation.yield(.probeIssued(id: id))
+                    return
+                }
             }
         }
         // **Nothing readable *yet*, and that is not a failure.**
@@ -144,9 +164,9 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
         // fine, and the whole thing looped.
         //
         // So: say nothing. A later subscription will probe again, and the
-        // controller's backstop covers the pathological case of a device with
-        // nothing readable at all. Only a *read that was attempted and failed* is
-        // evidence about the link.
+        // controller treats a deadline that expires with no read ever issued as
+        // exactly this silence rather than as a dead link. Only a *read that
+        // was attempted and failed* is evidence about the link.
     }
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {
@@ -266,6 +286,9 @@ extension CoreBluetoothCentral: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
+        // A probe the dead link never answered must not be matched against the
+        // rebuilt link's first notification.
+        pendingProbes[peripheral.identifier] = nil
         // **SF-2 starts here.** Everything above this line is CoreBluetooth's;
         // everything below is the app's, and the first thing it does with this
         // event is stop transmitting. See `BLEPTTController.handle(_:)`.
@@ -309,17 +332,29 @@ extension CoreBluetoothCentral: CBPeripheralDelegate {
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
+        // A read and a notification arrive here identically; the pending-probe
+        // record is what tells them apart, and it must, in both directions. A
+        // probe's answer reported as `.notified` could key the radio on a
+        // device whose press characteristic reads back the press payload; a
+        // notification reported as the probe's business would swallow a press.
+        let id = peripheral.identifier
+        let answersProbe = pendingProbes[id] == characteristic.uuid
+        if answersProbe { pendingProbes[id] = nil }
+
         // A failed read is information, not noise: it is the only *positive*
         // evidence this seam can produce that a link has stopped carrying data.
-        // Dropping it silently is what left the controller guessing from
-        // timeouts.
+        // But only the read a probe issued — an error with no probe outstanding
+        // answers no question anyone asked, and reporting it as a probe failure
+        // force-rebuilt healthy links on one transient ATT error.
         if let error {
-            continuation.yield(
-                .probeFailed(id: peripheral.identifier, reason: error.localizedDescription))
+            if answersProbe {
+                continuation.yield(
+                    .probeFailed(id: id, reason: error.localizedDescription))
+            }
             return
         }
         guard let service = characteristic.service else {
-            continuation.yield(.probeFailed(id: peripheral.identifier, reason: nil))
+            if answersProbe { continuation.yield(.probeFailed(id: id, reason: nil)) }
             return
         }
         // A notification with no value is still an edge on some devices, so an
@@ -328,7 +363,10 @@ extension CoreBluetoothCentral: CBPeripheralDelegate {
             service: service.uuid.uuidString,
             characteristic: characteristic.uuid.uuidString,
             payload: characteristic.value ?? Data())
-        continuation.yield(.notified(id: peripheral.identifier, signal: signal))
+        continuation.yield(
+            answersProbe
+                ? .probeAnswered(id: id, signal: signal)
+                : .notified(id: id, signal: signal))
     }
 }
 

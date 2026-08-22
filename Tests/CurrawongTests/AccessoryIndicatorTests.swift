@@ -11,13 +11,35 @@ final class AccessoryIndicatorTests: XCTestCase {
         _ linkState: BLEPTTController.LinkState,
         configured: Bool = true,
         keyed: Bool = false,
-        remoteCommand: Bool = false
+        remoteCommand: Bool = false,
+        verified: Bool = true
     ) -> AccessoryIndicator {
         AccessoryIndicator(
             linkState: linkState,
             isAccessoryConfigured: configured,
             isAccessoryKeyed: keyed,
-            isRemoteCommandEnabled: remoteCommand)
+            isRemoteCommandEnabled: remoteCommand,
+            isButtonVerified: verified)
+    }
+
+    // MARK: - A connection is not a working button (BU-14)
+
+    /// `.connected` with nothing yet arrived is "untested", not "ready" — after
+    /// BU-14 a connection is no evidence at all, and "Accessory ready" over a
+    /// dead button sends the operator on air believing they can key.
+    func testConnectedButUnverifiedIsUntestedNotReady() {
+        let light = indicator(.connected, verified: false)
+        XCTAssertEqual(light.title, "Accessory untested")
+        XCTAssertEqual(light.emphasis, .working)
+    }
+
+    /// And VoiceOver is told the same truth the glyph carries — the label must
+    /// not fall through to plain "connected", which is the claim being avoided.
+    func testTheUntestedStateIsHonestToVoiceOverToo() {
+        let light = indicator(.connected, verified: false)
+        XCTAssertTrue(
+            light.accessibilityLabel.localizedCaseInsensitiveContains("untested"),
+            "got: \(light.accessibilityLabel)")
     }
 
     // MARK: - The three states

@@ -102,7 +102,29 @@ enum BLECentralEvent: Sendable, Equatable {
     case subscribed(id: UUID, paths: [BLECharacteristicPath])
 
     /// A notification arrived. The only event the runtime PTT path cares about.
+    ///
+    /// **Never a probe's read answer.** The central is the one layer that knows
+    /// which read it issued, so it is the one layer that can tell the answer
+    /// from a notification — and it must, because the two mean different
+    /// things: a notification is the accessory speaking and may key the radio;
+    /// a read answer is the app asking and must not. An accessory whose press
+    /// characteristic is readable and latches the press payload would otherwise
+    /// be keyed by every post-over probe, with no release ever coming.
     case notified(id: UUID, signal: BLESignal)
+
+    /// **A liveness probe actually issued a read.** Emitted at the moment the
+    /// read goes out, and not when nothing readable has been discovered yet.
+    ///
+    /// Exists so the caller can bound the wait for an answer from the moment a
+    /// read was *attempted*. Arming a deadline for a probe that silently could
+    /// not run reads discovery latency as link death — the Q2L's Classic half
+    /// connecting fires a route change while its BLE half is mid-discovery, and
+    /// that combination tore down a healthy link on a one-second clock.
+    case probeIssued(id: UUID)
+
+    /// **A liveness probe's read answered.** The link demonstrably carries
+    /// data; the payload is reported for the diagnostics log only.
+    case probeAnswered(id: UUID, signal: BLESignal)
 
     /// **A liveness probe failed.** The read was refused, errored, or came back
     /// without a characteristic to attribute it to.
@@ -112,6 +134,10 @@ enum BLECentralEvent: Sendable, Equatable {
     /// measures how recently the operator pressed the button, not whether the
     /// link works — that mistake was made and measured. A read either answers or
     /// fails, and both answers arrive on their own.
+    ///
+    /// Emitted only for the read a probe issued. A characteristic that errors
+    /// with no probe outstanding is not evidence of anything the caller asked
+    /// about, and reporting it as a probe failure force-rebuilt healthy links.
     case probeFailed(id: UUID, reason: String?)
 }
 
@@ -154,9 +180,14 @@ protocol BLECentral: AnyObject, Sendable {
     /// **Ask the link to prove it carries data**, by reading any readable
     /// characteristic.
     ///
-    /// The result arrives as an ordinary ``BLECentralEvent/notified(id:signal:)``,
-    /// because a read and a notification are the same callback in CoreBluetooth —
-    /// the fact that once caused a false diagnosis of learn mode, put to work.
+    /// A read that goes out is announced as
+    /// ``BLECentralEvent/probeIssued(id:)``, and its result arrives as
+    /// ``BLECentralEvent/probeAnswered(id:signal:)`` or
+    /// ``BLECentralEvent/probeFailed(id:reason:)`` — never as
+    /// ``BLECentralEvent/notified(id:signal:)``. A read and a notification are
+    /// the same callback in CoreBluetooth, so the conformer must remember which
+    /// read it issued; the caller cannot tell them apart, and treating an
+    /// answer as a notification is how a probe could key the radio.
     ///
     /// This exists because **nothing else on this seam is evidence.**
     /// `.connected` is not: a link was observed reporting connected while

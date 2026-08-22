@@ -200,6 +200,24 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// it, and a lingered task only acts if its generation is still current.
     private var handbackGeneration = 0
 
+    /// Frames handed to ``enqueuePlayback(_:)``, ever. A hand-back compares the
+    /// count at its linger's start with the count at its expiry: a difference
+    /// means the far side talked during the linger, and the engine still holds
+    /// their audio — replies land at a measured 1.6–2.6 s, comfortably inside
+    /// the 3 s linger — so the discard waits out another linger rather than
+    /// cutting the reply off mid-word. Not a clock: it observes arriving data,
+    /// which is the same rule the BLE probe follows.
+    private var playbackFrameCount = 0
+
+    /// Whether the hand-back discards a capture-bearing engine (see
+    /// ``completeHandback(_:attempt:playbackBaseline:)``). Platform truth by
+    /// default — the discard exists because restarting such an engine re-raises
+    /// an input route, and on iOS the only Bluetooth input route is HFP, which
+    /// re-mutes the accessory's button; macOS manages its own routes, gets the
+    /// per-over SCO behaviour right by itself, and would pay the engine churn
+    /// for nothing. Injectable so the discard logic stays testable on macOS.
+    private let discardsEngineOnHandback: Bool
+
     /// SF-3, decoupled from any one pipeline's lifetime. See the type note.
     let signals: AsyncStream<AudioSessionSignal>
     private let signalContinuation: AsyncStream<AudioSessionSignal>.Continuation
@@ -241,11 +259,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         },
         listeningLinger: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: AudioPipelineIO.listeningLingerNanoseconds)
-        }
+        },
+        discardsEngineOnHandback: Bool = {
+            #if os(iOS)
+                return true
+            #else
+                return false
+            #endif
+        }()
     ) {
         self.makePipeline = makePipeline
         self.applyPolicy = applyPolicy
         self.listeningLinger = listeningLinger
+        self.discardsEngineOnHandback = discardsEngineOnHandback
         var escaped: AsyncStream<AudioSessionSignal>.Continuation!
         self.signals = AsyncStream { escaped = $0 }
         self.signalContinuation = escaped
@@ -458,16 +484,25 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         isCapturing = false
         handbackGeneration += 1
         let generation = handbackGeneration
+        let playbackBaseline = playbackFrameCount
         lock.unlock()
 
         guard afterLinger else {
-            completeHandback(generation, attempt: 1)
+            completeHandback(generation, attempt: 1, playbackBaseline: playbackBaseline)
             return
         }
+        lingerThenComplete(generation, attempt: 1, playbackBaseline: playbackBaseline)
+    }
+
+    /// One linger, then one attempt. The re-linger paths — a refused apply, and
+    /// received audio still arriving — funnel through here too, re-baselining
+    /// the playback count so each linger judges only its own quiet.
+    private func lingerThenComplete(_ generation: Int, attempt: Int, playbackBaseline: Int) {
         let linger = listeningLinger
         Task.detached { [weak self] in
             await linger()
-            self?.completeHandback(generation, attempt: 1)
+            self?.completeHandback(
+                generation, attempt: attempt, playbackBaseline: playbackBaseline)
         }
     }
 
@@ -493,7 +528,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// that window the session is momentarily on listening under a live
     /// capture, and the capture's own retry path — reactivate, rebuild —
     /// repairs exactly that, so nothing is discarded under it here.
-    private func completeHandback(_ generation: Int, attempt: Int) {
+    private func completeHandback(_ generation: Int, attempt: Int, playbackBaseline: Int) {
         lock.lock()
         guard generation == handbackGeneration, !isCapturing,
             appliedPolicy != AudioSessionPolicy.listening
@@ -501,22 +536,54 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             lock.unlock()
             return
         }
+        // Received audio arrived during the linger: the engine is carrying the
+        // far side's reply, and the discard below would cut it off mid-word —
+        // `playerNode.stop()` drops every scheduled buffer. Wait out another
+        // linger; a linger that passes with nothing arriving is a queue that
+        // has drained, because frames arrive faster than once per linger for
+        // as long as anyone is talking. Bounded by the same attempt budget as
+        // a refused apply, because the hand-back is what revives the button
+        // (BU-14) and must not be deferrable forever.
+        if playbackFrameCount != playbackBaseline, attempt < Self.maximumHandbackAttempts {
+            let rebaselined = playbackFrameCount
+            lock.unlock()
+            Diagnostics.route(
+                "audio hand-back deferred "
+                    + "(attempt \(attempt)/\(Self.maximumHandbackAttempts)): "
+                    + "received audio is still arriving")
+            lingerThenComplete(generation, attempt: attempt + 1, playbackBaseline: rebaselined)
+            return
+        }
         // Discard *before* the apply: an engine with a running input unit is a
         // live recording client, exactly the kind of thing a session refuses a
         // category change under. Only an engine a capture has been attempted
         // on carries the input unit; one that has only played is already the
-        // engine we want and is kept. The fresh engine is built eagerly rather
-        // than lazily on the next frame, because `AudioPipeline` registers the
-        // SF-3 observers in its initialiser and a gap with no pipeline would
-        // be a gap in route-change observation.
-        if captureAttemptedOnCurrent {
-            current?.stop()
-            forwarder?.cancel()
-            forwarder = nil
-            _ = adoptLocked(makePipeline())
-            Diagnostics.route("audio hand-back: capture engine discarded")
-        }
+        // engine we want and is kept — as is everything, on a platform that
+        // manages its own routes (see `discardsEngineOnHandback`). The fresh
+        // engine is built eagerly rather than lazily on the next frame, because
+        // `AudioPipeline` registers the SF-3 observers in its initialiser and a
+        // gap with no pipeline would be a gap in route-change observation.
+        let needsDiscard = discardsEngineOnHandback && captureAttemptedOnCurrent
         lock.unlock()
+
+        if needsDiscard {
+            // Built outside the lock: `AudioPipeline()` opens an AVAudioEngine,
+            // and `enqueuePlayback` takes this lock fifty times a second — the
+            // inbound path must not stall behind engine construction.
+            let fresh = makePipeline()
+            lock.lock()
+            // Re-checked: a key-down may have raced the build, and a capture's
+            // engine must not be pulled out from under it. The orphaned fresh
+            // engine is simply released.
+            if generation == handbackGeneration, !isCapturing, captureAttemptedOnCurrent {
+                current?.stop()
+                forwarder?.cancel()
+                forwarder = nil
+                _ = adoptLocked(fresh)
+                Diagnostics.route("audio hand-back: capture engine discarded")
+            }
+            lock.unlock()
+        }
 
         do {
             try applyPolicy(AudioSessionPolicy.listening)
@@ -529,11 +596,10 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
                 "audio hand-back to listening failed "
                     + "(attempt \(attempt)/\(Self.maximumHandbackAttempts)): \(error)")
             guard attempt < Self.maximumHandbackAttempts else { return }
-            let linger = listeningLinger
-            Task.detached { [weak self] in
-                await linger()
-                self?.completeHandback(generation, attempt: attempt + 1)
-            }
+            lock.lock()
+            let rebaselined = playbackFrameCount
+            lock.unlock()
+            lingerThenComplete(generation, attempt: attempt + 1, playbackBaseline: rebaselined)
             return
         }
 
@@ -616,6 +682,9 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     }
 
     func enqueuePlayback(_ pcm: [Int16]) {
+        lock.lock()
+        playbackFrameCount += 1
+        lock.unlock()
         pipeline().enqueuePlayback(pcm)
     }
 
