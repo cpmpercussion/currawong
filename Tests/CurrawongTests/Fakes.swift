@@ -47,6 +47,7 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
     private var storedSentFrames: [[Int16]] = []
     private var storedSentDigits: [Character] = []
     private var storedDTMFError: Error?
+    private var storedDuringStartTransmit: (@Sendable () async -> Void)?
 
     // MARK: NetworkClient
 
@@ -106,7 +107,13 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         lock.lock()
         storedCalls.append(.startTransmit)
         let error = storedStartTransmitError
+        let during = storedDuringStartTransmit
         lock.unlock()
+
+        // Whatever a test wants to happen *while* the link is keying — which
+        // since BU-16 is where the key-down suspends, and so where a release
+        // can land. Run before the error check so a test can combine the two.
+        await during?()
 
         if let error { throw error }
 
@@ -208,6 +215,25 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         set {
             lock.lock()
             storedConnectError = newValue
+            lock.unlock()
+        }
+    }
+
+    /// Runs inside ``startTransmit()``, before it returns.
+    ///
+    /// The reentrancy hazard the workspace `CLAUDE.md` names: a release that
+    /// arrives at the key-down's own suspension point is the case a
+    /// common-ordering test cannot reach, and it is exactly BU-16's tap. Setting
+    /// this is how a test delivers the release from inside the awaited call.
+    var duringStartTransmit: (@Sendable () async -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedDuringStartTransmit
+        }
+        set {
+            lock.lock()
+            storedDuringStartTransmit = newValue
             lock.unlock()
         }
     }

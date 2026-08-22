@@ -1595,6 +1595,32 @@ final class RadioSession: ObservableObject {
         if transmitDesired {
             guard connection.isConnected, !isTransmitting else { return }
             do {
+                // **BU-16: the link keys first, and capture catches up.**
+                // Keying the link is milliseconds; opening capture costs
+                // ~163 ms on a Bluetooth route (the SCO measurement in
+                // `BLUETOOTH-AUDIO.md`), and paying capture first is how a
+                // 90 ms tap put the radio on air *after* the finger had
+                // lifted. This order keys the far end with the press, at the
+                // cost of a moment of keyed-but-silent carrier while the
+                // microphone comes up — the same moment a handheld's operator
+                // covers by pausing after keying. If capture then fails, the
+                // catch below unkeys: the carrier is bounded either way.
+                try await link.startTransmit()
+
+                // The release may have arrived at the suspension above —
+                // `endTransmit` runs synchronously on this actor and has
+                // already closed the microphone and cleared the hold. Keying
+                // on regardless is BU-16's other half: the radio going on air
+                // after the operator let go. Unkey and stop; the release's own
+                // queued apply finds nothing left to do.
+                guard transmitDesired else {
+                    await link.stopTransmit()
+                    transmitState = link.transmitState()
+                    refreshActivity()
+                    Diagnostics.keying("key-down abandoned: released while the link was keying")
+                    return
+                }
+
                 // Gain, then meter, then the wire. The order is the point: the
                 // meter reports what actually leaves, so the operator is
                 // setting the gain against the thing it changes.
@@ -1611,7 +1637,6 @@ final class RadioSession: ObservableObject {
                     meter.note(amplified)
                     link.sendCapturedFrame(amplified)
                 }
-                try await link.startTransmit()
             } catch {
                 // Fail closed: microphone shut, client unkeyed, button
                 // released. The operator must make a fresh, deliberate press.

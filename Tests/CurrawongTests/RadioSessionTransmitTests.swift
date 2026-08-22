@@ -503,6 +503,72 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertEqual(harness.session.transmitGain.decibels, 15)
     }
 
+    // MARK: BU-16 — a tap that outruns the key-down
+
+    /// **BU-16.** The Q2L's edges are 90 ms apart and a Bluetooth `startCapture`
+    /// costs ~163 ms, so the release lands *inside* the key-down. The radio must
+    /// not go on air after the operator has let go.
+    ///
+    /// The release is delivered from inside the awaited call, which is the
+    /// ordering a common-ordering test cannot produce — see the workspace
+    /// `CLAUDE.md` on actor reentrancy.
+    func testAReleaseDuringTheKeyDownLeavesTheRadioOffAir() async {
+        let harness = SessionHarness()
+        await harness.connect()
+        harness.client.duringStartTransmit = { [session = harness.session] in
+            await MainActor.run { session.endTransmit(reason: .accessoryReleased) }
+        }
+
+        await harness.keyDown()
+        await harness.settleAll()
+
+        XCTAssertFalse(harness.session.isTransmitting, "the tap must not leave the radio keyed")
+        XCTAssertFalse(harness.client.isTransmitting)
+        XCTAssertFalse(harness.session.isKeyDown)
+        XCTAssertFalse(harness.audio.isCapturing, "the microphone must not be left open")
+        XCTAssertTrue(
+            harness.client.calls.contains(.stopTransmit),
+            "the link keyed before the release arrived, so it must be told to unkey")
+        XCTAssertEqual(
+            harness.audio.startCaptureCount, 0,
+            "an abandoned key-down must not pay for a microphone nobody will speak into")
+        XCTAssertNil(harness.session.alert, "an ordinary short tap is not a failure to report")
+    }
+
+    /// **BU-16.** The link keys before the microphone opens, so the far end
+    /// hears the carrier with the press rather than 163 ms after it.
+    func testTheLinkKeysBeforeTheMicrophoneOpens() async {
+        let harness = SessionHarness()
+        await harness.connect()
+        let captureAtKeying = SessionHarness.Counter()
+        harness.client.duringStartTransmit = { [audio = harness.audio] in
+            if audio.isCapturing { captureAtKeying.bump() }
+        }
+
+        await harness.keyDown()
+
+        XCTAssertEqual(
+            captureAtKeying.value, 0,
+            "capture must not be paid for before the link is keyed")
+        XCTAssertTrue(harness.session.isTransmitting)
+        XCTAssertTrue(harness.audio.isCapturing, "capture still follows the keying")
+    }
+
+    /// The fail-closed path still holds with the order reversed: a microphone
+    /// that refuses after the link has keyed must take the link down with it.
+    func testAMicrophoneFailureAfterKeyingUnkeysTheLink() async {
+        let harness = SessionHarness()
+        await harness.connect()
+        harness.audio.startCaptureError = SessionHarness.AudioFailed()
+
+        await harness.keyDown()
+
+        XCTAssertFalse(harness.session.isTransmitting)
+        XCTAssertFalse(harness.client.isTransmitting, "the carrier must not outlive the failure")
+        XCTAssertTrue(harness.client.calls.contains(.stopTransmit))
+        XCTAssertEqual(harness.session.lastStopReason, .transmitFailed)
+    }
+
     // MARK: Failing to key
 
     func testAMicrophoneFailureFailsClosedAndIsReported() async {

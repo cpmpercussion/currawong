@@ -123,7 +123,7 @@ keep treating the app as unproven on air.
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
 | BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE PROVEN 2026-08-22 (evening): the accessory itself suppresses its BLE notifications while its Classic side sits in an idle HFP call.** Cross-tested with the Mac holding the BLE link while the phone held the call: zero notifications with the LED red, the same subscription delivering again the moment call mode ended — no reconnect, no re-subscribe. Reads answered throughout, which is how every probe lied. iOS shows it and macOS never did because iOS holds the session forever (`BU-17`) while macOS drops SCO ~2.1 s after capture — so `BU-14` **is** `BU-17`, and the fix is releasing the session when idle. Not fixable by link repair; the day's two probe-machinery bugs are fixed regardless. **Fix verified on air the same evening** (see BU-17): ten-plus consecutive overs, every press after a completed hand-back delivered — the press that always died. Still open for the closure criteria only: an over with the app backgrounded and the phone locked (stage with `BU-10`) |
-| BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race |
+| BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link |
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
 | BU-15 | **The first transmit after launch does a visible dance** — press PTT, handset beeps, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS, Q2L) | **Diagnosed 2026-08-22, not yet fixed.** Bringing HFP up changes the engine's configuration (A2DP device → HFP device, 44100 → 16000 Hz), `AVAudioEngineConfigurationChange` fires `.routeChanged`, and `resumeAcrossRouteChange()` correctly drops transmit and keys back down. The machinery is working as specified; the operator should not have to watch it |
 
@@ -1337,7 +1337,7 @@ timestamps for a dozen presses.
 SF-3 still demonstrably dropping transmit on a route change the app did not
 cause.
 
-### BU-16 — a tap outruns the key-down, so the radio keys after you let go 🔬 DIAGNOSED 2026-08-22
+### BU-16 — a tap outruns the key-down, so the radio keys after you let go ✅ FIXED 2026-08-22
 
 **Observed on iOS**, accessory PTT, one quick tap, in this order:
 
@@ -1367,17 +1367,39 @@ step is on the main actor, in the documented order. It is a *latency* fault: the
 button's edges are 90 ms apart (measured on this device) and the key-down path
 is longer than that.
 
-**Where the fix probably is** — not decided:
+**The fix, implemented 2026-08-22.** Two changes in `applyTransmit()`, and they
+are separate answers to separate halves of the fault:
 
-* **Do not go on air for a press that has already been released.** Re-check
-  `transmitDesired` after `startCapture` returns and before
-  `link.startTransmit()`. Cheap, and it turns the unwanted over into nothing at
-  all. The care needed is the actor-reentrancy rule: the re-check and the
-  decision must sit in the same isolated region with no `await` between them.
-* **Require a minimum hold** before keying. Rejected on sight for a radio: it
-  adds latency to every deliberate press to fix an accidental one.
-* **Leave it and let the UI stop lying**, i.e. do not show red until on air is
-  confirmed. Does not stop the transmission.
+* **The link keys first, and capture catches up.** `link.startTransmit()` is
+  milliseconds of network; `startCapture` is the ~163 ms. Paying the network
+  first puts the far end's carrier up with the press instead of a sixth of a
+  second after it, which is the whole of the latency complaint. The cost is a
+  moment of keyed-but-silent carrier while the microphone comes up — the pause
+  a handheld's operator makes after keying anyway — and it is bounded, because
+  a capture that then fails goes down the existing fail-closed path and unkeys
+  the link it just raised. `testAMicrophoneFailureAfterKeyingUnkeysTheLink`
+  pins that.
+* **A key-down whose release already arrived is abandoned.** The re-check this
+  section proposed, moved to after `startTransmit` because that is where the
+  suspension now is: `transmitDesired` is re-read on return, and a false answer
+  unkeys the link and returns without ever opening the microphone. The re-check
+  and the decision sit in one main-actor region with no `await` between them,
+  per the reentrancy rule. A tap now produces **nothing at all** rather than an
+  over that begins after the release.
+
+The two options not taken are still the right ones to refuse: a **minimum hold**
+adds latency to every deliberate press to fix an accidental one, and **letting
+the UI stop lying** would leave the unwanted transmission happening.
+
+`FakeNetworkClient.duringStartTransmit` is what makes the abandonment testable —
+it delivers the release from *inside* the awaited call, the ordering the
+workspace `CLAUDE.md` says a common-ordering test cannot reach.
+`testAReleaseDuringTheKeyDownLeavesTheRadioOffAir` asserts the radio stays off
+air, the microphone is never opened, and the link is told to unkey.
+
+**Not yet seen on air.** The tests cover the ordering; what wants confirming
+with the Q2L is that the first over's audio is not clipped by the reversed
+order, since the microphone now opens against an already-keyed link.
 
 **Closed when** a tap shorter than the key-down path produces either a complete
 short over or nothing at all, and never a transmission that starts after the
