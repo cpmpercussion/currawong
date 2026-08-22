@@ -318,9 +318,46 @@ six times, while a reconnect worked every time it was tried. So this does the
 reliable thing on a signal that is observable — the route change — rather than
 the cheap thing on a signal that is not.
 
+### Tried on air, and revised — 2026-08-22
+
+**Nine repairs fired, reconnects completed in 1.1–1.3 s, and the button worked
+after most of them.** Two things were wrong, both reported by the operator:
+
+**1. It felt slow, and it was.** The first version waited 1.5 s for the route to
+go quiet *before* repairing, putting that wait on the critical path: press,
+nothing, 1.5 s, 1.2 s reconnect, then a button. Now the repair happens on the
+**first** change of a burst and further changes are ignored for
+`repairCooldown` (4 s). Same coalescing, none of the latency — and simpler, since
+the delay and its task are gone.
+
+**2. A reconnect is not reliable either, and pretending otherwise was the real
+fault.** One repair completed in full — disconnect, reconnect, `connected`, all
+four subscribes — and the button was still dead. So a reconnect is only *better
+odds* than a re-subscribe, not a guarantee, and there is no host-side action
+known to always restore this link.
+
+> **That is what made the previous behaviour a genuine failure mode rather than
+> an annoyance.** The status panel said **"Accessory ready"**, the accessory's LED
+> was lit, and there was no working button and nothing to press. The app was
+> asserting something it had no evidence for, and leaving the operator with no
+> way out.
+
+So the design goal changed: **stop trying to guarantee the link, and never lie
+about it.**
+
+* `isButtonVerified` — false from the moment a link comes up or is rebuilt, true
+  only when something actually arrives on it. `.connected` is not evidence and a
+  successful subscribe is not evidence; arriving data is the only evidence there
+  is.
+* The status panel says **"Accessory untested"** rather than "Accessory ready"
+  until that happens, at `.working` emphasis rather than solid.
+* The accessory pane offers a **Reconnect** button in that state, and says in
+  words that the on-screen button always works. An operator who cannot key from
+  the accessory now has both an explanation and two ways forward.
+
 **What this does not claim.** The repair is aimed at the *observed* trigger. A
 link that dies for some other reason will still strand the button until the next
-route change, and there is still no liveness check — because there cannot be a
+route change or a manual Reconnect, and there is still no liveness check — because there cannot be a
 useful one without either a readable characteristic on the seam (`BLECentral` has
 no read) or a definition of "too quiet", which a PTT button legitimately is for
 minutes at a time.

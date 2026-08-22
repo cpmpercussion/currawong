@@ -70,11 +70,17 @@ struct AccessoryIndicator: Equatable {
     ///   - isRemoteCommandEnabled: PT-4. A headset button is a configured input
     ///     too, and it needs no link, so it is the one thing that can make this
     ///     solid with no accessory at all.
+    ///   - isButtonVerified: whether anything has actually arrived on the link
+    ///     since it came up. **A connected link is not a working button** — see
+    ///     `BLEPTTController.isButtonVerified` — and this indicator must not
+    ///     claim otherwise, because an operator who believes they can key and
+    ///     cannot is worse off than one who knows they cannot.
     init(
         linkState: BLEPTTController.LinkState,
         isAccessoryConfigured: Bool,
         isAccessoryKeyed: Bool,
-        isRemoteCommandEnabled: Bool
+        isRemoteCommandEnabled: Bool,
+        isButtonVerified: Bool = true
     ) {
         // Keyed first: while a button is held, what it is doing outranks how it
         // got connected.
@@ -101,6 +107,14 @@ struct AccessoryIndicator: Equatable {
         }
 
         switch linkState {
+        case .connected where !isButtonVerified:
+            // Connected, and that is all that can honestly be said: nothing has
+            // arrived on this link yet, and after BU-14 a connection is no
+            // evidence at all. "Untested" rather than a warning, because most of
+            // the time the first press proves it and all is well.
+            systemImage = "dot.circle"
+            title = "Accessory untested"
+            emphasis = .working
         case .connected:
             systemImage = "dot.circle.fill"
             title = "Accessory ready"

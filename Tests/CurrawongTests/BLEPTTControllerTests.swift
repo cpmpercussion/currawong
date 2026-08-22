@@ -42,12 +42,29 @@ final class BLEPTTControllerTests: XCTestCase {
         await waitUntil(description, predicate)
     }
 
+
     // MARK: - Repairing a link that has gone quiet (BU-14)
 
-    /// The controller with a gate-controlled settle delay, and a mapping already
-    /// stored and connected — the state a repair applies to.
+    /// A clock the test moves by hand, so the repair cooldown does not cost real
+    /// seconds.
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = Date(timeIntervalSince1970: 1_000)
+        var now: Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+        func advance(_ seconds: TimeInterval) {
+            lock.lock()
+            value = value.addingTimeInterval(seconds)
+            lock.unlock()
+        }
+    }
+
+    /// A mapping already stored and the link up — the state a repair applies to.
     private func makeConnectedController(
-        gate: DelayGate
+        clock: TestClock
     ) async -> (BLEPTTController, BLEPTTMapping) {
         let mapping = TestSignals.mapping()
         store = InMemoryPTTSettingsStore(mapping: mapping)
@@ -55,7 +72,7 @@ final class BLEPTTControllerTests: XCTestCase {
             makeCentral: { [central] in central! },
             store: store,
             retryDelay: {},
-            routeSettleDelay: gate.wait)
+            now: { clock.now })
         controller.sink = sink
         controller.activateIfConfigured()
         central.emit(.connected(id: mapping.accessoryID))
@@ -64,19 +81,18 @@ final class BLEPTTControllerTests: XCTestCase {
         return (controller, mapping)
     }
 
-    /// **The repair itself.** A route change while idle rebuilds the link,
-    /// because the subscription has probably stopped delivering and nothing will
-    /// ever say so.
-    func testARouteChangeWhileIdleRebuildsTheLink() async {
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(gate: gate)
+    /// **The repair itself**, and it happens *now*: an earlier version waited
+    /// 1.5 s for the route to settle first, which the operator felt as a button
+    /// that stayed dead.
+    func testARouteChangeWhileIdleRebuildsTheLinkImmediately() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        gate.open()
 
-        await waitUntil("disconnected for repair") {
-            self.central.calls.contains(.disconnect(mapping.accessoryID))
-        }
+        XCTAssertEqual(
+            central.calls, [.disconnect(mapping.accessoryID)],
+            "the repair must not wait for anything")
         // And the ordinary disconnection path takes it from there, so there is
         // one reconnection routine rather than two.
         central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
@@ -86,76 +102,123 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertEqual(controller.linkState, .reconnecting)
     }
 
-    /// **A burst produces one reconnect, not one per change.** `BU-17` has route
-    /// changes flapping about once a second; repairing on each would thrash the
-    /// link it is trying to fix.
+    /// **A burst produces one repair.** `BU-17` has route changes flapping about
+    /// once a second, and rebuilding on each would thrash the link.
     func testABurstOfRouteChangesCoalescesIntoOneRebuild() async {
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(gate: gate)
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         for _ in 0..<5 { controller.audioRouteDidChange() }
-        // All five must be suspended before any is released: the guarantee under
-        // test is that the later ones cancel the earlier ones, which cannot
-        // happen if the earlier ones have already run.
-        await waitUntil("all five waiting") { gate.waiterCount == 5 }
-        gate.releaseAll()
 
-        await waitUntil("disconnected once") {
-            self.central.calls.contains(.disconnect(mapping.accessoryID))
-        }
-        let disconnects = central.calls.filter { $0 == .disconnect(mapping.accessoryID) }
-        XCTAssertEqual(disconnects.count, 1, "a burst must coalesce into one repair")
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+    }
+
+    /// The cooldown is a cooldown, not a one-shot: a genuine second failure
+    /// later must still be repaired.
+    func testARouteChangeAfterTheCooldownRebuildsAgain() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        central.clearCalls()
+        clock.advance(BLEPTTController.repairCooldown + 1)
+        controller.audioRouteDidChange()
+
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+    }
+
+    /// The operator has better information than a timer, so their button ignores
+    /// the cooldown.
+    func testTheOperatorsReconnectIgnoresTheCooldown() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        central.clearCalls()
+        controller.reconnectAccessory()
+
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
     }
 
     /// **SF-2's own hazard, guarded.** The accessory holding the key means the
-    /// operator is on air by way of this button; a repair would disconnect, and a
-    /// disconnection unkeys. `RadioSession` is the outer guard, but the
-    /// controller refuses this one for itself too.
+    /// operator is on air by way of this button, and a repair disconnects, and a
+    /// disconnection unkeys. `RadioSession` is the outer guard; the controller
+    /// refuses this one for itself too.
     func testARouteChangeIsIgnoredWhileTheAccessoryIsKeyed() async {
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(gate: gate)
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
 
         central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
         await waitUntil("keyed") { controller.isAccessoryKeyed }
+        central.clearCalls()
 
         controller.audioRouteDidChange()
-        gate.open()
-        await Task.yield()
 
-        XCTAssertFalse(
-            central.calls.contains(.disconnect(mapping.accessoryID)),
+        XCTAssertEqual(
+            central.calls, [],
             "a repair must never disconnect a link that is holding the key")
     }
 
-    /// Learn mode is a sequence the operator is in the middle of. Rebuilding the
-    /// link under them would restart it with no explanation.
+    /// Learn mode is a sequence the operator is in the middle of; rebuilding the
+    /// link would restart it with no explanation.
     func testARouteChangeIsIgnoredDuringLearnMode() async {
-        let gate = DelayGate()
-        let (controller, mapping) = await makeConnectedController(gate: gate)
+        let clock = TestClock()
+        let (controller, _) = await makeConnectedController(clock: clock)
 
         controller.relearnCurrentAccessory()
+        central.clearCalls()
         controller.audioRouteDidChange()
-        gate.open()
-        await Task.yield()
 
-        XCTAssertFalse(central.calls.contains(.disconnect(mapping.accessoryID)))
+        XCTAssertEqual(central.calls, [])
     }
 
-    /// No accessory in use means no link to repair — and, as with launch, no
-    /// reason to touch the central at all.
-    func testARouteChangeWithNothingLearnedTouchesNothing() async {
-        let gate = DelayGate()
+    /// No accessory in use means no link to repair, and no reason to touch the
+    /// central at all.
+    func testARouteChangeWithNothingLearnedTouchesNothing() {
+        let clock = TestClock()
         let controller = BLEPTTController(
             makeCentral: { [central] in central! },
             store: store,
             retryDelay: {},
-            routeSettleDelay: gate.wait)
+            now: { clock.now })
 
         controller.audioRouteDidChange()
-        gate.open()
-        await Task.yield()
 
         XCTAssertEqual(central.calls, [])
+    }
+
+    // MARK: - A connection is not a working button (BU-14)
+
+    /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the
+    /// link starts unverified and only arriving data changes that.
+    func testAFreshLinkIsUnverifiedUntilSomethingArrives() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        XCTAssertFalse(
+            controller.isButtonVerified,
+            "a connection is not evidence that the button works")
+
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
+        await waitUntil("verified") { controller.isButtonVerified }
+
+        // Anything at all counts, including a signal the mapping ignores: the
+        // question is whether the link delivers, not what it delivered.
+        XCTAssertTrue(controller.isButtonVerified)
+    }
+
+    /// And a repair puts it back to unproven, because that is exactly what it is.
+    func testARepairMakesTheLinkUnverifiedAgain() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+        // A *release*, not a press: a press would key the accessory, and a
+        // repair is rightly refused while the button holds the key.
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.release))
+        await waitUntil("verified") { controller.isButtonVerified }
+
+        controller.reconnectAccessory()
+
+        XCTAssertFalse(controller.isButtonVerified)
     }
 
     // MARK: - Nothing learned
@@ -420,65 +483,5 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertNil(
             BLEPTTMapping(
                 accessoryID: UUID(), accessoryName: nil, press: signal, release: signal))
-    }
-}
-
-/// A `routeSettleDelay` the test controls, so coalescing can be asserted rather
-/// than raced.
-///
-/// An immediate delay would not test anything: the guarantee is that a *burst*
-/// of route changes produces one reconnect, and that only holds while the
-/// earlier waits are still suspended when the later one cancels them. Cancelled
-/// waiters still resume here — a `CheckedContinuation` is not cancellable — and
-/// are expected to bail on their own `Task.isCancelled` check.
-private final class DelayGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-
-    private var isOpen = false
-
-    /// How many waits are currently suspended. A test that means to hold several
-    /// at once must wait for them to arrive: releasing before the task under test
-    /// has reached its `await` releases nothing, and it then hangs.
-    var waiterCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return waiting.count
-    }
-
-    var wait: @Sendable () async -> Void {
-        { [self] in
-            await withCheckedContinuation { continuation in
-                lock.lock()
-                if isOpen {
-                    lock.unlock()
-                    continuation.resume()
-                } else {
-                    waiting.append(continuation)
-                    lock.unlock()
-                }
-            }
-        }
-    }
-
-    /// Let everything through, now and in future. Race-free: a wait that has not
-    /// started yet returns immediately rather than hanging.
-    func open() {
-        lock.lock()
-        isOpen = true
-        let resuming = waiting
-        waiting = []
-        lock.unlock()
-        resuming.forEach { $0.resume() }
-    }
-
-    /// Release only what is suspended right now, leaving the gate shut. For the
-    /// coalescing test, which must hold a burst and then let it go.
-    func releaseAll() {
-        lock.lock()
-        let resuming = waiting
-        waiting = []
-        lock.unlock()
-        resuming.forEach { $0.resume() }
     }
 }

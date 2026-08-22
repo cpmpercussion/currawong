@@ -149,7 +149,8 @@ struct SessionPane: View {
             linkState: accessory.linkState,
             isAccessoryConfigured: accessory.mapping != nil,
             isAccessoryKeyed: accessory.isAccessoryKeyed,
-            isRemoteCommandEnabled: remoteCommand.isEnabled)
+            isRemoteCommandEnabled: remoteCommand.isEnabled,
+            isButtonVerified: accessory.isButtonVerified)
     }
 
     private var header: some View {
