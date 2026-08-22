@@ -131,6 +131,13 @@ tap is installed.** Two costs follow, and the second is the substantive one:
    invisible in testing because it sounds like the far end rather than like a
    fault.
 
+**Corroborated by the operator, 2026-08-22.** Receive audio was independently
+reported as sounding "more normal on macOS than iOS" — noticed from the
+listening, without reference to this analysis and before it was written down.
+That takes cost (2) from inference to an observation with a mechanism behind it,
+and it is the reason this section is worth acting on rather than filing. It is
+still not a *measurement*: step 1 below is what turns it into one.
+
 Note what this is *not*: it is not the mic tap. `stopCapture()` tears the tap
 down on every release, deliberately, and that is why the system recording
 indicator behaves correctly. The SCO link is held by the session's *route*, one
@@ -142,10 +149,14 @@ The goal is to state it once: **A2DP while listening, HFP only while
 transmitting, switched at key-down and key-up.** Sketched in the order the
 risk sits, because step 1 is cheap and steps 2–3 are not.
 
-**1. Confirm the diagnosis before changing anything.** Log
-`audioStateDescription()` — it already prints category, mode, hardware rate and
-the route's input port types — on every key-down and key-up, plus
-`AVAudioSession.routeChangeNotification` and its reason code. What settles it is
+**1. Confirm the diagnosis before changing anything. The instrument now
+exists** — `Diagnostics` (added under `BU-13`) logs `audioStateDescription()` on
+every key-down and key-up, and on iOS logs
+`AVAudioSession.routeChangeNotification` with its reason code. Read it with:
+
+```sh
+log stream --predicate 'subsystem == "au.charlesmartin.currawong"' --style compact --info
+``` What settles it is
 the *hardware rate while idle*: 16000 Hz between overs means HFP is being held
 and this section applies; 44100 Hz means it is not and the LED has another
 cause. **Do not skip this.** Three plausible explanations for the LED were

@@ -64,6 +64,14 @@ protocol AudioIO: AnyObject, Sendable {
 
     /// Queues received audio for playback.
     func enqueuePlayback(_ pcm: [Int16])
+
+    /// What the audio system thinks is true, in one line, for the key/unkey log.
+    ///
+    /// On the protocol rather than on the implementation because the *point* is
+    /// to log it at key-down and key-up, and those live in ``RadioSession``,
+    /// which only ever sees an `AudioIO`. Diagnostic: no behaviour may branch on
+    /// this string. See `Diagnostics` and `BU-13`.
+    var audioStateDescription: String { get }
 }
 
 /// The engine-side half of ``AudioPipelineIO``, as a seam.
@@ -343,7 +351,12 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// A hardware rate of 0 means the session is not really up; a live rate here
     /// beside a `converterUnavailable` from the engine means the session is fine
     /// and the *engine* is the stale one.
-    private static func audioStateDescription() -> String {
+    var audioStateDescription: String { Self.audioStateDescription() }
+
+    /// The one-line audio state. `static` because ``startCapture(onFrame:)``
+    /// reaches it from a `catch` where building anything is the last thing
+    /// wanted.
+    static func audioStateDescription() -> String {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         let inputs = session.currentRoute.inputs.map(\.portType.rawValue).joined(separator: "+")

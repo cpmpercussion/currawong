@@ -175,6 +175,13 @@ final class CompositionRoot {
         // iOS and nothing on macOS, which is what the app itself gets.
         activity: TransmitActivityController? = nil
     ) {
+        // Route-change *reasons*, which `AudioSessionSignal` does not carry.
+        // Diagnostic only, registers one observer, and is a no-op on macOS —
+        // see `Diagnostics` and `BU-13`. Here rather than in `AudioPipelineIO`
+        // because the pipeline is built lazily on first capture, and a route
+        // change before the first key-down is exactly the kind this is for.
+        Diagnostics.startRouteLogging()
+
         // Before the session, so the session can be handed its release hook
         // (APP-13). The order is load-bearing rather than tidy: a closure
         // capturing `self` cannot be built until every property is initialised,
