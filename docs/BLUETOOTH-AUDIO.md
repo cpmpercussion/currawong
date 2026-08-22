@@ -259,20 +259,45 @@ it enters hands-free call mode, and iOS never surfaces the disconnection. The
 delivering.** There is no liveness check, and CoreBluetooth is not telling it
 anything.
 
-**The open question, and it decides the fix's shape.** Both recoveries were
-forget-and-retrain, which disconnects *and* reconnects *and* re-subscribes. It is
-not yet known whether a bare re-subscribe would do —
-`restartLearning()` already calls `subscribeToAllNotifyingCharacteristics`
-without reconnecting, so the cheap experiment is to trigger that alone against a
-dead link and see whether notifications resume. **Answer that before designing
-anything**, because it is the difference between a re-subscribe on route change
-and a full reconnect cycle.
+**Answered 2026-08-22: a bare re-subscribe revives it, but not reliably.**
+Tested with "Teach it again", which calls
+`subscribeToAllNotifyingCharacteristics` without reconnecting when the link is
+already `.connected` — confirmed from the log by the *absence* of any
+`link -> connecting` or `DISCONNECTED` line:
+
+```
+[1237.360] route changed: reason=categoryChange → HFP    ← button killed
+[1251.242] accessory subscribed to 1: AE30/AE02          ← bare re-subscribe
+[1253.374] accessory notify FF00/FF01 = 01 (learning)    ← revived
+```
+
+Then, after the button was killed again, **five** further bare re-subscribes
+(`1276.3`, `1290.9`, `1294.4`, `1299.6`, `1308.6`) revived nothing at all.
+
+**The sharpest part of that result: every one of those five subscribes was
+reported as successful.** `didUpdateNotificationStateFor` returned without
+error, `subscribedPaths` was populated, and no notification ever followed. So
+**subscribe success is not a liveness signal**, any more than `.connected` is.
+The only evidence that this link works is data arriving on it.
+
+That kills the cheap fix — "re-subscribe on route change" would work about one
+time in six — and specifies the real one:
+
+> **Re-subscribe, then verify, then escalate.** Attempt a re-subscribe; if no
+> notification arrives within a bounded window, disconnect and reconnect. Treat
+> neither `.connected` nor a successful subscribe as proof of anything.
+
+The escalation has to be designed around `SF-2`: a disconnect unkeys
+unconditionally, so a reconnect cycle must not be triggerable while transmitting,
+or it becomes a mechanism for dropping the operator mid-over. The safe window is
+between overs — which is also when the operator is not looking, so it wants to
+be silent when it works and visible when it does not.
 
 Candidate fixes, none chosen:
 
-* **Re-subscribe (or reconnect) on every `.routeChanged`.** Targeted at the
-  observed trigger, and cheap. Risk: it treats the symptom's correlate rather
-  than the cause, so an unrelated trigger would still strand the link.
+* ~~**Re-subscribe on every `.routeChanged`.**~~ **Ruled out 2026-08-22** — a bare
+  re-subscribe revived the link once in six attempts, and reported success every
+  time. Necessary as a first step, nowhere near sufficient alone.
 * **Liveness detection.** Treat "keyed nothing for N seconds while subscribed"
   as suspicious and reconnect. More general, and needs care not to reconnect
   during a legitimate quiet period — which is most of the time on a radio.

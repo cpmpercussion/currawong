@@ -1074,11 +1074,15 @@ independent, is unknown.
 > **closed**: releases arrive fine over an established SCO link. See
 > `BLUETOOTH-AUDIO.md`.
 >
-> **Next, and cheap:** both recoveries were forget-and-retrain, which
-> disconnects, reconnects *and* re-subscribes. Whether a bare re-subscribe
-> suffices — `restartLearning()` already does one without reconnecting — decides
-> whether the fix is a re-subscribe on route change or a full reconnect cycle.
-> Answer that before designing.
+> **Answered 2026-08-22: a bare re-subscribe revives it, but only sometimes.**
+> One clean success with no reconnect (`categoryChange` at 1237.4 killed it,
+> "Teach it again" re-subscribed at 1251.2, notifications at 1253.4), then five
+> further bare re-subscribes that revived nothing — **every one of them reported
+> as successful.** So neither `.connected` nor a successful subscribe is a
+> liveness signal; only arriving data is. The fix is therefore
+> **re-subscribe, verify, then escalate to a reconnect** — and the escalation
+> must not be able to fire while transmitting, because `SF-2` makes a disconnect
+> unkey unconditionally. Details in `BLUETOOTH-AUDIO.md`.
 
 > ~~**ROOT CAUSE FOUND 2026-08-22 — `BU-14` is the iOS audio session.**~~
 > *(superseded by the correction above; the observations were right, the
