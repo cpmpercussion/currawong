@@ -1074,6 +1074,15 @@ independent, is unknown.
 > **closed**: releases arrive fine over an established SCO link. See
 > `BLUETOOTH-AUDIO.md`.
 >
+> 🔧 **Fix implemented 2026-08-22, not yet verified on air.** On an audio route
+> change that finds the session **idle**, the accessory link is rebuilt: the
+> session decides idleness (`!isTransmitting`, no hold, no resume in flight) so
+> SF-2 stays unconditional, and the controller waits 1.5 s for the route to go
+> quiet — coalescing `BU-17`'s once-a-second flapping into one repair — then
+> disconnects, letting the existing reconnect path do the rest. Refused during
+> learn mode and while the accessory holds the key. Seven tests. **What remains
+> is watching it work on the phone against the real fault.**
+>
 > **Answered 2026-08-22: a bare re-subscribe revives it, but only sometimes.**
 > One clean success with no reconnect (`categoryChange` at 1237.4 killed it,
 > "Teach it again" re-subscribed at 1251.2, notifications at 1253.4), then five

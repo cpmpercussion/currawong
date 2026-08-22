@@ -127,6 +127,15 @@ final class BLEPTTController: ObservableObject {
     /// Injected so a test does not wait real seconds between retries.
     private let retryDelay: @Sendable () async -> Void
 
+    /// How long the audio route must be quiet before a repair reconnect is
+    /// attempted. Injected for the same reason as ``retryDelay``.
+    ///
+    /// A delay rather than an immediate reaction because route changes arrive in
+    /// **bursts** — `BU-17` has them flapping `override` → `newDeviceAvailable`
+    /// roughly once a second — and one reconnect per burst is wanted, not one
+    /// per notification.
+    private let routeSettleDelay: @Sendable () async -> Void
+
     // MARK: - Private state
 
     private var central: BLECentral?
@@ -139,6 +148,10 @@ final class BLEPTTController: ObservableObject {
     private var consecutiveFailures = 0
     private var isScanning = false
 
+    /// The in-flight repair, so a burst of route changes coalesces into one
+    /// reconnect instead of one per change.
+    private var repairTask: Task<Void, Never>?
+
     // MARK: - Init
 
     init(
@@ -146,16 +159,21 @@ final class BLEPTTController: ObservableObject {
         store: PTTSettingsStore = UserDefaultsPTTSettingsStore(),
         retryDelay: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+        },
+        routeSettleDelay: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
     ) {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
+        self.routeSettleDelay = routeSettleDelay
         self.mapping = store.loadMapping()
     }
 
     deinit {
         eventTask?.cancel()
+        repairTask?.cancel()
     }
 
     // MARK: - Lifecycle
@@ -316,6 +334,82 @@ final class BLEPTTController: ObservableObject {
         learner = nil
         store.saveMapping(nil)
         linkState = idleLinkState
+    }
+
+    // MARK: - Repairing a link that has gone quiet (BU-14)
+
+    /// **The audio route changed while nothing was transmitting.** Reconnect the
+    /// accessory, because its subscription has probably stopped delivering and
+    /// nothing else will ever say so.
+    ///
+    /// ## Why this exists
+    ///
+    /// Measured on a phone against a TIDRADIO Q2L, 2026-08-22: the accessory's
+    /// notifications stop arriving immediately after the audio session takes the
+    /// route to HFP, and **nothing reports it**. The peripheral stays connected,
+    /// no disconnection is delivered, ``linkState`` goes on saying `.connected`,
+    /// and the button is simply dead until the link is rebuilt. Full detail in
+    /// the Bluetooth audio document under `docs`.
+    ///
+    /// ## Why a reconnect and not a re-subscribe
+    ///
+    /// A bare re-subscribe was tried first and **revived the link once in six
+    /// attempts** — and, worse, *reported success every time*: the subscribe
+    /// completed without error and ``subscribedPaths`` filled in, with no data
+    /// ever following. So neither `.connected` nor a successful subscribe can be
+    /// used as evidence that this link works. Only arriving data is evidence, and
+    /// a PTT button is legitimately silent for minutes, so silence cannot be a
+    /// trigger either.
+    ///
+    /// A reconnect, by contrast, worked every time it was tried. So this does the
+    /// reliable thing on a signal that is *observable* — the route change —
+    /// rather than the cheap thing on a signal that is not.
+    ///
+    /// ## Why this is safe against SF-2
+    ///
+    /// A reconnect means a disconnection, and a disconnection unkeys
+    /// unconditionally — that is SF-2 and it is not negotiable. So this must
+    /// never run while the operator is transmitting, or the repair becomes a way
+    /// of dropping them mid-over.
+    ///
+    /// **The guard for that is not here.** ``RadioSession`` owns transmit state
+    /// and calls this only when it is idle: no transmission, no hold, no resume
+    /// in flight. This class adds only what it can see for itself — that the
+    /// accessory is not the thing currently keyed. Keeping the decision in the
+    /// class that knows the answer is what lets SF-2 stay unconditional; nothing
+    /// here suppresses it.
+    ///
+    /// Repairing between overs is also the right *moment*: the button is needed
+    /// for the **next** press, not this one.
+    func audioRouteDidChange() {
+        // No accessory in use, or no link to repair: nothing to do. In
+        // particular this must not fire during learn mode, where the operator is
+        // mid-sequence and a reconnect would restart it under them.
+        guard mapping != nil, learner == nil, linkState.isConnected,
+            !isAccessoryKeyed, let id = wantedAccessory
+        else { return }
+
+        repairTask?.cancel()
+        let settle = routeSettleDelay
+        repairTask = Task { @MainActor [weak self] in
+            await settle()
+            guard !Task.isCancelled, let self else { return }
+            // Re-checked after the wait: the route may have settled into a
+            // transmission, the operator may have pressed the button, or the
+            // accessory may have been forgotten while this was pending.
+            guard self.mapping != nil, self.learner == nil,
+                self.linkState.isConnected, !self.isAccessoryKeyed,
+                self.wantedAccessory == id
+            else { return }
+
+            Diagnostics.route(
+                "accessory repair: route settled, reconnecting a link that may "
+                    + "have stopped delivering")
+            // Disconnect only. The `.disconnected` event drives the reconnect
+            // through `handle(_:)`, which is the same path a real link drop
+            // takes — so there is exactly one reconnection routine, not two.
+            self.central?.disconnect(id)
+        }
     }
 
     // MARK: - Events

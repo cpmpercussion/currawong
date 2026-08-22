@@ -238,6 +238,16 @@ final class CompositionRoot {
         // not make the three of them immortal.
         accessory.sink = session
         remoteCommand.sink = session
+
+        // The wire BU-14's repair depends on, in the other direction: the
+        // session knows when nothing is on air, and only then may the accessory
+        // rebuild a link that has silently stopped delivering. Unowned rather
+        // than weak-and-optional inside the closure would make the pair
+        // immortal, so this captures weakly and does nothing if the controller
+        // has gone.
+        session.onIdleAudioRouteChange = { [weak accessory] in
+            accessory?.audioRouteDidChange()
+        }
     }
 
     /// Starts everything with a process-long lifetime. Idempotent, and called

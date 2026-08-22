@@ -394,6 +394,21 @@ final class RadioSession: ObservableObject {
     // MARK: - Dependencies
 
     private let audio: AudioIO
+
+    /// **Called after an audio route change that found the session idle.**
+    ///
+    /// Set by the composition root to the accessory controller's repair entry
+    /// point. A closure, not a reference, because this class must not know that
+    /// Bluetooth exists — the same reason `NetworkClient` is the seam to the
+    /// protocol libraries.
+    ///
+    /// **The idle test is the safety-relevant part and it lives here** because
+    /// this is the class that knows whether anything is on air. A repair means a
+    /// reconnect, a reconnect means a disconnection, and SF-2 makes a
+    /// disconnection unkey unconditionally — so a repair fired mid-over would be
+    /// a way of dropping the operator. Nothing downstream suppresses SF-2; this
+    /// hook simply is not called unless nothing is keyed.
+    var onIdleAudioRouteChange: (@MainActor () -> Void)?
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
@@ -1630,6 +1645,13 @@ final class RadioSession: ObservableObject {
             endTransmit(reason: .audioInterrupted)
         case .routeChanged:
             resumeAcrossRouteChange()
+            // Idle means idle: nothing on air, no hold the operator is still
+            // making, and no automatic resume about to key back down. Checked
+            // *after* `resumeAcrossRouteChange`, because that is what decides
+            // whether a resume is in flight.
+            if !isTransmitting, heldSource == nil, !routeResumeInFlight {
+                onIdleAudioRouteChange?()
+            }
         case .interruptionEnded:
             // Deliberately does not resume. `shouldResume` is a hint about
             // *playback*; keying a transmitter because a phone call ended is
