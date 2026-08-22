@@ -93,6 +93,8 @@ final class M17EndOfOverUITests: XCTestCase {
         // changes pane instead of placing a call. The one control that connects
         // is the link button under the PTT slab, and it names its destination
         // (APP-17), which is what makes this query unambiguous.
+        // iPhone puts the session pane in its own tab; on macOS this is a no-op.
+        showSessionPane(in: app)
         let connect = app.buttons["Connect to \(channelName)"].firstMatch
         XCTAssertTrue(
             connect.waitForExistence(timeout: 5),
@@ -142,6 +144,10 @@ final class M17EndOfOverUITests: XCTestCase {
 
         let disconnect = app.buttons["Disconnect"].firstMatch
         if disconnect.exists { disconnect.activate() }
+
+        // Back to the channel list for the lock check and the delete below —
+        // on iPhone those are a different tab from the Disconnect just pressed.
+        showChannelList(in: app)
 
         // Deleting is refused while a link is up, so wait for the list to say
         // it is editable again. Read that from the lock label the channel list
