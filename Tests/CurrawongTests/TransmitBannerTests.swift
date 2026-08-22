@@ -21,35 +21,54 @@ import XCTest
 @MainActor
 final class TransmitBannerTests: XCTestCase {
 
-    /// The measurement that matters: the two states are the same size, so the
-    /// change between them cannot move anything.
+    /// The measurement that matters: every state is the same size, so the change
+    /// between them cannot move anything.
     ///
-    /// Both are measured through a hosting view rather than compared by
-    /// inspection, because the thing that would break this is a subtitle
-    /// appearing in one state and not the other — a difference no amount of
-    /// reading the two branches reliably catches.
-    func testBothStatesAreTheSameHeight() throws {
-        let onAir = fittingSize(TransmitBanner(isTransmitting: true, source: .onScreen))
+    /// Measured through a hosting view rather than by reading the branches,
+    /// because the thing that would break this is a line appearing in one state
+    /// and not another — which is exactly what the first version of this strip
+    /// did, and what the operator asked to have removed.
+    func testEveryStateIsTheSameHeight() throws {
         let standby = fittingSize(TransmitBanner(isTransmitting: false, source: nil))
 
+        for source in [PTTSource.onScreen, .accessory, .remoteCommand] {
+            XCTAssertEqual(
+                fittingSize(TransmitBanner(isTransmitting: true, source: source)).height,
+                standby.height, accuracy: 1,
+                "keying from \(source) changed the strip's height — everything below it moves")
+        }
+
+        // And with no source known, which is the state a resumed transmission
+        // can be in.
         XCTAssertEqual(
-            onAir.height, standby.height, accuracy: 1,
-            "keying must not change the strip's height — everything below it would move")
+            fittingSize(TransmitBanner(isTransmitting: true, source: nil)).height,
+            standby.height, accuracy: 1)
     }
 
-    /// A keyed strip with no known source still gets a subtitle, for the same
-    /// reason: the height must not depend on whether PT-4 could name the input.
-    func testAKeyedStripWithNoKnownSourceIsStillTheSameHeight() throws {
-        let known = fittingSize(TransmitBanner(isTransmitting: true, source: .accessory))
-        let unknown = fittingSize(TransmitBanner(isTransmitting: true, source: nil))
+    /// **PT-4.** The one thing worth saying beyond "on air": a latched key does
+    /// not stop when the operator lets go. An operator who believes a latched
+    /// key is momentary is how this app would leave a microphone open.
+    func testALatchedTransmissionSaysSoInPlaceOfOnAir() {
+        let latched = TransmitBanner(isTransmitting: true, source: .remoteCommand)
+        XCTAssertEqual(latched.trailingWord, "LATCHED")
 
-        XCTAssertEqual(known.height, unknown.height, accuracy: 1)
+        // And the momentary inputs do not, because for them TRANSMITTING is the
+        // whole truth and a second word would be noise.
+        for source in [PTTSource.onScreen, .accessory] {
+            XCTAssertEqual(
+                TransmitBanner(isTransmitting: true, source: source).trailingWord, "ON AIR",
+                "\(source) is momentary and must not claim to be latched")
+        }
+        XCTAssertEqual(
+            TransmitBanner(isTransmitting: true, source: nil).trailingWord, "ON AIR",
+            "an unknown source must not be called latched")
+
+        XCTAssertEqual(TransmitBanner(isTransmitting: false, source: nil).trailingWord, "STANDBY")
     }
 
-    /// **PT-4.** While keyed, the strip names the input holding the key and says
-    /// whether letting go stops it. A latched transmission the operator believes
-    /// is momentary is how this app would leave a microphone open.
-    func testTheKeyedStripCarriesTheSourcesHoldDescription() {
+    /// VoiceOver has no colour to read, so it still gets PT-4's full sentence —
+    /// the wording that was clutter on screen and is the requirement when spoken.
+    func testVoiceOverGetsTheHoldDescriptionTheStripNoLongerDraws() {
         for source in [PTTSource.onScreen, .accessory, .remoteCommand] {
             let banner = TransmitBanner(isTransmitting: true, source: source)
             XCTAssertTrue(
