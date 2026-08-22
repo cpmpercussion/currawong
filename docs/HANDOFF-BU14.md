@@ -1,5 +1,25 @@
 # Handoff — `BU-14`, the accessory button that stops working
 
+> ## ✅ RESOLVED the same evening — read this first
+>
+> The fresh pair of eyes this document asked for ran §4's experiments instead of
+> writing more machinery, and the cause is proven: **the Q2L suppresses its own
+> BLE notifications while its Classic side sits in an idle HFP call, and resumes
+> them on the same subscription the moment call mode ends.** Established by a
+> cross-transport test — Mac holding the BLE link, phone holding the call — so
+> no iOS component is implicated. §3's mystery fact (reads work, notifications
+> don't) is a property of the accessory, not the stack. macOS "not showing the
+> fault" was macOS dropping SCO ~2.1 s after capture: the accessory self-healed
+> before anyone pressed. iOS holds the session forever (`BU-17`), so the button
+> stayed dead forever. **The fix is `BU-17`'s harmonisation, not link repair.**
+>
+> Two deterministic bugs in §6's machinery were also found on-device and fixed
+> (probe answers swallowed on verified links; probe echoes setting
+> `isButtonVerified`) — see the BU-14 section of `BRINGUP.md`, which now leads
+> with the full evidence, and `experiment-data/q2l-ble-probe/ios-session12-*` /
+> `mac-crosstest-1.log`. The rest of this document is preserved as written, as
+> the record of how not to get here.
+
 Written 2026-08-22, at the end of a long single session, for someone picking this
 up cold. It exists because that session produced **a new bug after each old one**,
 which is a signal that the approach needs a different pair of eyes rather than one
