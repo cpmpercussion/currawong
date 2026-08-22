@@ -1347,7 +1347,20 @@ phone's mic with the accessory at the operator's mouth, which is the "sounds
 like a pocket" fault `BU-13` warns about, and this is the first sight of the
 mechanism that would cause it.
 
-> 🔧 **The library half is done: `RC-12`, swift-hamvoip#48 (draft).** It adds
+> 🔧 **Implemented 2026-08-22, not yet verified on air.** Against `v0.5.4`:
+> `configureSession()` still activates the **radio** policy and builds the engine
+> under it — that ordering is `BU-1` and must not change — and then switches to
+> **listening**. `startCapture` asks for the radio policy again before opening
+> the microphone, which is where SCO now comes up; `stopCapture` hands the route
+> back, best-effort and without throwing, because shutting the microphone is the
+> safety-relevant half of that call and nothing may delay it.
+>
+> **What to look for on air:** the accessory's LED out between overs and lit only
+> while transmitting, and receive audio back at 44.1 kHz on A2DP. Then re-check
+> `BU-14`'s repair, because the route now changes at every key-down and key-up by
+> design — the quiet period is what should keep them apart.
+>
+> 🔧 **The library half: `RC-12`, swift-hamvoip#48, merged as `v0.5.4`.** It adds
 > `AudioSessionPolicy.listening` (`.playback`, `.default`, no options) and
 > `activateSession(_:)` taking a policy. **The category differs from `radio`, not
 > just the options** — that is the whole point, because this item showed a

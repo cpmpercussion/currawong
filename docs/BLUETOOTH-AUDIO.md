@@ -402,6 +402,31 @@ on HFP, it **keeps returning** to it, because the category demands an input rout
 and HFP is the only Bluetooth one on offer. Disconnecting is not enough; only
 deactivating the session, or changing the category, releases the accessory.
 
+### Harmonised, 2026-08-22 — implemented against `v0.5.4`
+
+**Done, and it is smaller than the plan below feared**, because the release-edge
+hazard turned out to be closed and because `configureSession()` already built the
+engine under a recording category:
+
+* The library gained `AudioSessionPolicy.listening` and `activateSession(_:)`
+  (`RC-12`, swift-hamvoip#48).
+* `configureSession()` activates **radio**, builds the engine under it — that
+  ordering is `BU-1` and is why this was safe to do at all — then switches to
+  **listening**.
+* `startCapture` asks for **radio** again before opening the microphone. This is
+  now where the SCO link comes up, which is what the accessory's LED should be
+  reporting.
+* `stopCapture` hands the route back, **best-effort and non-throwing**: failing
+  to return to A2DP is a quality regression, while failing to shut the microphone
+  is not, and a stop path must not be delayed by the lesser of the two.
+
+Unverified on air at the time of writing. What to watch: the LED out between
+overs, receive audio at 44.1 kHz, and whether `BU-14`'s repair and this start
+fighting — the route now changes at every key-down and key-up *by design*, and
+the quiet period is the only thing keeping them apart.
+
+### The plan as written before it was done
+
 ### How to harmonise iOS to the macOS behaviour
 
 The goal is to state it once: **A2DP while listening, HFP only while
