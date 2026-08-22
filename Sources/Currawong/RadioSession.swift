@@ -422,34 +422,43 @@ final class RadioSession: ObservableObject {
     /// itself — an escalation fires on a timer, by which time the operator may
     /// have keyed up on the on-screen button, which the controller cannot see.
     var isIdleForAccessoryRepair: Bool {
-        guard !isTransmitting, heldSource == nil, !routeResumeInFlight else {
-            return false
-        }
-        // And not right after an over: unkeying stops the engine, which is itself
-        // a route change, so a repair here would rebuild a link the operator had
-        // just keyed with.
-        return now().timeIntervalSince(lastTransmitEndedAt ?? .distantPast)
-            >= Self.repairQuietPeriodAfterTransmit
+        // Nothing on air, no hold the operator is still making, no automatic
+        // resume about to key back down. **And nothing else** — see the note on
+        // ``repairQuietPeriodAfterTransmit`` for the quiet period that used to be
+        // here and why removing it was the fix rather than a relaxation.
+        !isTransmitting && heldSource == nil && !routeResumeInFlight
     }
 
     /// When transmission last ended, for the quiet period below.
     private var lastTransmitEndedAt: Date?
 
-    /// How long after an over a route change is assumed to be **our own doing**
-    /// rather than evidence of a broken accessory link.
+    /// ⛔ **Withdrawn.** Kept only as a record, because the reasoning behind it was
+    /// wrong in a way worth not repeating.
     ///
-    /// Unkeying stops the whole engine (see the `AudioIO` type note), and
-    /// stopping the engine *is* a route change. So every normal over is followed
-    /// within a second or two by exactly the signal the accessory repair watches
-    /// for — and repairing then tears down a link that has just demonstrably
-    /// worked, because the operator keyed with it. Observed doing precisely that
-    /// on 2026-08-22: a good over, then `override`, then a rebuild, leaving the
-    /// accessory "untested" after every quick press.
+    /// The argument was: unkeying stops the whole engine, stopping the engine *is*
+    /// a route change, so every over is followed by exactly the signal the
+    /// accessory repair watches for — and repairing then would tear down a link
+    /// that had just demonstrably worked, because the operator keyed with it.
     ///
-    /// The killing transition this repair exists for — the audio session being
-    /// configured, `reason=categoryChange` — does not follow a transmission, so a
-    /// quiet period separates the two without needing the reason code, which the
-    /// library's `AudioSessionSignal` does not carry.
+    /// **The flaw is in "just demonstrably worked".** The press proved the link
+    /// was alive *before* the over. The accessory link dies on the way **down**,
+    /// during the unkey — measured 2026-08-22:
+    ///
+    /// ```
+    /// [103.740] key-up
+    /// [105.002] override / newDeviceAvailable    +1.26 s, inside the quiet period
+    /// [106.250] override / newDeviceAvailable    +2.51 s, inside the quiet period
+    /// [219.321] override -> repair attempt 1/3   113 s later, and only by accident
+    /// ```
+    ///
+    /// So this suppressed the repair for precisely the event that causes the
+    /// damage, and the button stayed dead for nearly two minutes. The operator's
+    /// report — "worked 1-2 times, then got pegged on the way down" — is this.
+    ///
+    /// A repair right after an over is not merely acceptable, it is the point: it
+    /// is when the link needs rebuilding, and it is the moment the operator least
+    /// needs the button. The cooldown still coalesces the burst.
+    @available(*, deprecated, message: "Withdrawn — see the note. Do not reinstate.")
     static let repairQuietPeriodAfterTransmit: TimeInterval = 3
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
