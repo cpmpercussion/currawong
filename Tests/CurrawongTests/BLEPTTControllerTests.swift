@@ -64,7 +64,9 @@ final class BLEPTTControllerTests: XCTestCase {
 
     /// A mapping already stored and the link up — the state a repair applies to.
     private func makeConnectedController(
-        clock: TestClock
+        clock: TestClock,
+        verifyDelay: (@Sendable () async -> Void)? = nil,
+        isRebuildSafe: (@MainActor () -> Bool)? = nil
     ) async -> (BLEPTTController, BLEPTTMapping) {
         let mapping = TestSignals.mapping()
         store = InMemoryPTTSettingsStore(mapping: mapping)
@@ -72,8 +74,10 @@ final class BLEPTTControllerTests: XCTestCase {
             makeCentral: { [central] in central! },
             store: store,
             retryDelay: {},
-            now: { clock.now })
+            now: { clock.now },
+            verifyDelay: verifyDelay ?? {})
         controller.sink = sink
+        controller.isRebuildSafe = isRebuildSafe
         controller.activateIfConfigured()
         central.emit(.connected(id: mapping.accessoryID))
         await waitUntil("connected") { controller.linkState == .connected }
@@ -187,6 +191,125 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertEqual(central.calls, [])
     }
 
+
+    // MARK: - Escalation: checking the rebuild actually took (BU-14)
+
+    /// **Why escalation exists.** A full reconnect was observed completing —
+    /// connected, every characteristic subscribed, every step reporting success —
+    /// and leaving the button dead. So one rebuild per route change is not
+    /// enough, and the only evidence it worked is data arriving.
+    func testARebuildThatProducesNothingIsTriedAgain() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)], "first attempt")
+        central.clearCalls()
+
+        // Nothing arrives, so the check fires and rebuilds again.
+        await waitUntil("the check is waiting") { gate.waiterCount == 1 }
+        gate.open()
+        await waitUntil("second attempt") {
+            self.central.calls.contains(.disconnect(mapping.accessoryID))
+        }
+    }
+
+    /// It is a ladder, not a loop. Giving up is deliberate: an honest "untested"
+    /// and a Reconnect button beat retrying invisibly forever.
+    func testEscalationGivesUpAfterTheBound() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        gate.open()
+
+        // Let the ladder run itself out, then count what the central was asked.
+        await waitUntil("the ladder finishes") {
+            self.central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
+                >= BLEPTTController.maximumRepairAttempts
+        }
+        await Task.yield()
+        let attempts = central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
+        XCTAssertEqual(
+            attempts, BLEPTTController.maximumRepairAttempts,
+            "the ladder must stop at the bound rather than retry forever")
+        XCTAssertFalse(controller.isButtonVerified, "and it must not claim success")
+    }
+
+    /// Data arriving ends the ladder and restores the budget, so the next failure
+    /// gets a full set of attempts rather than the remainder of the last one.
+    func testDataArrivingEndsTheLadderAndRestoresTheBudget() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.release))
+        await waitUntil("verified") { controller.isButtonVerified }
+        central.clearCalls()
+        gate.open()
+        await Task.yield()
+
+        XCTAssertEqual(central.calls, [], "a verified link must not be rebuilt again")
+
+        // And the budget is whole: a fresh failure gets the full ladder.
+        clock.advance(BLEPTTController.repairCooldown + 1)
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+    }
+
+    /// **SF-2, and the reason the safety question is asked again rather than
+    /// assumed.** An escalation fires on a timer, and by then the operator may be
+    /// on air by way of the *on-screen* button, which this controller cannot see.
+    /// A rebuild disconnects, and a disconnection unkeys.
+    func testEscalationIsDeclinedWhenTheSessionSaysItIsNotIdle() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        var isIdle = true
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait, isRebuildSafe: { isIdle })
+
+        controller.audioRouteDidChange()
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)], "first attempt")
+        central.clearCalls()
+
+        // The operator keys up on the on-screen button while the check waits.
+        isIdle = false
+        await waitUntil("the check is waiting") { gate.waiterCount == 1 }
+        gate.open()
+        await Task.yield()
+
+        XCTAssertEqual(
+            central.calls, [],
+            "a rebuild must never disconnect while the operator is transmitting")
+    }
+
+    /// The operator asking gets a fresh budget, because a person pressing a
+    /// button is new information and whatever exhausted the ladder may have
+    /// changed.
+    func testTheOperatorsReconnectRestoresTheBudget() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        gate.open()
+        await waitUntil("the ladder finishes") {
+            self.central.calls.filter { $0 == .disconnect(mapping.accessoryID) }.count
+                >= BLEPTTController.maximumRepairAttempts
+        }
+        central.clearCalls()
+
+        controller.reconnectAccessory()
+
+        XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
+    }
     // MARK: - A connection is not a working button (BU-14)
 
     /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the
@@ -483,5 +606,48 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertNil(
             BLEPTTMapping(
                 accessoryID: UUID(), accessoryName: nil, press: signal, release: signal))
+    }
+}
+
+
+/// A delay the test controls, so an escalation ladder can be stepped rather than
+/// raced. Cancelled waiters still resume — a `CheckedContinuation` is not
+/// cancellable — and bail on their own `Task.isCancelled` check.
+private final class DelayGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    /// How many waits are suspended right now.
+    var waiterCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return waiting.count
+    }
+
+    var wait: @Sendable () async -> Void {
+        { [self] in
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if isOpen {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    waiting.append(continuation)
+                    lock.unlock()
+                }
+            }
+        }
+    }
+
+    /// Let everything through, now and in future — race-free, unlike releasing
+    /// only what happens to be suspended at the time.
+    func open() {
+        lock.lock()
+        isOpen = true
+        let resuming = waiting
+        waiting = []
+        lock.unlock()
+        resuming.forEach { $0.resume() }
     }
 }

@@ -410,6 +410,28 @@ final class RadioSession: ObservableObject {
     /// hook simply is not called unless nothing is keyed.
     var onIdleAudioRouteChange: (@MainActor () -> Void)?
 
+    /// **Whether the accessory link may be rebuilt right now.**
+    ///
+    /// A rebuild means a disconnection, and `SF-2` makes a disconnection unkey
+    /// unconditionally — so a rebuild while anything is on air is a way of
+    /// dropping the operator mid-sentence. This is the one place that question is
+    /// answered, because this is the class that knows.
+    ///
+    /// Consulted two ways: this class calls ``onIdleAudioRouteChange`` only when
+    /// it is true, and the controller *also* asks before a repair it scheduled
+    /// itself — an escalation fires on a timer, by which time the operator may
+    /// have keyed up on the on-screen button, which the controller cannot see.
+    var isIdleForAccessoryRepair: Bool {
+        guard !isTransmitting, heldSource == nil, !routeResumeInFlight else {
+            return false
+        }
+        // And not right after an over: unkeying stops the engine, which is itself
+        // a route change, so a repair here would rebuild a link the operator had
+        // just keyed with.
+        return now().timeIntervalSince(lastTransmitEndedAt ?? .distantPast)
+            >= Self.repairQuietPeriodAfterTransmit
+    }
+
     /// When transmission last ended, for the quiet period below.
     private var lastTransmitEndedAt: Date?
 
@@ -1667,20 +1689,10 @@ final class RadioSession: ObservableObject {
             endTransmit(reason: .audioInterrupted)
         case .routeChanged:
             resumeAcrossRouteChange()
-            // Idle means idle: nothing on air, no hold the operator is still
-            // making, and no automatic resume about to key back down. Checked
-            // *after* `resumeAcrossRouteChange`, because that is what decides
-            // whether a resume is in flight.
-            //
-            // And **not right after an over**: unkeying stops the engine, which
-            // is itself a route change, so a repair here would rebuild a link the
-            // operator had just keyed with. See
-            // ``repairQuietPeriodAfterTransmit``.
-            let sinceTransmit = now().timeIntervalSince(
-                lastTransmitEndedAt ?? .distantPast)
-            if !isTransmitting, heldSource == nil, !routeResumeInFlight,
-                sinceTransmit >= Self.repairQuietPeriodAfterTransmit
-            {
+            // Checked *after* `resumeAcrossRouteChange`, because that is what
+            // decides whether a resume is in flight. See
+            // ``isIdleForAccessoryRepair`` for what "idle" has to mean here.
+            if isIdleForAccessoryRepair {
                 onIdleAudioRouteChange?()
             }
         case .interruptionEnded:
