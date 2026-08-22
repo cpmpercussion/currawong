@@ -147,6 +147,22 @@ final class BLEPTTController: ObservableObject {
     /// The clock, injected so a test does not wait real seconds for a cooldown.
     private let now: @Sendable () -> Date
 
+    /// How long to give a rebuilt link to produce something before rebuilding it
+    /// again. Injected, like ``retryDelay``.
+    private let verifyDelay: @Sendable () async -> Void
+
+    /// **Whether a rebuild is safe right now**, asked of whoever knows what is on
+    /// air — ``RadioSession`` in the app, via the composition root.
+    ///
+    /// A rebuild disconnects, and `SF-2` makes a disconnection unkey
+    /// unconditionally. This controller can see whether the *accessory* is
+    /// holding the key; it cannot see the on-screen button. An escalation fires
+    /// on a timer, by which time the operator may have keyed up some other way,
+    /// so the question has to be re-asked rather than assumed. Absent, the answer
+    /// is taken as yes: a controller with nothing wired to it has no radio to
+    /// drop.
+    var isRebuildSafe: (@MainActor () -> Bool)?
+
     // MARK: - Private state
 
     private var central: BLECentral?
@@ -163,6 +179,23 @@ final class BLEPTTController: ObservableObject {
     /// into one reconnect instead of one per change.
     private var lastRepairAt: Date?
 
+    /// Repairs attempted since the link last produced anything, so escalation is
+    /// bounded. Reset by data arriving, and by the operator asking directly.
+    private var repairAttempts = 0
+
+    /// The pending "did that work?" check.
+    private var escalationTask: Task<Void, Never>?
+
+    /// How many rebuilds to try before giving up and leaving it to the operator.
+    ///
+    /// Small on purpose. Each attempt costs the accessory a reconnection and
+    /// buys, on the observed evidence, a little better than even odds; a long
+    /// ladder would mostly be a way of hiding that the link is not coming back.
+    /// Giving up is not a failure to act — `isButtonVerified` drives an honest
+    /// indicator and a **Reconnect** button, which is a better answer than
+    /// retrying invisibly forever.
+    static let maximumRepairAttempts = 3
+
     /// How long after a repair further route changes are ignored.
     ///
     /// Long enough to cover a reconnect (about 1.2 s measured on a phone) and
@@ -178,17 +211,22 @@ final class BLEPTTController: ObservableObject {
         retryDelay: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        verifyDelay: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
     ) {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
         self.now = now
+        self.verifyDelay = verifyDelay
         self.mapping = store.loadMapping()
     }
 
     deinit {
         eventTask?.cancel()
+        escalationTask?.cancel()
     }
 
     // MARK: - Lifecycle
@@ -348,6 +386,8 @@ final class BLEPTTController: ObservableObject {
         mapping = nil
         learner = nil
         isButtonVerified = false
+        escalationTask?.cancel()
+        repairAttempts = 0
         store.saveMapping(nil)
         linkState = idleLinkState
     }
@@ -404,6 +444,9 @@ final class BLEPTTController: ObservableObject {
     /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
     /// because a person pressing a button has better information than a timer.
     func reconnectAccessory() {
+        // A fresh budget: the operator pressing a button is new information, and
+        // whatever exhausted the automatic attempts may since have changed.
+        repairAttempts = 0
         repair(reason: "operator asked", force: true)
     }
 
@@ -430,15 +473,57 @@ final class BLEPTTController: ObservableObject {
         {
             return
         }
+
+        // Asked every time, including for a repair this class scheduled itself:
+        // an escalation fires on a timer, and by then the operator may have keyed
+        // up on the on-screen button, which this class cannot see. `SF-2` makes a
+        // disconnection unkey, so a rebuild must never race a live transmission.
+        if let isRebuildSafe, !isRebuildSafe() {
+            Diagnostics.route("accessory repair (\(reason)) declined: not idle")
+            return
+        }
+
         lastRepairAt = now()
+        repairAttempts += 1
 
         // The link is not to be trusted again until something arrives on it.
         isButtonVerified = false
-        Diagnostics.route("accessory repair (\(reason)): rebuilding the link")
+        Diagnostics.route(
+            "accessory repair (\(reason)) attempt \(repairAttempts)"
+                + "/\(Self.maximumRepairAttempts): rebuilding the link")
         // Disconnect only. The `.disconnected` event drives the reconnect
         // through `handle(_:)`, which is the same path a real link drop takes —
         // so there is exactly one reconnection routine, not two.
         central?.disconnect(id)
+        scheduleEscalation()
+    }
+
+    /// **Check whether the rebuild took, and try again if it did not.**
+    ///
+    /// The repair was doing one rebuild per route change and calling it done. It
+    /// is not: a full reconnect was observed completing — connected, all four
+    /// characteristics subscribed, every step reporting success — and leaving the
+    /// button dead. Neither `.connected` nor a successful subscribe is evidence,
+    /// so the only way to know is to wait and see whether anything arrives.
+    ///
+    /// Bounded at ``maximumRepairAttempts``, and each attempt re-asks whether a
+    /// rebuild is safe. Giving up is deliberate rather than a gap: an honest
+    /// "untested" plus a **Reconnect** button beats retrying invisibly forever.
+    private func scheduleEscalation() {
+        escalationTask?.cancel()
+        let wait = verifyDelay
+        escalationTask = Task { @MainActor [weak self] in
+            await wait()
+            guard !Task.isCancelled, let self else { return }
+            if self.isButtonVerified { return }  // something arrived; done.
+            guard self.repairAttempts < Self.maximumRepairAttempts else {
+                Diagnostics.route(
+                    "accessory repair gave up after \(self.repairAttempts) "
+                        + "attempts — the link is not coming back on its own")
+                return
+            }
+            self.repair(reason: "nothing arrived after rebuild", force: true)
+        }
     }
 
     // MARK: - Events
@@ -530,6 +615,10 @@ final class BLEPTTController: ObservableObject {
             // Data arrived, which is the only proof this link works.
             if !isButtonVerified {
                 isButtonVerified = true
+                // Ends any ladder in progress and restores the full budget for
+                // the next time the link dies.
+                escalationTask?.cancel()
+                repairAttempts = 0
                 Diagnostics.route("accessory link verified by arriving data")
             }
             lastSignal = signal

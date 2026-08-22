@@ -248,6 +248,13 @@ final class CompositionRoot {
         session.onIdleAudioRouteChange = { [weak accessory] in
             accessory?.audioRouteDidChange()
         }
+        // And the other half of it: the controller asks before a repair it
+        // scheduled itself, because an escalation fires on a timer and by then
+        // the operator may have keyed up on the on-screen button, which the
+        // controller cannot see.
+        accessory.isRebuildSafe = { [weak session] in
+            session?.isIdleForAccessoryRepair ?? false
+        }
     }
 
     /// Starts everything with a process-long lifetime. Idempotent, and called
