@@ -300,13 +300,27 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         #endif
     }
 
-    // **`AudioSessionPolicy.listening` is deliberately not used here.** See
-    // `BU-17`: switching to it on the transmit path was implemented, tried, and
-    // reverted the same day. A category change *is* a route change, SF-3 requires
-    // dropping transmit on a route change, and so keying became a loop — key up,
-    // route change, transmit dropped, resume, route change. The library owes this
-    // a way to tell a category change the app asked for from a device that went
-    // away, and until it has one the switch cannot be made from up here.
+    // **`AudioSessionPolicy.listening` is still not used here.** `BU-17` has
+    // now been attempted twice.
+    //
+    // The first attempt failed because a category change is a route change and
+    // SF-3 dropped the transmission it was enabling. RC-13 put the *cause* on
+    // the signal to fix exactly that, and the second attempt used it — correctly
+    // ignoring `categoryChange` for SF-3, 23 times in one session, with the route
+    // genuinely reaching `Playback` at 44100 Hz.
+    //
+    // It still failed, because **one deliberate switch produces a cascade**:
+    // `categoryChange`, then `override`, then `newDeviceAvailable`, then
+    // `engineConfigurationChange`. Only the first is self-evidently ours. The
+    // rest are indistinguishable from an accessory being unplugged, and SF-3
+    // must drop transmit for those — so it did, and keying stayed broken.
+    //
+    // The cause alone is therefore not enough. What would be needed is for the
+    // app to say "I am about to change the route, expect a cascade" and have that
+    // window respected — which is a suppression window on the transmit path, i.e.
+    // precisely where SF-3 must hold. That is a requirements decision, not an
+    // implementation one, and it is not to be taken by whoever next opens this
+    // file.
 
     /// Opens the microphone, repairing the audio stack once if the first attempt
     /// fails.

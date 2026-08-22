@@ -402,7 +402,53 @@ on HFP, it **keeps returning** to it, because the category demands an input rout
 and HFP is the only Bluetooth one on offer. Disconnecting is not enough; only
 deactivating the session, or changing the category, releases the accessory.
 
-### Attempted and reverted, 2026-08-22 — and why the plan below is not enough
+### Attempted twice and reverted twice, 2026-08-22. The cause is not enough
+
+**Second attempt, on top of `RC-13`.** With the cause on the signal,
+`RadioSession` ignored `categoryChange` for SF-3 and kept it as `BU-14`'s repair
+trigger. It half worked, and the half that worked is worth recording: the route
+genuinely reached `Playback` at **44100 Hz**, and
+`route change not treated as SF-3: categoryChange` fired 23 times in one session.
+The goal is reachable.
+
+**It still failed, and here is why the cause alone cannot fix it.** One
+deliberate policy switch does not produce one route change. It produces a
+cascade:
+
+```
+route changed: reason=override           in=none out=BluetoothA2DPOutput 44100 Hz
+route changed: reason=newDeviceAvailable  in=none out=BluetoothA2DPOutput 44100 Hz
+route changed: reason=categoryChange      in=none out=BluetoothA2DPOutput 44100 Hz
+signal routeChanged(engineConfigurationChange) isTransmitting=true held=true
+endTransmit reason=routeChanged wasTransmitting=true held=true
+```
+
+Only `categoryChange` is self-evidently ours. `override`,
+`newDeviceAvailable` and `engineConfigurationChange` are **indistinguishable from
+an accessory being unplugged**, and SF-3 must drop transmit for those — so it
+did, and keying stayed broken.
+
+**What would actually be needed**, and it is a requirements decision rather than
+an implementation one: the app saying *"I am about to change the route, expect a
+cascade"* and that window being respected. Which is a suppression window on the
+transmit path — precisely where SF-3 exists to hold. The trade is real and
+arguable (the window is short, the app initiated it, and the alternative is
+permanently narrowband receive audio), but it is **not a call to be made by
+whoever next opens the file.**
+
+Cheaper options that do not touch SF-3, both partial:
+
+* **Switch on connect/disconnect rather than per-over.** HFP for the whole QSO
+  as now, but released when nothing is connected: fixes the accessory being held
+  in a call while idle, and the battery, but not receive quality during a QSO.
+* **Accept it on iOS** and record the platform difference. macOS already behaves
+  correctly, and the honest version of that is a documented difference rather
+  than a fix that breaks keying.
+
+`RC-12` and `RC-13` both stay: the policy is right, the cause is right and it
+made SF-3 more precise on its own merits.
+
+### The first attempt, and why the plan below is not enough
 
 **The switch was implemented against `v0.5.4`, tried on a phone, and reverted the
 same day.** It made transmitting unusable: keying produced a second of audio and
