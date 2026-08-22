@@ -133,6 +133,10 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
                 return
             }
         }
+        // Nothing readable found. Reported rather than left as silence, because
+        // the caller must never be left waiting for an answer that cannot come.
+        continuation.yield(
+            .probeFailed(id: id, reason: "no readable characteristic"))
     }
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {
@@ -295,7 +299,19 @@ extension CoreBluetoothCentral: CBPeripheralDelegate {
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        guard error == nil, let service = characteristic.service else { return }
+        // A failed read is information, not noise: it is the only *positive*
+        // evidence this seam can produce that a link has stopped carrying data.
+        // Dropping it silently is what left the controller guessing from
+        // timeouts.
+        if let error {
+            continuation.yield(
+                .probeFailed(id: peripheral.identifier, reason: error.localizedDescription))
+            return
+        }
+        guard let service = characteristic.service else {
+            continuation.yield(.probeFailed(id: peripheral.identifier, reason: nil))
+            return
+        }
         // A notification with no value is still an edge on some devices, so an
         // empty payload is passed through rather than dropped.
         let signal = BLESignal(

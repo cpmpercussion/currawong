@@ -103,6 +103,16 @@ enum BLECentralEvent: Sendable, Equatable {
 
     /// A notification arrived. The only event the runtime PTT path cares about.
     case notified(id: UUID, signal: BLESignal)
+
+    /// **A liveness probe failed.** The read was refused, errored, or came back
+    /// without a characteristic to attribute it to.
+    ///
+    /// Exists so that "this link is dead" is an *event* rather than the absence
+    /// of one. Waiting a few seconds to see whether a notification turns up
+    /// measures how recently the operator pressed the button, not whether the
+    /// link works — that mistake was made and measured. A read either answers or
+    /// fails, and both answers arrive on their own.
+    case probeFailed(id: UUID, reason: String?)
 }
 
 /// The seam that keeps CoreBluetooth out of the PTT state logic.
