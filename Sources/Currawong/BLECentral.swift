@@ -140,4 +140,22 @@ protocol BLECentral: AnyObject, Sendable {
     func disconnect(_ id: UUID)
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID)
+
+    /// **Ask the link to prove it carries data**, by reading any readable
+    /// characteristic.
+    ///
+    /// The result arrives as an ordinary ``BLECentralEvent/notified(id:signal:)``,
+    /// because a read and a notification are the same callback in CoreBluetooth —
+    /// the fact that once caused a false diagnosis of learn mode, put to work.
+    ///
+    /// This exists because **nothing else on this seam is evidence.**
+    /// `.connected` is not: a link was observed reporting connected while
+    /// delivering nothing. A successful subscribe is not either: five in a row
+    /// reported success over a dead link. And waiting for a *notification* is not
+    /// evidence of anything within a useful time, because a PTT button is
+    /// legitimately silent for minutes — which is the flaw this call fixes.
+    ///
+    /// A no-op when the peripheral has nothing readable, or is not connected.
+    /// Silence is then the answer, and the caller must not read anything into it.
+    func probeForLiveness(_ id: UUID)
 }

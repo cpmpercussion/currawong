@@ -20,6 +20,7 @@ final class FakeBLECentral: BLECentral, @unchecked Sendable {
         case connect(UUID)
         case disconnect(UUID)
         case subscribe(UUID)
+        case probe(UUID)
     }
 
     let events: AsyncStream<BLECentralEvent>
@@ -51,6 +52,7 @@ final class FakeBLECentral: BLECentral, @unchecked Sendable {
     func connect(_ id: UUID) { record(.connect(id)) }
     func disconnect(_ id: UUID) { record(.disconnect(id)) }
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) { record(.subscribe(id)) }
+    func probeForLiveness(_ id: UUID) { record(.probe(id)) }
 
     // MARK: Test surface
 

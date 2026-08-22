@@ -310,6 +310,95 @@ final class BLEPTTControllerTests: XCTestCase {
 
         XCTAssertEqual(central.calls, [.disconnect(mapping.accessoryID)])
     }
+
+    // MARK: - The liveness probe (BU-14)
+
+    /// **What makes the ladder mean anything.** A rebuild is worth nothing unless
+    /// the new link carries data, and neither `.connected` nor a successful
+    /// subscribe shows that — both were observed reporting success over a dead
+    /// link. So after a rebuild the link is asked to prove itself.
+    func testARebuiltLinkIsProbed() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+
+        await waitUntil("probed") { self.central.calls.contains(.probe(mapping.accessoryID)) }
+        _ = controller
+    }
+
+    /// **And the probe's answer ends the ladder**, without the operator having to
+    /// touch anything. This is the whole point: the previous version waited to see
+    /// whether somebody pressed the button, so ordinary silence read as a dead
+    /// link and healthy links were rebuilt three times over.
+    func testTheProbesAnswerVerifiesTheLinkWithNoOperatorInvolvement() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await waitUntil("probed") { self.central.calls.contains(.probe(mapping.accessoryID)) }
+
+        // The read comes back as an ordinary notification — a read and a
+        // notification are the same callback in CoreBluetooth. Empty, because the
+        // question is whether bytes flow, not what they say.
+        central.emit(
+            .notified(
+                id: mapping.accessoryID,
+                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
+        await waitUntil("verified") { controller.isButtonVerified }
+
+        central.clearCalls()
+        gate.open()
+        await Task.yield()
+        XCTAssertEqual(central.calls, [], "a proven link must not be rebuilt again")
+    }
+
+    /// **The trap the probe must not walk into.** The read's value arrives as a
+    /// notification, and learn mode latches the first signal it sees — so a probe
+    /// during learning would be recorded as the operator's press. That exact
+    /// confusion, from a probe of a different kind, cost a session to diagnose.
+    func testNoProbeIsIssuedWhileLearning() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, verifyDelay: gate.wait)
+
+        controller.audioRouteDidChange()
+        central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
+        central.emit(.connected(id: mapping.accessoryID))
+        controller.relearnCurrentAccessory()
+        central.clearCalls()
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await Task.yield()
+
+        XCTAssertFalse(
+            central.calls.contains(.probe(mapping.accessoryID)),
+            "a probe during learn mode would be latched as the operator's press")
+    }
+
+    /// No probe when nothing was being repaired: an ordinary connection at launch
+    /// has no reason to be interrogated, and a read costs the accessory something.
+    func testNoProbeOnAnOrdinaryConnection() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        central.clearCalls()
+        central.emit(.subscribed(id: mapping.accessoryID, paths: [TestSignals.press.path]))
+        await Task.yield()
+
+        XCTAssertFalse(central.calls.contains(.probe(mapping.accessoryID)))
+        _ = controller
+    }
     // MARK: - A connection is not a working button (BU-14)
 
     /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the

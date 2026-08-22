@@ -506,6 +506,13 @@ final class BLEPTTController: ObservableObject {
     /// button dead. Neither `.connected` nor a successful subscribe is evidence,
     /// so the only way to know is to wait and see whether anything arrives.
     ///
+    /// **What it waits for is a probe, not the operator.** An earlier version
+    /// waited to see whether a *notification* arrived, which measured "did
+    /// somebody press the button in the last three seconds" — normal silence read
+    /// as a dead link, and the ladder then rebuilt healthy links, taking the
+    /// button away for about a second and a half per attempt. Measured doing
+    /// exactly that on 2026-08-22. The probe replaces the guess.
+    ///
     /// Bounded at ``maximumRepairAttempts``, and each attempt re-asks whether a
     /// rebuild is safe. Giving up is deliberate rather than a gap: an honest
     /// "untested" plus a **Reconnect** button beats retrying invisibly forever.
@@ -609,6 +616,19 @@ final class BLEPTTController: ObservableObject {
                 "accessory subscribed to \(paths.count): "
                     + paths.map { "\($0.service)/\($0.characteristic)" }
                         .joined(separator: " "))
+
+            // **Make the link prove itself.** A rebuild is only worth anything if
+            // the new link carries data, and neither this event nor `.connected`
+            // shows that — both were observed reporting success over a dead link.
+            //
+            // Not while learning: the read's value arrives as a notification, and
+            // in learn mode the state machine would latch it as the operator's
+            // press. That is a real trap and it cost a session to diagnose once
+            // already.
+            if repairAttempts > 0, learner == nil, !isButtonVerified {
+                Diagnostics.route("accessory liveness probe: reading the link")
+                central?.probeForLiveness(id)
+            }
 
         case .notified(let id, let signal):
             guard id == wantedAccessory else { return }
