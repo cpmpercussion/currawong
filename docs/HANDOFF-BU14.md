@@ -53,9 +53,10 @@ Measured properties:
 
 ## 3. What is established about the fault
 
-* It kills **notification delivery only**. Reads still work (the probe answers in
-  ~205 ms on a link whose notifications are dead — see §6, and note this is the
-  single most surprising fact here).
+* It kills **notification delivery only**. Reads still work — the liveness probe
+  answered in ~205 ms on a link whose notifications were dead (§5, attempts
+  10-11). **This is the single most surprising fact here**, and it is why a probe
+  is not a proxy for the button working: they travel different paths.
 * **Nothing reports it.** `linkState` stays `.connected`, no `.disconnected`
   event arrives, and a re-subscribe *reports success* while delivering nothing —
   five in a row did.
@@ -169,6 +170,7 @@ All under `experiment-data/q2l-ble-probe/` (workspace, unversioned):
 | `ios-session8-eventdriven-*.log` | event-driven repair, still looping |
 | `ios-session9-workingish-*.log` | **the best session** — 8 repairs, all verified first attempt, and the 1.6–2.6 s rebuild cost measured |
 | `ios-session10-probefirst-*.log` | probe-first, and the 10 s backstop regression |
+| `ios-session11-deadline-1s-*.log` | the 1 s deadline, and the evidence for attempt #11: the deadline armed at rebuild start expiring 2 ms after reconnect |
 
 ## 8. Deliberate design constraints — do not undo these
 
