@@ -34,38 +34,41 @@ import SwiftUI
 /// answered in the same place at all times, rather than by the presence or
 /// absence of something the operator has to remember the meaning of.
 ///
-/// **Both states are two lines**, deliberately. A subtitle that appeared only
-/// while transmitting would change the strip's height and reintroduce exactly
-/// the motion this is here to remove.
+/// **One line, in both states.** It carried a subtitle at first — "Transmitting
+/// while held", "The transmitter is not keyed" — which the operator asked for
+/// and then asked to have removed, rightly: both restate what the word beside
+/// them already says, and a safety strip that spends half its height saying
+/// nothing teaches the eye to skip it.
 ///
-/// The transmitting subtitle is PT-4's requirement: it names the input that
-/// keyed the radio and says whether letting go will stop it. A latched
-/// transmission that the operator believes is momentary is the way this app
-/// would leave a microphone open, so the answer is on screen rather than in the
-/// manual.
+/// **The exception is PT-4, and it is why `source` is still here.** A *latched*
+/// transmission is the one case where letting go does not stop the radio, and an
+/// operator who believes a latched key is momentary is how this app would leave
+/// a microphone open. So the latched case says so, in the space "ON AIR" already
+/// occupies — the fact, not a sentence about the fact. Momentary sources say
+/// nothing extra, because for them the word TRANSMITTING is the whole truth.
+///
+/// The height is the same in every state either way. That is what the tests
+/// pin, and it is the property the layout depends on.
 struct TransmitBanner: View {
     /// Whether the radio is on air. The strip is drawn either way.
     let isTransmitting: Bool
 
-    /// The input holding the key, when one is known. `nil` while transmitting
-    /// renders the generic subtitle rather than guessing at a source.
+    /// The input holding the key, when one is known. Read only to answer PT-4's
+    /// question — whether letting go stops it — so an unknown source is treated
+    /// as momentary, which is the presentation that claims least.
     let source: PTTSource?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 10) {
-                Image(systemName: isTransmitting
-                    ? "dot.radiowaves.left.and.right"
-                    : "antenna.radiowaves.left.and.right")
-                Text(isTransmitting ? "TRANSMITTING" : "RECEIVE")
-                    .font(.headline.weight(.black))
-                    .monospaced()
-                Spacer()
-                Text(isTransmitting ? "ON AIR" : "STANDBY")
-                    .font(.headline.weight(.black))
-            }
-            Text(subtitle)
-                .font(.caption.weight(.medium))
+        HStack(spacing: 10) {
+            Image(systemName: isTransmitting
+                ? "dot.radiowaves.left.and.right"
+                : "antenna.radiowaves.left.and.right")
+            Text(isTransmitting ? "TRANSMITTING" : "RECEIVE")
+                .font(.headline.weight(.black))
+                .monospaced()
+            Spacer()
+            Text(trailingWord)
+                .font(.headline.weight(.black))
         }
         .foregroundStyle(isTransmitting ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
         .padding(.horizontal, 20)
@@ -79,20 +82,38 @@ struct TransmitBanner: View {
         .accessibilityLabel(accessibilityDescription)
     }
 
-    /// Never empty, in either state: the second line is what keeps the two
-    /// states the same height.
-    private var subtitle: String {
-        guard isTransmitting else { return "The transmitter is not keyed." }
-        return source?.holdDescription ?? "The transmitter is keyed."
+    /// **PT-4.** Whether the key is held by something that will not release it
+    /// when the operator lets go. An unknown source is not treated as latched:
+    /// only ``PTTSource/remoteCommand`` actually latches, and claiming it of an
+    /// unknown input would make the word meaningless where it matters.
+    private var isLatched: Bool {
+        isTransmitting && source?.isMomentary == false
+    }
+
+    /// The right-hand word. "LATCHED" replaces "ON AIR" rather than joining it,
+    /// because it is the more urgent of the two and the strip's colour has
+    /// already said the radio is on air.
+    ///
+    /// Not private, so PT-4's one drawn fact can be tested as a value: reading
+    /// it out of a rendered view would test SwiftUI rather than the rule.
+    var trailingWord: String {
+        guard isTransmitting else { return "STANDBY" }
+        return isLatched ? "LATCHED" : "ON AIR"
     }
 
     /// What VoiceOver reads, and what the tests assert on. Not private: SF-4 is
     /// "the operator can tell whether they are on air", and for an operator
     /// using VoiceOver this string *is* the requirement, so it is worth a test
     /// of its own rather than being inspected through a rendered view.
+    ///
+    /// **Longer than the strip, deliberately.** A glance at red is instant and a
+    /// screen reader has no colour, so what the eye gets from the background,
+    /// VoiceOver gets from these words — including PT-4's full sentence, which
+    /// is worth the extra second when spoken and was clutter when drawn.
     var accessibilityDescription: String {
         guard isTransmitting else { return "Not transmitting. Standby." }
-        return "Transmitting. On air. \(subtitle)"
+        guard let source else { return "Transmitting. On air." }
+        return "Transmitting. On air. \(source.holdDescription)"
     }
 }
 
