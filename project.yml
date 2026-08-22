@@ -47,7 +47,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.5.3
+    from: 0.5.4
 
 settings:
   base:
