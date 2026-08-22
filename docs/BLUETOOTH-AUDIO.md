@@ -522,6 +522,31 @@ on HFP, it **keeps returning** to it, because the category demands an input rout
 and HFP is the only Bluetooth one on offer. Disconnecting is not enough; only
 deactivating the session, or changing the category, releases the accessory.
 
+### Third attempt, 2026-08-22 evening — the linger, with the mechanism in hand
+
+Implemented the same evening the root cause was proven (see `BRINGUP.md`
+BU-14: the accessory mutes its own BLE notifications while its Classic side
+sits in an *idle* HFP call, so handing the route back between overs is what
+lets the button live — this stopped being a receive-quality nicety and became
+the `BU-14` fix).
+
+The design differs from both reverted attempts in one place: **the hand-back
+to listening happens on a 3 s linger, never inline in `stopCapture()`.** That
+is what removes the first attempt's loop — SF-3's transient drop-and-resume
+completes inside the linger and re-keys into a session still on radio, so no
+category change, no fresh cascade, convergence. `AudioPipelineIO` tracks the
+applied policy so the resume's escalation is a no-op rather than a redundant
+`setCategory`. SF-3 is not suppressed anywhere: every route change still drops
+transmit, and the residual cost is one `BU-15`-style drop-and-resume on the
+first over after each hand-back — the same dance macOS does on a cold SCO
+link, for the same reason. The linger also mirrors macOS's measured ~2.1 s
+SCO linger, sized up to outlast the resume cycle (300 ms settle + engine
+start + cascade tail).
+
+The "requirements decision" the section below insists on has been taken:
+2026-08-22, with the operator, on the cross-transport evidence — and it did
+not require the suppression window after all, only the linger.
+
 ### Attempted twice and reverted twice, 2026-08-22. The cause is not enough
 
 **Second attempt, on top of `RC-13`.** With the cause on the signal,
