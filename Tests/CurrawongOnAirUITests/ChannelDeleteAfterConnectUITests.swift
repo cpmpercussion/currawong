@@ -63,7 +63,11 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
     /// Reserved for documentation (RFC 5737) and routed nowhere.
     private let unroutableHost = "192.0.2.1"
 
-    private let lockLabel = "Disconnect to switch, add or delete channels."
+    /// APP-23 reworded this: switching is no longer refused, only the
+    /// operations that change what the list contains. This test *arms* the lock
+    /// by waiting for the label, so a stale string here does not fail loudly —
+    /// it waits twenty seconds and reports that the repro never armed.
+    private let lockLabel = "Disconnect to add, edit or delete channels."
 
     override func setUp() {
         // Deliberately not `false`: an early failure must not skip the deletes
@@ -97,8 +101,13 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
 
         // MARK: Arm the lock
 
-        let connect = app.buttons["Connect"]
-        XCTAssertTrue(connect.waitForExistence(timeout: 5), "no Connect button")
+        // **APP-23: the form's Connect is gone**, and `app.buttons["Connect"]`
+        // still matches the pane switcher's radio button, so this has to name
+        // the destination the way the session pane's link button does (APP-17).
+        let connect = app.buttons["Connect to \(dialledName)"].firstMatch
+        XCTAssertTrue(
+            connect.waitForExistence(timeout: 5),
+            "no link button naming this channel — the session pane's Connect is the only one now")
         connect.click()
 
         let lock = text(lockLabel, in: app)
