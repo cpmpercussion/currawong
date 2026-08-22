@@ -1347,7 +1347,24 @@ phone's mic with the accessory at the operator's mouth, which is the "sounds
 like a pocket" fault `BU-13` warns about, and this is the first sight of the
 mechanism that would cause it.
 
-> ### ⛔ Tried on air and REVERTED, 2026-08-22. Read this before trying again.
+> ### ⛔ Tried twice, reverted twice, 2026-08-22. **The cause is not enough.**
+>
+> The second attempt used `RC-13`'s cause: ignore `categoryChange` for SF-3, keep
+> it as `BU-14`'s repair trigger. It **half worked** — the route reached
+> `Playback` at 44100 Hz and the ignore fired 23 times — and still broke keying,
+> because **one policy switch produces a cascade**: `categoryChange`, `override`,
+> `newDeviceAvailable`, `engineConfigurationChange`. Only the first is
+> self-evidently ours; the others are indistinguishable from an accessory being
+> unplugged, and SF-3 must drop transmit for those.
+>
+> **So this needs a requirements decision, not another attempt.** Either a
+> suppression window on the transmit path — where SF-3 exists to hold — or one of
+> two partial options that leave SF-3 alone: switch on connect/disconnect (fixes
+> the idle case and the battery, not receive quality during a QSO), or accept the
+> platform difference and document it. `RC-12` and `RC-13` both stay; the cause
+> made SF-3 more precise on its own merits.
+>
+> ### ⛔ First attempt, 2026-08-22.
 >
 > Switching policy on the transmit path made the app unusable for transmitting:
 > "tx just doesn't work, like it switches for a second and then turns off", an
