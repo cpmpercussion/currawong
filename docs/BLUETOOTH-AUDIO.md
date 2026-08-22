@@ -1,5 +1,10 @@
 # Bluetooth accessories, HFP, and why the two platforms differ
 
+> 📄 **If you are picking this up cold, read `HANDOFF-BU14.md` first.** This file
+> is organised by discovery rather than by conclusion, and several of its sections
+> are superseded by later ones in the same file. The handoff is the summary, with
+> the eleven attempts and why each failed.
+
 What a Bluetooth speaker-mic actually does, measured against a TIDRADIO Q2L on
 2026-08-22. This exists because the accessory note in `BRINGUP.md` asked one
 question — *how does this thing attach?* — and could not tell `BU-13` from
