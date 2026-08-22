@@ -551,6 +551,41 @@ xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
     -derivedDataPath DerivedData -destination 'platform=macOS' test
 ```
 
+#### On an iOS device, since 2026-08-23
+
+The target gained an iOS destination so `BU-15` could be reached at all: its
+iOS trigger is a route change the **simulator does not report**
+(`BU15SessionProbeTests`), so a real iPhone is the only place that fault is
+visible. `M17EndOfOverUITests` and the new `BU15FirstOverUITests` both drive
+either platform; the `BU-9` delete tests stay macOS-only behind `#if
+os(macOS)`, being about the macOS context menu.
+
+**The callsign now comes from the environment.** The old route read it from the
+app's real defaults, which works only on macOS — on iOS the runner and the app
+are separate sandboxes. Nothing is committed, and a run with no callsign
+**skips instead of transmitting**:
+
+```sh
+xcrun devicectl list devices          # find the device's identifier
+xcodebuild -project Currawong.xcodeproj -scheme CurrawongOnAir \
+    -derivedDataPath DerivedData -allowProvisioningUpdates \
+    -destination 'platform=iOS,id=<device-id>' \
+    -only-testing:CurrawongOnAirUITests/BU15FirstOverUITests \
+    TEST_RUNNER_CURRAWONG_ONAIR_CALLSIGN=<yours> test
+```
+
+`xcodebuild` strips the `TEST_RUNNER_` prefix and passes the rest into the
+runner's environment, which is the only way into a UI test process on a device.
+
+**Two device-side grants, neither scriptable**, and both produce the same
+`Timed out while enabling automation mode` the macOS Accessibility grant does:
+
+- **Settings → Developer → Enable UI Automation** must be on.
+- **The device must be unlocked for the whole run.** A locked phone also fills
+  the log with `The device is passcode protected` and makes `xcodebuild` report
+  `** TEST FAILED **` *after* a run whose tests all passed — check the result
+  bundle before believing the exit status. Set Auto-Lock to Never.
+
 **What the first sessions established, 2026-08-20.**
 
 - **Accessibility must be granted** to whatever runs the tests, or the run dies

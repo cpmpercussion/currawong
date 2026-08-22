@@ -66,15 +66,11 @@ final class M17EndOfOverUITests: XCTestCase {
     func testAnOverEndsWhenPTTIsReleased() throws {
         // **Its own callsign, before anything else.** The suite is wiped at
         // launch, so the identity field comes up empty — and a test that
-        // transmits must not invent a callsign. Read the operator's own out of
-        // the app's real defaults, or stop: putting a made-up callsign on a
-        // reflector is not a thing to do by accident.
-        guard let callsign = IsolatedApp.operatorCallsign() else {
-            XCTFail(
-                "no operator callsign in the app's own defaults, and this test "
-                + "transmits. Run Currawong normally, set your callsign, then run this.")
-            return
-        }
+        // transmits must not invent a callsign. This skips rather than
+        // transmits when nobody has said who is on the air; see
+        // ``IsolatedApp/requireOperatorCallsign()``, which is also the only
+        // route that works on iOS.
+        let callsign = try IsolatedApp.requireOperatorCallsign()
 
         let app = IsolatedApp.launched()
 
@@ -101,7 +97,7 @@ final class M17EndOfOverUITests: XCTestCase {
         XCTAssertTrue(
             connect.waitForExistence(timeout: 5),
             "no link button naming this channel — the session pane's Connect is the only one now")
-        connect.click()
+        connect.activate()
 
         // The link is up when the PTT control stops saying "Connect to a node
         // first" — the control exists either way, so its existence proves
@@ -145,7 +141,7 @@ final class M17EndOfOverUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)
 
         let disconnect = app.buttons["Disconnect"].firstMatch
-        if disconnect.exists { disconnect.click() }
+        if disconnect.exists { disconnect.activate() }
 
         // Deleting is refused while a link is up, so wait for the list to say
         // it is editable again. Read that from the lock label the channel list
@@ -187,18 +183,56 @@ final class M17EndOfOverUITests: XCTestCase {
     private func addChannel(named name: String, in app: XCUIApplication) {
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
-        add.click()
+        add.activate()
         replace(name, in: field("connect.channelName", in: app))
     }
 
-    /// Deletes it again through the context menu, which is how macOS reaches
-    /// this: there is no swipe-to-delete off iOS and no key binding.
+    /// Deletes it again. **The one place the two platforms differ in mechanism
+    /// rather than in wording**, which is why it is forked here and the rest of
+    /// this test is not: `ChannelListView` offers `onDelete`, which iOS renders
+    /// as the swipe every operator expects, and a `.contextMenu`, which is how
+    /// macOS reaches the same command because it has no swipe.
     private func deleteChannel(named name: String, in app: XCUIApplication) {
         guard row(named: name, in: app).exists else {
             XCTFail("the test's channel vanished before it could be deleted")
             return
         }
-        row(named: name, in: app).rightClick()
+        #if os(macOS)
+            deleteViaContextMenu(named: name, in: app)
+        #else
+            deleteViaSwipe(named: name, in: app)
+        #endif
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { !self.row(named: name, in: app).exists },
+            "the channel was still listed after Delete")
+    }
+
+    #if !os(macOS)
+        /// Swipe-to-delete, and then the confirming `Delete` button the swipe
+        /// reveals. Two elements of that name can be on screen at once — the
+        /// revealed action and, if the row also carries a context menu, its
+        /// item — so this takes the one inside the row.
+        private func deleteViaSwipe(named name: String, in app: XCUIApplication) {
+            let row = self.row(named: name, in: app)
+            row.swipeLeft()
+            let delete = row.buttons["Delete"].firstMatch
+            if delete.waitForExistence(timeout: 3) {
+                delete.tap()
+                return
+            }
+            // Some SwiftUI versions hoist the revealed action out of the row.
+            let loose = app.buttons["Delete"].firstMatch
+            guard loose.waitForExistence(timeout: 3) else {
+                XCTFail("the swipe on '\(name)' revealed no Delete")
+                return
+            }
+            loose.tap()
+        }
+    #endif
+
+    #if os(macOS)
+    private func deleteViaContextMenu(named name: String, in app: XCUIApplication) {
+        row(named: name, in: app).openContextMenu()
 
         // Scoped to the menu that just opened — and **`app.menus` is not that
         // scope.** It holds every menu-bar menu whether open or not, so its
@@ -228,9 +262,6 @@ final class M17EndOfOverUITests: XCTestCase {
             delete.isEnabled,
             "Delete is disabled in the channel's own context menu after the link came down")
         delete.click()
-        XCTAssertTrue(
-            waitUntil(timeout: 10) { !self.row(named: name, in: app).exists },
-            "the channel was still listed after Delete")
     }
 
     /// The row's own context menu, if one is open, told apart from the menu-bar
@@ -250,6 +281,7 @@ final class M17EndOfOverUITests: XCTestCase {
         }
         return found
     }
+    #endif
 
     /// A channel row is a button labelled with the channel described in full —
     /// name, mode, where it points, whether it is connected — so match on the
@@ -264,17 +296,22 @@ final class M17EndOfOverUITests: XCTestCase {
 
     // MARK: - Driving the form
 
-    /// The mode picker is a segmented `Picker`, which surfaces as radio buttons
-    /// on macOS rather than as a segmented control.
+    /// The mode picker is a segmented `Picker`. macOS surfaces its options as
+    /// radio buttons; iOS surfaces them as buttons inside a segmented control.
+    /// Each candidate is tried in turn rather than assumed, because the element
+    /// type a SwiftUI `Picker` reports has changed between OS versions before.
     private func selectM17Mode(in app: XCUIApplication) {
-        let m17 = app.radioButtons["M17"].firstMatch
-        if m17.waitForExistence(timeout: 5) {
-            m17.click()
+        let candidates = [
+            app.radioButtons["M17"].firstMatch,
+            app.segmentedControls.buttons["M17"].firstMatch,
+            app.buttons["M17"].firstMatch,
+            app.descendants(matching: .any)["M17"].firstMatch,
+        ]
+        for candidate in candidates where candidate.waitForExistence(timeout: 2) {
+            candidate.activate()
             return
         }
-        let fallback = app.descendants(matching: .any)["M17"].firstMatch
-        XCTAssertTrue(fallback.waitForExistence(timeout: 5), "no M17 mode control")
-        fallback.click()
+        XCTFail("no M17 mode control")
     }
 
     /// The fields carry both an accessibility label — for anyone using a
@@ -294,17 +331,5 @@ final class M17EndOfOverUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.25)
         }
         return condition()
-    }
-}
-
-/// Replaces a field's contents rather than appending to them: these come back
-/// from the app's saved settings, so they are rarely empty.
-func replace(_ text: String, in field: XCUIElement) {
-    field.click()
-    field.typeKey("a", modifierFlags: .command)
-    if text.isEmpty {
-        field.typeKey(.delete, modifierFlags: [])
-    } else {
-        field.typeText(text)
     }
 }
