@@ -515,7 +515,10 @@ final class RadioSessionTransmitTests: XCTestCase {
     func testAReleaseDuringTheKeyDownLeavesTheRadioOffAir() async {
         let harness = SessionHarness()
         await harness.connect()
-        harness.client.duringStartTransmit = { [session = harness.session] in
+        // Force-unwrapped in the capture list on purpose: `SessionHarness.session`
+        // is `RadioSession!`, and a capture binds the optional rather than the
+        // implicitly unwrapped value, so `session.endTransmit` does not compile.
+        harness.client.duringStartTransmit = { [session = harness.session!] in
             await MainActor.run { session.endTransmit(reason: .accessoryReleased) }
         }
 
