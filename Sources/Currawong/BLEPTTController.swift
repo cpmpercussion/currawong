@@ -390,6 +390,9 @@ final class BLEPTTController: ObservableObject {
         mapping = learned
         store.saveMapping(learned)
         learner = nil
+        // The learn sequence *was* the button speaking — a press and a release
+        // arrived moments ago — so the link starts its runtime life verified.
+        isButtonVerified = true
         isAccessoryKeyed = false
         wantedAccessory = learned.accessoryID
         if !linkState.isConnected { connectWanted() }
@@ -578,9 +581,11 @@ final class BLEPTTController: ObservableObject {
         isRebuildInFlight = false
 
         if alive {
-            // `isButtonVerified` was already set by the arriving data, and the
-            // budget is whole again: whatever this link's last trouble was, it is
-            // answering now.
+            // The link answers, so the repair ladder ends and the budget is
+            // whole again. Note what this does *not* say: nothing about the
+            // button. `isButtonVerified` is set only by the button's own
+            // signals, because the accessory answers reads even while it
+            // suppresses notifications in call mode.
             repairAttempts = 0
             return
         }
@@ -717,14 +722,26 @@ final class BLEPTTController: ObservableObject {
 
         case .notified(let id, let signal):
             guard id == wantedAccessory else { return }
-            // Data arrived, which is the only proof this link works.
-            if !isButtonVerified {
-                isButtonVerified = true
-                // Ends any ladder in progress and restores the full budget for
-                // the next time the link dies.
-                repairAttempts = 0
-                Diagnostics.route("accessory link verified by arriving data")
+            // Anything arriving answers an outstanding probe: the link
+            // demonstrably carries data. This must not be gated on
+            // `isButtonVerified` — when it was, a probe's answer on an
+            // already-verified link was swallowed, the deadline was never
+            // cancelled, and every post-over route change tore down a healthy
+            // link one second after it had answered (measured on device
+            // 2026-08-22, three overs in a row).
+            if isRebuildInFlight {
                 handleProbeOutcome(alive: true, detail: nil)
+            }
+            // But only the button's own signals verify the *button*. A probe's
+            // answer travels the read path, which the accessory keeps serving
+            // even while it suppresses notifications in HFP call mode (Mac
+            // cross-test, 2026-08-22) — counting it as verification is how a
+            // dead button was labelled "ready".
+            if !isButtonVerified, isButtonSignal(signal) {
+                isButtonVerified = true
+                // Restores the full budget for the next time the link dies.
+                repairAttempts = 0
+                Diagnostics.route("accessory button verified by its own data")
             }
             lastSignal = signal
             Diagnostics.route(
@@ -743,6 +760,16 @@ final class BLEPTTController: ObservableObject {
     }
 
     // MARK: - Runtime mapping (BLE-3)
+
+    /// Whether this signal is the learned button speaking — the only traffic
+    /// that can verify the button. A probe's read answer, a battery level, or a
+    /// heartbeat all prove the link, but the accessory serves reads even while
+    /// it suppresses the button's notifications in HFP call mode, so none of
+    /// them prove the thing the operator is about to trust their transmitter to.
+    private func isButtonSignal(_ signal: BLESignal) -> Bool {
+        guard let mapping, mapping.isUsable else { return false }
+        return signal == mapping.press || signal == mapping.release
+    }
 
     private func applyRuntimeMapping(_ signal: BLESignal) {
         guard let mapping, mapping.isUsable else { return }

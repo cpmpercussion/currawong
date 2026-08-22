@@ -105,6 +105,14 @@ final class BLEPTTControllerTests: XCTestCase {
             "a healthy link must not be torn down to find out that it is healthy")
     }
 
+    /// The probe's answer as the device actually sends it: an empty value on
+    /// the readable characteristic, not a button signal.
+    private func probeEcho(_ mapping: BLEPTTMapping) -> BLECentralEvent {
+        .notified(
+            id: mapping.accessoryID,
+            signal: BLESignal(path: TestSignals.press.path, payload: Data()))
+    }
+
     /// And a probe that answers costs nothing further: no rebuild, no downtime.
     func testAProbeThatAnswersLeavesTheLinkAlone() async {
         let clock = TestClock()
@@ -112,14 +120,19 @@ final class BLEPTTControllerTests: XCTestCase {
 
         controller.audioRouteDidChange()
         central.clearCalls()
-        central.emit(
-            .notified(
-                id: mapping.accessoryID,
-                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
-        await waitUntil("verified") { controller.isButtonVerified }
+        let echo = probeEcho(mapping)
+        central.emit(echo)
+        await waitUntil("answer processed") { self.controllerSaw(controller, echo) }
         await Task.yield()
 
         XCTAssertEqual(central.calls, [], "nothing was wrong, so nothing should happen")
+    }
+
+    /// Whether the controller has consumed this event yet — observable through
+    /// `lastSignal`, which every arriving signal updates.
+    private func controllerSaw(_ controller: BLEPTTController, _ event: BLECentralEvent) -> Bool {
+        guard case .notified(_, let signal) = event else { return false }
+        return controller.lastSignal == signal
     }
 
     /// A probe that fails is what buys a rebuild.
@@ -161,15 +174,70 @@ final class BLEPTTControllerTests: XCTestCase {
         let (controller, mapping) = await makeConnectedController(clock: clock)
 
         controller.audioRouteDidChange()
-        central.emit(
-            .notified(
-                id: mapping.accessoryID,
-                signal: BLESignal(path: TestSignals.press.path, payload: Data())))
-        await waitUntil("verified") { controller.isButtonVerified }
+        let echo = probeEcho(mapping)
+        central.emit(echo)
+        await waitUntil("answer processed") { self.controllerSaw(controller, echo) }
         central.clearCalls()
 
         controller.audioRouteDidChange()
 
+        XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
+    }
+
+    /// **The teardown loop of 2026-08-22.** On a link already verified by real
+    /// button data, a probe's answer was swallowed — the code that cancelled the
+    /// deadline only ran on the unverified→verified transition — so the deadline
+    /// fired one second after the link had answered and tore it down. Measured
+    /// on device after every single over. The answer must cancel the deadline
+    /// regardless of the verification state.
+    func testAProbeAnswerOnAVerifiedLinkCancelsTheDeadline() async {
+        let clock = TestClock()
+        let gate = DelayGate()
+        let (controller, mapping) = await makeConnectedController(
+            clock: clock, neverFiringBackstop: gate)
+
+        // Verify the link with the button's own data first — a release, which
+        // cannot key the accessory.
+        central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.release))
+        await waitUntil("verified") { controller.isButtonVerified }
+        central.clearCalls()
+
+        controller.audioRouteDidChange()
+        let echo = probeEcho(mapping)
+        central.emit(echo)
+        await waitUntil("answer processed") { self.controllerSaw(controller, echo) }
+
+        // Now let the deadline elapse. A cancelled deadline does nothing; the
+        // 2026-08-22 bug had it rebuild the link that had just answered.
+        gate.open()
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertFalse(
+            central.calls.contains(.disconnect(mapping.accessoryID)),
+            "the probe was answered; the deadline must have been cancelled")
+    }
+
+    /// **The "Accessory ready" lie of 2026-08-22.** A probe's answer travels the
+    /// read path, which the accessory keeps serving even while it suppresses the
+    /// button's notifications in HFP call mode — so it must never verify the
+    /// button. Only the button's own signals may.
+    func testAProbeEchoDoesNotVerifyTheButton() async {
+        let clock = TestClock()
+        let (controller, mapping) = await makeConnectedController(clock: clock)
+
+        controller.audioRouteDidChange()
+        let echo = probeEcho(mapping)
+        central.emit(echo)
+        await waitUntil("answer processed") { self.controllerSaw(controller, echo) }
+
+        XCTAssertFalse(
+            controller.isButtonVerified,
+            "a read answer says the link is up, not that the button works")
+
+        // The answer still resolves the check — the next route change may probe
+        // again rather than being skipped as in-flight.
+        central.clearCalls()
+        controller.audioRouteDidChange()
         XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
     }
 
@@ -356,11 +424,18 @@ final class BLEPTTControllerTests: XCTestCase {
             controller.isButtonVerified,
             "a connection is not evidence that the button works")
 
+        // A signal the mapping ignores does not count either: the accessory
+        // serves other traffic even while the button's notifications are
+        // suppressed, so only the button's own signals answer the question.
+        let unrelated = BLECentralEvent.notified(
+            id: mapping.accessoryID, signal: TestSignals.unrelated)
+        central.emit(unrelated)
+        await waitUntil("unrelated processed") { self.controllerSaw(controller, unrelated) }
+        XCTAssertFalse(controller.isButtonVerified)
+
         central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
         await waitUntil("verified") { controller.isButtonVerified }
 
-        // Anything at all counts, including a signal the mapping ignores: the
-        // question is whether the link delivers, not what it delivered.
         XCTAssertTrue(controller.isButtonVerified)
     }
 
@@ -430,6 +505,9 @@ final class BLEPTTControllerTests: XCTestCase {
         XCTAssertEqual(controller.mapping?.release, TestSignals.release)
         XCTAssertEqual(store.savedMapping?.accessoryID, accessory.id)
         XCTAssertNil(controller.learner)
+        XCTAssertTrue(
+            controller.isButtonVerified,
+            "the learn sequence was the button speaking — the link starts verified")
     }
 
     /// An accessory that only reports the button going down would key and never
