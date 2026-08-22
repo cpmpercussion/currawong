@@ -76,8 +76,8 @@ final class BLEPTTControllerTests: XCTestCase {
             retryDelay: {},
             now: { clock.now },
             // A wait that is never released: these tests assert the
-            // *event-driven* path, and a backstop that fired would mask it.
-            stuckProbeBackstop: (neverFiringBackstop ?? DelayGate()).wait)
+            // *event-driven* path, and a deadline that fired would mask it.
+            probeDeadline: (neverFiringBackstop ?? DelayGate()).wait)
         controller.sink = sink
         controller.isRebuildSafe = isRebuildSafe
         controller.activateIfConfigured()
