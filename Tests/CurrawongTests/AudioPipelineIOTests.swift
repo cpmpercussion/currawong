@@ -180,7 +180,13 @@ final class AudioPipelineIOTests: XCTestCase {
             XCTFail("expected CaptureUnavailable, got \(error)")
         }
 
-        XCTAssertEqual(factory.built.count, 2, "exactly one retry, not a loop")
+        // Three engines, but only two capture attempts: the third is the failed
+        // key-down handing the route back and discarding the attempted-on
+        // engine (BU-17), not another retry.
+        XCTAssertEqual(factory.built.count, 3)
+        XCTAssertEqual(
+            factory.built.map(\.startCount), [0, 0, 0],
+            "exactly one attempt per engine and none on the replacement — not a loop")
     }
 
     /// **SF-3.** The interruption stream is read once, at launch, and must keep
@@ -372,6 +378,38 @@ final class AudioPipelineIOPolicyTests: XCTestCase {
         XCTAssertThrowsError(try io.startCapture { _ in })
 
         XCTAssertEqual(recorder.applied.last, .listening)
+    }
+
+    /// The hand-back discards the capture engine. After any capture the engine
+    /// carries an instantiated input audio unit, and restarting it for
+    /// *received* audio — most of what happens between overs — re-raises an
+    /// input route; on Bluetooth that is HFP, which pulls the accessory
+    /// straight back into the call and re-mutes its button. Observed on air
+    /// 2026-08-22: the LED re-latched every time the far side talked.
+    func testTheHandbackDiscardsTheCaptureEngine() async throws {
+        let gate = LingerGate()
+        let recorder = PolicyRecorder()
+        let factory = PipelineFactory([])
+        let io = AudioPipelineIO(
+            makePipeline: factory.make,
+            applyPolicy: recorder.apply,
+            listeningLinger: gate.wait)
+        try io.configureSession()
+        try io.startCapture { _ in }
+        io.stopCapture()
+        let builtBefore = factory.built.count
+
+        gate.open()
+        await waitUntil("route handed back") { recorder.applied.last == .listening }
+        await waitUntil("engine discarded") { factory.built.count == builtBefore + 1 }
+
+        io.enqueuePlayback([7])
+        XCTAssertEqual(
+            factory.built.last?.played, [[7]],
+            "received audio must flow through the fresh, input-free engine")
+        XCTAssertEqual(
+            factory.built[builtBefore - 1].stopCount, 2,
+            "the input-bearing engine was stopped when it was discarded")
     }
 
     /// Two overs inside one linger produce exactly one hand-back once the

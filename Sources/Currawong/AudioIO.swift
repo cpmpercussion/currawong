@@ -189,6 +189,13 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// that expires while this is true must not touch the session.
     private var isCapturing = false
 
+    /// Whether a capture has been *attempted* on the current engine. That —
+    /// not success — is what instantiates the input audio unit (the attempt
+    /// reads the input node's format before it can fail), and an engine
+    /// carrying an input unit is the one the hand-back must discard. An engine
+    /// that has only ever played stays input-free and is kept.
+    private var captureAttemptedOnCurrent = false
+
     /// Cancels stale hand-backs: every escalation and every new hand-back bumps
     /// it, and a lingered task only acts if its generation is still current.
     private var handbackGeneration = 0
@@ -262,6 +269,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// Must be called with ``lock`` held.
     private func adoptLocked(_ pipeline: CapturePipeline) -> CapturePipeline {
         current = pipeline
+        captureAttemptedOnCurrent = false
         let events = pipeline.signals
         let continuation = signalContinuation
         // Forward, never finish: this pipeline's stream ends when the pipeline
@@ -417,6 +425,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         lock.lock()
         appliedPolicy = AudioSessionPolicy.radio
         lock.unlock()
+        Diagnostics.route("audio session escalated to radio for capture")
     }
 
     /// Hand the route back to listening: `.playback`, which asks for no input,
@@ -447,18 +456,63 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         }
     }
 
-    /// The second half of ``handRouteBack(afterLinger:)``. The lock is held
-    /// across the policy application so an escalation cannot interleave between
-    /// the staleness check and the apply — `applyPolicy` never touches this
-    /// class, so the lock cannot re-enter.
+    /// The second half of ``handRouteBack(afterLinger:)``: apply the listening
+    /// policy, then discard the engine.
+    ///
+    /// **The discard is the half that was missing on the first on-air try.**
+    /// After any capture the engine carries an instantiated input audio unit,
+    /// and restarting that engine for *received* audio — which is most of what
+    /// happens between overs — re-raises an input route. On Bluetooth the only
+    /// input route is HFP, so the accessory was pulled straight back into the
+    /// call the hand-back had just ended, LED lit and button muted, every time
+    /// the far side talked. A fresh engine is playback-only until the next
+    /// capture instantiates its input — under the radio policy, which is
+    /// `BU-1`'s ordering, preserved.
+    ///
+    /// A key-down can race the apply; the second locked check catches it. In
+    /// that window the session is momentarily on listening under a live
+    /// capture, and the capture's own retry path — reactivate, rebuild —
+    /// repairs exactly that, so nothing is discarded under it here.
     private func completeHandback(_ generation: Int) {
         lock.lock()
-        defer { lock.unlock() }
-        guard generation == handbackGeneration, !isCapturing,
-            appliedPolicy != AudioSessionPolicy.listening
-        else { return }
-        guard (try? applyPolicy(AudioSessionPolicy.listening)) != nil else { return }
+        let stale =
+            generation != handbackGeneration || isCapturing
+            || appliedPolicy == AudioSessionPolicy.listening
+        lock.unlock()
+        guard !stale else { return }
+
+        do {
+            try applyPolicy(AudioSessionPolicy.listening)
+        } catch {
+            // Best effort by design — a failed hand-back is a quality
+            // regression, not a safety one — but never silent: this failing
+            // invisibly cost an on-air session to diagnose.
+            Diagnostics.route("audio hand-back to listening failed: \(error)")
+            return
+        }
+
+        lock.lock()
+        guard generation == handbackGeneration, !isCapturing else {
+            lock.unlock()
+            return
+        }
         appliedPolicy = AudioSessionPolicy.listening
+        // Only an engine a capture has been attempted on carries the input
+        // unit; one that has only played is already the engine we want.
+        guard captureAttemptedOnCurrent else {
+            lock.unlock()
+            Diagnostics.route("audio route handed back to listening")
+            return
+        }
+        current?.stop()
+        forwarder?.cancel()
+        forwarder = nil
+        // Built eagerly rather than lazily on the next frame: `AudioPipeline`
+        // registers the SF-3 observers in its initialiser, and a gap with no
+        // pipeline would be a gap in route-change observation.
+        _ = adoptLocked(makePipeline())
+        lock.unlock()
+        Diagnostics.route("audio route handed back to listening; capture engine discarded")
     }
 
     /// Opens the microphone, repairing the audio stack once if the first attempt
@@ -487,11 +541,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             // is a no-op inside the linger, which is what keeps SF-3's
             // drop-and-resume from re-triggering its own cascade.
             try escalateForCapture()
-            try pipeline().startCapture(onFrame: onFrame)
+            let pipeline = pipeline()
+            lock.lock()
+            captureAttemptedOnCurrent = true
+            lock.unlock()
+            try pipeline.startCapture(onFrame: onFrame)
         } catch let first {
             do {
                 try activateSession()
-                try rebuildPipeline().startCapture(onFrame: onFrame)
+                let fresh = rebuildPipeline()
+                lock.lock()
+                captureAttemptedOnCurrent = true
+                lock.unlock()
+                try fresh.startCapture(onFrame: onFrame)
             } catch let second {
                 // The key-down failed outright: nothing is capturing, so hand
                 // the route back now rather than leaving the accessory in a
