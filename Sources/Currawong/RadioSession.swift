@@ -1440,6 +1440,13 @@ final class RadioSession: ObservableObject {
         audio.stopCapture()
 
         if transmitDesired || isTransmitting {
+            // Only when something was actually up, so this does not fire on the
+            // many defensive calls. The reason is the point: it is how an SF-1
+            // watchdog unkey becomes visible (BU-7, never observed), and how a
+            // route-change drop is told from an operator release.
+            Diagnostics.keying(
+                "endTransmit reason=\(reason) wasTransmitting=\(isTransmitting) "
+                    + "held=\(heldSource != nil)")
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }

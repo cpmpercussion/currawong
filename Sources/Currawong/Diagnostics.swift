@@ -96,11 +96,24 @@ enum Diagnostics {
 
     /// The stdout half. See the type note: this is what makes a phone readable
     /// from a terminal, and it is the *only* thing that does.
+    ///
+    /// **Timestamped, unlike the unified-log half, which gets them for free.**
+    /// `devicectl`'s console adds none of its own, and every question this
+    /// instrument exists to answer is about ordering and duration — whether a
+    /// release edge landed before or after the ~163 ms SCO setup, how long a
+    /// hold was, how long a key-down took to reach the air. Seconds since
+    /// process start rather than a wall clock: the differences are what matter
+    /// and a short relative number is easier to subtract by eye.
     private static func mirror(_ category: String, _ message: String) {
         #if DEBUG
-        print("[currawong:\(category)] \(message)")
+        let t = Date().timeIntervalSince(processStart)
+        print(String(format: "[%8.3f] [currawong:%@] %@", t, category, message))
         #endif
     }
+
+    #if DEBUG
+    private static let processStart = Date()
+    #endif
 
     // MARK: - Route-change reasons (iOS)
 

@@ -151,7 +151,39 @@ down on every release, deliberately, and that is why the system recording
 indicator behaves correctly. The SCO link is held by the session's *route*, one
 layer below the tap.
 
-### HFP starves the BLE button. This is `BU-14`'s root cause
+### ~~HFP starves the BLE button~~ — WRONG, superseded 2026-08-22
+
+> ### ⛔ This section's conclusion was refuted the same day it was written
+>
+> A second phone session, with timestamps and `.subscribed`/`.disconnected`
+> logging, showed **notifications flowing normally with the route on
+> `BluetoothHFP` at 16000 Hz** — both a full learn sequence and runtime
+> press/release edges — provided the accessory had been *freshly reconnected*.
+> And the button stayed dead with SCO **down** (LED green, route back on A2DP)
+> until it was forgotten and retrained.
+>
+> So HFP state does not determine whether the button works. **The subscription
+> dies, silently, and only a fresh connect-and-subscribe restores it.** The HFP
+> *transition* remains the likely trigger — the button died immediately after
+> `categoryChange` in both sessions — but starvation is not the mechanism and
+> the fix is not the session policy.
+>
+> **Consequences, both important:**
+>
+> * **The release-edge hazard below is CLOSED.** Releases arrive fine over an
+>   established SCO link: two clean instances, 13.3 s and 11.6 s after the press,
+>   each more than 10 s after `key-down on air`, with the LED lit until release.
+>   The harmonisation is safe to implement as originally sketched.
+> * **The harmonisation is *not* the fix for `BU-14`.** It remains the right fix
+>   for `BU-17` and for receive quality, which is reason enough — but it will not
+>   revive a dead subscription.
+>
+> The evidence table below is kept because the observations in it are real and
+> were correctly recorded. Only the conclusion drawn from them was wrong: with no
+> `.subscribed` logging at the time, a dead subscription and a starved link were
+> indistinguishable.
+
+### The observations (conclusion superseded above)
 
 **Measured on iOS, 2026-08-22, with `Diagnostics` streaming from the phone.**
 The accessory's PTT notifications are delivered when the route is A2DP and are
@@ -202,7 +234,54 @@ time — which is all the time that matters, because the *press* is what has to
 get through. On iOS SCO is up for the whole session, so the button is dead for
 the whole session.
 
-### The session is never deactivated, and iOS keeps re-choosing HFP
+### `BU-14`: the BLE subscription dies silently and never recovers
+
+**Established 2026-08-22, second phone session.** The accessory's notifications
+stop arriving and the app never notices:
+
+* `linkState` stays `.connected`, and the accessory pane goes on saying so.
+* **No `.disconnected` event is delivered** — the logging for it was added
+  specifically to check this, and it stayed silent through both dead periods.
+* The subscription is dead in *both* route states: the button did not work with
+  SCO up, and it did not work after SCO dropped and the route returned to A2DP.
+* **A fresh connect-and-subscribe fixes it every time.** Forget-and-retrain
+  restored it twice, and immediately afterwards notifications flowed with the
+  route on `BluetoothHFP` — the state that supposedly starved them.
+
+**Trigger versus state.** In both sessions the button died immediately after
+`categoryChange` took the route to HFP, so the *transition* is the suspect. The
+plausible mechanism is that the accessory drops or renegotiates its BLE link when
+it enters hands-free call mode, and iOS never surfaces the disconnection. The
+*state* is not the problem: once re-subscribed, HFP is fine.
+
+**The fault, stated for a fix.** Not "HFP breaks BLE" but: **the app trusts
+`.connected` and has no way to notice that a subscription has stopped
+delivering.** There is no liveness check, and CoreBluetooth is not telling it
+anything.
+
+**The open question, and it decides the fix's shape.** Both recoveries were
+forget-and-retrain, which disconnects *and* reconnects *and* re-subscribes. It is
+not yet known whether a bare re-subscribe would do —
+`restartLearning()` already calls `subscribeToAllNotifyingCharacteristics`
+without reconnecting, so the cheap experiment is to trigger that alone against a
+dead link and see whether notifications resume. **Answer that before designing
+anything**, because it is the difference between a re-subscribe on route change
+and a full reconnect cycle.
+
+Candidate fixes, none chosen:
+
+* **Re-subscribe (or reconnect) on every `.routeChanged`.** Targeted at the
+  observed trigger, and cheap. Risk: it treats the symptom's correlate rather
+  than the cause, so an unrelated trigger would still strand the link.
+* **Liveness detection.** Treat "keyed nothing for N seconds while subscribed"
+  as suspicious and reconnect. More general, and needs care not to reconnect
+  during a legitimate quiet period — which is most of the time on a radio.
+* **Stop trusting `.connected` in the UI.** Independent of the repair and worth
+  doing regardless: the indicator claiming a live accessory while nothing arrives
+  is what made this take two sessions to find. `lastSignal` already exists; the
+  pane could show how long ago it was.
+
+## The session is never deactivated, and iOS keeps re-choosing HFP
 
 Also observed 2026-08-22: **disconnecting from a reflector does not put the
 route back.** The LED goes out and then comes back on with no channel connected
@@ -232,7 +311,19 @@ transmitting, switched at key-down and key-up.** That is now the *fix for
 `BU-14`* and not only a receive-quality improvement — but the finding above
 adds a constraint that breaks the obvious implementation.
 
-> ### ⚠️ The release-edge hazard. Read this before writing any of it
+> ### ✅ The release-edge hazard — RESOLVED 2026-08-22, kept for the reasoning
+>
+> **Answered: the release survives.** Two held presses, released 13.3 s and
+> 11.6 s after the press and more than 10 s after `key-down on air` had put the
+> route on HFP, both delivered their `RELEASE edge` (and its duplicate). The
+> LED — which does track SCO — was lit until the release in both. So a hold-to-
+> talk design that raises SCO at key-down is safe, and the latched-hold
+> workaround below is **not needed**.
+>
+> What follows is the reasoning as it stood before that test, kept because the
+> shape of the argument is worth having if another accessory behaves differently.
+>
+> ### ⚠️ The release-edge hazard as originally feared
 >
 > If HFP is what starves the button, then a design that raises SCO **at
 > key-down** puts the *release* edge on the wrong side of the boundary: the
