@@ -450,7 +450,44 @@ final class BLEPTTController: ObservableObject {
     /// Repairing between overs is also the right *moment*: the button is needed
     /// for the **next** press, not this one.
     func audioRouteDidChange() {
-        repair(reason: "route changed", force: false)
+        checkLink(reason: "route changed")
+    }
+
+    /// **Ask before rebuilding.** Probe the link; rebuild only if the probe fails.
+    ///
+    /// Until the probe worked, this could not be the order: a rebuild was the only
+    /// way to *maybe* fix a link, so the repair rebuilt unconditionally on every
+    /// route change and probed afterwards to confirm. That cost the operator a
+    /// dead button for the length of a reconnection after **every over** —
+    /// measured 2026-08-22 at 1.6 s and 2.6 s from disconnect to reconnected,
+    /// which is exactly the window a quick reply lands in.
+    ///
+    /// Now that a probe answers or fails on its own, the cheap question comes
+    /// first and the expensive answer only when it is needed.
+    ///
+    /// **``isButtonVerified`` is deliberately not cleared here.** A check is a
+    /// silent health question, and flipping the indicator to "untested" after
+    /// every over would make it flicker on a link that is fine — the churn is
+    /// itself a fault. It is cleared when a rebuild actually starts, which is when
+    /// the claim really has stopped being true.
+    private func checkLink(reason: String) {
+        guard mapping != nil, learner == nil, linkState.isConnected,
+            !isAccessoryKeyed, let id = wantedAccessory
+        else { return }
+
+        if isRebuildInFlight {
+            Diagnostics.route("accessory check (\(reason)) skipped: already in flight")
+            return
+        }
+        if let isRebuildSafe, !isRebuildSafe() {
+            Diagnostics.route("accessory check (\(reason)) declined: not idle")
+            return
+        }
+
+        isRebuildInFlight = true
+        Diagnostics.route("accessory check (\(reason)): probing before rebuilding")
+        central?.probeForLiveness(id)
+        armStuckProbeBackstop()
     }
 
     /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
@@ -523,7 +560,10 @@ final class BLEPTTController: ObservableObject {
         isRebuildInFlight = false
 
         if alive {
-            // `isButtonVerified` was already set by the arriving data.
+            // `isButtonVerified` was already set by the arriving data, and the
+            // budget is whole again: whatever this link's last trouble was, it is
+            // answering now.
+            repairAttempts = 0
             return
         }
 
@@ -644,7 +684,7 @@ final class BLEPTTController: ObservableObject {
             // in learn mode the state machine would latch it as the operator's
             // press. That is a real trap and it cost a session to diagnose once
             // already.
-            if repairAttempts > 0, learner == nil, !isButtonVerified {
+            if repairAttempts > 0, learner == nil {
                 Diagnostics.route("accessory liveness probe: reading the link")
                 central?.probeForLiveness(id)
             }

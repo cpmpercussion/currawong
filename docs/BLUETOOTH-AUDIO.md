@@ -270,6 +270,29 @@ its own to justify a suppression window in SF-3, which is why the
 deprioritisation above stands — but the reason is "the gain is small", not "there
 is no gain".
 
+### The handset's beep is transmitted, 2026-08-22
+
+Heard at the far end through the EchoLink test server: press PTT, and the beep
+arrives at the receiving station. So **the over begins before the handset
+beeps** — the microphone is already live and carrying audio by the time the tone
+is produced.
+
+Two consequences, one operational and one a correction:
+
+* **Every over starts with a beep going out.** Not merely a local cue: it is on
+  air. Worth knowing before anyone uses this accessory on a busy channel.
+* **The beep is useless as a "you may speak now" cue**, which is the opposite of
+  what an earlier note in this file suggested. By the time you hear it you have
+  already been transmitting for its duration. The LED remains the only indicator
+  worth reading, and it tracks the SCO link.
+
+This also refines the earlier correction rather than reversing it. The beep is
+*not* the SCO-established tone — it was observed with SCO down, on a
+backgrounded app, so the handset does beep on a button press by itself. But when
+a transmission *is* starting, the tone lands after the audio path is open and
+therefore goes out with the over. Both observations hold; the beep simply is not
+a reliable indicator of anything the app can use.
+
 ## Inflection point, 2026-08-22: reliability over the indicator
 
 After two failed attempts at `BU-17`, the operator settled the priority:
