@@ -98,6 +98,7 @@ struct RootView: View {
                     + "prep=\(session.routeSignalsDuringPreparation) "
                     + "tx=\(session.routeSignalsWhileTransmitting) "
                     + "prepMs=\(session.lastPreparationMilliseconds) "
+                    + "micMs=\(session.lastCaptureStartMilliseconds) "
                     + "trace=\(session.holdTrace.joined(separator: ","))")
 
             panes

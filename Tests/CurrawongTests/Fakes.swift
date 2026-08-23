@@ -297,6 +297,9 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     /// it, so a fixed string is the whole of what a fake owes the protocol.
     var audioStateDescription: String { "fake audio, no session" }
 
+    /// Settable, so a test can say "this capture was slow" without one.
+    var lastCaptureStartMilliseconds = 0
+
     /// What the operating system will "decide" about the microphone. Granted by
     /// default so every test that does not care about permission is unaffected.
     var recordPermissionGranted = true

@@ -134,7 +134,7 @@ keep treating the app as unproven on air.
 | BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link. ⚠️ **The ordering was reversed again by `BU-15` on 2026-08-23**, and this fix's *purpose* survives it: opening the microphone is itself a route change, so keying the link first guaranteed the SF-3 drop `BU-15` is about. Audio bring-up now comes first and the carrier follows it, which costs the far end nothing — those 163 ms were a keyed-but-silent carrier either way — and improves this item's own case, since a tap this short now never keys at all. `testTheMicrophoneOpensBeforeTheLinkKeys` is the renamed test |
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
 | BU-18 | **On macOS the route stays on HFP for the rest of the session after the first over, and the Q2L's red LED never lights at all** — so receive audio is 16 kHz from the first transmit onwards, and the operator has no TX indicator on the handset | **Measured 2026-08-23** while confirming `BU-15`, by polling CoreAudio through an over (`kAudioDevicePropertyNominalSampleRate` and `…IsRunningSomewhere` on the default devices, 50 ms). SCO **does** come up: the default output swaps 44100 → 16000 Hz **1.065 s after the press**, matching the app's own `sigPrep@957`/`carrier@1229`, and the input starts running 63 ms later. So the LED is **not** tracking SCO on this accessory, and `BLUETOOTH-AUDIO.md`'s claim that it therefore makes a usable TX indicator on macOS is wrong — the operator reported the LED dark while transmitting, and the mic demonstrably working (tapped it, saw signal). ⚠️ **The second finding is the bigger one:** the output stayed at 16000 Hz for **69 s** — across the release, across a second over, and through the idle between them — returning to 44100 only at teardown. macOS is *not* holding SCO only while transmitting, which is the premise the whole iOS-versus-macOS asymmetry rests on (`BLUETOOTH-AUDIO.md`: "a feature, not an inconsistency to be fixed"). Likely cause: `discardsEngineOnHandback` is false on macOS, so the engine keeps its instantiated input unit and CoreAudio keeps the HFP route — i.e. macOS has `BU-17`'s fault too, just without the muted button that made it urgent on iOS. Not investigated further; found while confirming something else |
-| BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Confirmed on air five times: one key-down per hold, cold and warm, no notice — on the bare phone (`route=none`, 1.03–1.09 s press → carrier cold, 23–30 ms warm) **and with the Q2L as the audio route** (`route=BluetoothHFP`, 0.81 s cold, 23 ms warm), so BU-16's fast path is intact on both. ⚠️ The first Q2L run was not one: the accessory was connected for BLE while its Classic side was not the route, which is why `lastKeyDownRoute` now exists and the test prints it. Residual: the cold over's ~440–500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. ✅ **macOS with the Q2L confirmed 2026-08-23 too**, and it needed one more change: the wait was switched off there by a platform flag, but `startCapture` blocked **798 ms** raising SCO and the configuration change landed **1 ms after the carrier**. The flag is gone — how long the microphone took to open is the evidence that something was raised (cold 421–798 ms, warm 1–35 ms across both platforms), which covers macOS without pretending its policy bookkeeping means anything and stops a Mac on its built-in microphone waiting for a notification nobody will send |
+| BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Confirmed on air: one key-down per hold, cold and warm, no notice — on the bare phone (`route=MicrophoneBuiltIn`, 1.03–1.09 s press → carrier cold, 23–31 ms warm) **and with the Q2L as the audio route** (`route=BluetoothHFP`, 0.81 s cold, 23 ms warm), so BU-16's fast path is intact on both. `lastKeyDownRoute` exists because the first Q2L run carried no route field and so could not be checked; see the detail section for what that did and did not establish, and for what was **not** tested — which includes ordinary Bluetooth headphones and the accessory's own button as the PTT source. Residual: the cold over's ~440–500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. ✅ **macOS with the Q2L confirmed 2026-08-23 too**, and it needed one more change: the wait was switched off there by a platform flag, but `startCapture` blocked **798 ms** raising SCO and the configuration change landed **1 ms after the carrier**. The flag is gone — how long the microphone took to open is the evidence that something was raised (cold 421–798 ms, warm 1–35 ms across both platforms), which covers macOS without pretending its policy bookkeeping means anything and stops a Mac on its built-in microphone waiting for a notification nobody will send |
 
 ---
 
@@ -1477,22 +1477,55 @@ key-down per hold in every run, cold and warm, no safety notice.
 
 | platform / route | press → carrier, cold | signals absorbed | warm over |
 |---|---|---|---|
-| iOS, `route=none` | 1.03–1.09 s | 3–5 | 23–30 ms |
-| iOS, `route=BluetoothHFP` (Q2L) | 0.81 s | 1–2 | 23 ms |
-| macOS, Q2L as default in *and* out | 1.19 s | 1 | 145 ms |
+| iOS, `route=MicrophoneBuiltIn` | 1.03–1.09 s | 3–5 | 23–31 ms |
+| iOS, `route=BluetoothHFP` (Q2L) | 0.81 s | 1–2 | 21–23 ms |
+| macOS, Q2L as default in *and* out | 0.96–1.23 s | 0–1 | 145–168 ms |
+
+**Tested, and not tested.** Every row above is the on-screen PTT button, one
+6.4 s hold plus one 2 s hold, on one phone (melchior, iPhone 13 Pro / iOS 26.5)
+and one Mac, with one accessory. What that leaves untested is worth naming
+because some of it is the *common* case:
+
+* **Ordinary Bluetooth headphones** — AirPods, a car, a speaker. The interesting
+  one, and the configuration most operators who own no PTT accessory but are not
+  on the built-in microphone will actually be in.
+* **Wired earbuds**, and an iPad.
+* **The accessory's own button as the PTT source.** Every on-air run keyed from
+  the screen. The BLE press path reaches the same `beginTransmit`, so the
+  ordering is the same code, but it has not been run on air through this fix.
+* **macOS on its built-in microphone.** Unit-tested (a capture that raises
+  nothing waits for nothing), not run on air.
+
+**And one cost, measured rather than predicted.** A macOS run opened the
+microphone in **111 ms** — 11 ms past the threshold, because SCO was still up
+from an earlier session — and then saw **no signals at all**, so it spent the
+whole onset budget: ~850 ms of wall clock waiting for a cascade that was never
+coming. One key-down, no dance, 850 ms of latency for nothing. That is the
+onset margin doing exactly what it is set up to do, in the one case where it buys
+nothing, and it is the number to revisit first if the cold over is being made
+faster. `APP-24` makes the question rarer by making cold overs rare.
 
 **The accessory case is cheaper than the bare phone**, which is worth not
 misreading: the Q2L was already the route, so the HFP link did not have to be
 brought up from cold inside the over — fewer signals, and the wait leaves by its
 quiet window sooner. It does not mean SCO is free.
 
-⚠️ **Insist on the `route=` field before believing an accessory run.** The first
-Q2L run looked like the accessory case and was not: a Q2L can be connected for
-BLE — its PTT button — while its Classic side is not the audio route at all, and
-that run was another measurement of the bare phone wearing a Bluetooth label.
-`RadioSession.lastKeyDownRoute` was added for exactly this and the test prints
-it; the two triggers are fixed independently, so a run that does not say which
-route it measured does not say which trigger it tested.
+⚠️ **Insist on the `route=` field before believing an accessory run** — and note
+what that suspicion did and did not establish, because the first telling of this
+overstated it. The first Q2L run carried no route field, so it *could not be
+checked*; it was doubted because it came out faster than the bare-phone runs,
+which is backwards for an SCO bring-up. `RadioSession.lastKeyDownRoute` was added
+and the next run said `BluetoothHFP`.
+
+**But the two runs' numbers are near-identical** — `mic@441 carrier@818` against
+`mic@436 carrier@808` — so the first one almost certainly *was* the accessory
+case as well. **An earlier version of this row, and commit `6e9aa3d`, said it was
+not. That is not supported by the numbers, and is withdrawn.** What survives is
+the instrumentation lesson: a Q2L can be connected for BLE — its PTT button —
+while its Classic side is not the audio route, the triggers are fixed
+independently, and a run that does not say which route it measured does not say
+which trigger it tested. That is a reason to record the route, not grounds for
+deciding a particular run was fake.
 
 **The macOS trigger needed one more change, and it replaced a bad idea with a
 measurement.** The wait was switched off on macOS by a platform flag, on the
@@ -1506,23 +1539,34 @@ after:   press@0  prep@50  mic@81  sigPrep@914  prepped@1160  carrier@1190
 ```
 
 What the flag was really trying to ask is **whether the audio stack had to bring
-something up**, and how long opening the microphone took answers that on both
-platforms without asking either of them:
+something up**, and how long opening the microphone took answers that without
+asking the platform anything. ⚠️ **An earlier version of this section put figures
+of 421–494 ms in this table for iOS. They were wrong** — they were read off gaps
+in `holdTrace`, which bracket the escalation, not the capture. The capture
+duration had to be instrumented (`micMs`) to be known at all:
 
 | | cold over | warm over |
 |---|---|---|
-| iOS, no accessory | 441–494 ms | 1–2 ms |
-| iOS, Q2L as the route | 421 ms | 1 ms |
-| macOS, Q2L as the route | 798 ms | 35 ms |
+| iOS, built-in mic | 16 ms | 0 ms |
+| macOS, Q2L as the route | 798 ms, and 111 ms with SCO already up | 1 ms |
 
-Two orders of magnitude, same reason: raising a route costs hundreds of
-milliseconds, finding it already up costs none.
-`AudioPipelineIO.captureSlowThresholdNanoseconds` is 100 ms, an order of
-magnitude clear of both ends, and it is now the only thing the wait is
-conditioned on besides signals having already arrived. Two platform flags went
-away with it — including one that had macOS's fictional policy bookkeeping
-standing in for a real route — and a Mac on its built-in microphone, which
-raises nothing and posts nothing, now waits for nothing.
+**So the threshold carries macOS and does not carry iOS**, and finding that out
+is what makes the pair of conditions in `settleRoute()` legible rather than
+belt-and-braces:
+
+* **macOS** — `startCapture` blocks on the SCO link and the configuration change
+  follows it, so the duration is the whole signal.
+* **iOS** — capture is fast either way, so the threshold never fires. What fires
+  is *signals having already arrived*: the escalation blocks the main actor for
+  ~480 ms, while the forwarder (a detached task, so not blocked) counts the
+  cascade coming in. The `sigPrep` lines appear later than the signals did,
+  which is worth knowing before reading a trace too literally.
+
+Both conditions are load-bearing, one per platform, and neither is redundant.
+`captureSlowThresholdNanoseconds` is 100 ms — an order of magnitude above every
+warm figure, comfortably below the cold ones, and 11 ms below the awkward case
+below. Two platform flags went away with it, including one that had macOS's
+fictional policy bookkeeping standing in for a real route.
 
 ### BU-16 — a tap outruns the key-down, so the radio keys after you let go ✅ FIXED 2026-08-22
 
