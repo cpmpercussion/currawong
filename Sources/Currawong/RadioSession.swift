@@ -355,6 +355,18 @@ final class RadioSession: ObservableObject {
     /// being intact.
     @Published private(set) var lastPreparationMilliseconds = 0
 
+    /// The audio route the last key-down actually went out on, as
+    /// `AVAudioSession` reported it — `route=BluetoothHFP`, `route=none`, and so
+    /// on.
+    ///
+    /// **`BU-15` has two triggers and they are fixed independently**, so a run
+    /// that does not say which route it measured does not say which trigger it
+    /// tested. A Bluetooth accessory can be paired and connected for BLE (its
+    /// PTT button) while its Classic side is not the audio route at all, and
+    /// then a run with the accessory "connected" is really another run of the
+    /// no-accessory case. This is how a device test tells those apart.
+    @Published private(set) var lastKeyDownRoute = ""
+
     /// **`BU-15`'s trace**, DEBUG only: what happened during this hold and how
     /// many milliseconds after the press, in order.
     ///
@@ -368,6 +380,16 @@ final class RadioSession: ObservableObject {
     /// Zeroed by a press the operator makes, so it describes one hold and
     /// survives the release to be read after the gesture.
     @Published private(set) var holdTrace: [String] = []
+
+    /// Picks the `route=` field out of ``AudioIO/audioStateDescription``.
+    ///
+    /// Reading a field out of a diagnostic string is exactly what that string's
+    /// documentation forbids — "no behaviour may branch on this" (BU-13). This
+    /// does not branch on it: the result is published for a test to print, and
+    /// an unparseable state simply reports itself whole.
+    private static func routeField(of state: String) -> String {
+        state.split(separator: " ").first { $0.hasPrefix("route=") }.map(String.init) ?? state
+    }
 
     /// Appends to ``holdTrace``, stamped from the start of the hold. Compiled
     /// away outside DEBUG: it is an instrument, not a feature.
@@ -1865,6 +1887,7 @@ final class RadioSession: ObservableObject {
             isTransmitting = true
             keyDownsInCurrentHold += 1
             trace("onair")
+            lastKeyDownRoute = Self.routeField(of: audio.audioStateDescription)
             Diagnostics.keying("key-down on air: \(audio.audioStateDescription)")
             // Each key-down starts its own watchdog, including one this class
             // made after a route change.
