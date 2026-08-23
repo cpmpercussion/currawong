@@ -94,7 +94,8 @@ struct RootView: View {
                 isTransmitting: status.isTransmitting,
                 source: session.activeSource,
                 keyDownsInHold: session.keyDownsInCurrentHold,
-                routeTrace: "prep=\(session.routeSignalsDuringPreparation) "
+                routeTrace: "\(session.lastKeyDownRoute) "
+                    + "prep=\(session.routeSignalsDuringPreparation) "
                     + "tx=\(session.routeSignalsWhileTransmitting) "
                     + "prepMs=\(session.lastPreparationMilliseconds) "
                     + "trace=\(session.holdTrace.joined(separator: ","))")
