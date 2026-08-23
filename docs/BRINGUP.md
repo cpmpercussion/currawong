@@ -133,6 +133,7 @@ keep treating the app as unproven on air.
 | BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE PROVEN 2026-08-22 (evening): the accessory itself suppresses its BLE notifications while its Classic side sits in an idle HFP call.** Cross-tested with the Mac holding the BLE link while the phone held the call: zero notifications with the LED red, the same subscription delivering again the moment call mode ended — no reconnect, no re-subscribe. Reads answered throughout, which is how every probe lied. iOS shows it and macOS never did because iOS holds the session forever (`BU-17`) while macOS drops SCO ~2.1 s after capture — so `BU-14` **is** `BU-17`, and the fix is releasing the session when idle. Not fixable by link repair; the day's two probe-machinery bugs are fixed regardless. **Fix verified on air the same evening** (see BU-17): ten-plus consecutive overs, every press after a completed hand-back delivered — the press that always died. Still open for the closure criteria only: an over with the app backgrounded and the phone locked (stage with `BU-10`) |
 | BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link. ⚠️ **The ordering was reversed again by `BU-15` on 2026-08-23**, and this fix's *purpose* survives it: opening the microphone is itself a route change, so keying the link first guaranteed the SF-3 drop `BU-15` is about. Audio bring-up now comes first and the carrier follows it, which costs the far end nothing — those 163 ms were a keyed-but-silent carrier either way — and improves this item's own case, since a tap this short now never keys at all. `testTheMicrophoneOpensBeforeTheLinkKeys` is the renamed test |
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
+| BU-18 | **On macOS the route stays on HFP for the rest of the session after the first over, and the Q2L's red LED never lights at all** — so receive audio is 16 kHz from the first transmit onwards, and the operator has no TX indicator on the handset | **Measured 2026-08-23** while confirming `BU-15`, by polling CoreAudio through an over (`kAudioDevicePropertyNominalSampleRate` and `…IsRunningSomewhere` on the default devices, 50 ms). SCO **does** come up: the default output swaps 44100 → 16000 Hz **1.065 s after the press**, matching the app's own `sigPrep@957`/`carrier@1229`, and the input starts running 63 ms later. So the LED is **not** tracking SCO on this accessory, and `BLUETOOTH-AUDIO.md`'s claim that it therefore makes a usable TX indicator on macOS is wrong — the operator reported the LED dark while transmitting, and the mic demonstrably working (tapped it, saw signal). ⚠️ **The second finding is the bigger one:** the output stayed at 16000 Hz for **69 s** — across the release, across a second over, and through the idle between them — returning to 44100 only at teardown. macOS is *not* holding SCO only while transmitting, which is the premise the whole iOS-versus-macOS asymmetry rests on (`BLUETOOTH-AUDIO.md`: "a feature, not an inconsistency to be fixed"). Likely cause: `discardsEngineOnHandback` is false on macOS, so the engine keeps its instantiated input unit and CoreAudio keeps the HFP route — i.e. macOS has `BU-17`'s fault too, just without the muted button that made it urgent on iOS. Not investigated further; found while confirming something else |
 | BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Confirmed on air five times: one key-down per hold, cold and warm, no notice — on the bare phone (`route=none`, 1.03–1.09 s press → carrier cold, 23–30 ms warm) **and with the Q2L as the audio route** (`route=BluetoothHFP`, 0.81 s cold, 23 ms warm), so BU-16's fast path is intact on both. ⚠️ The first Q2L run was not one: the accessory was connected for BLE while its Classic side was not the route, which is why `lastKeyDownRoute` now exists and the test prints it. Residual: the cold over's ~440–500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. ✅ **macOS with the Q2L confirmed 2026-08-23 too**, and it needed one more change: the wait was switched off there by a platform flag, but `startCapture` blocked **798 ms** raising SCO and the configuration change landed **1 ms after the carrier**. The flag is gone — how long the microphone took to open is the evidence that something was raised (cold 421–798 ms, warm 1–35 ms across both platforms), which covers macOS without pretending its policy bookkeeping means anything and stops a Mac on its built-in microphone waiting for a notification nobody will send |
 
 ---
@@ -1928,3 +1929,62 @@ Live Activities off, for the app or for the device. `ActivityKitPresenter` check
 absent and nothing says so. Telling them would mean a new `SafetyNotice` kind and
 a settings row, which is a bigger change than APP-3 was asked for; the on-screen
 banner is unaffected either way. Worth deciding before public beta, with `BU-7`.
+
+### BU-18 — macOS holds HFP for the whole session, and the Q2L's LED never lights 🔬 MEASURED 2026-08-23
+
+Found while confirming `BU-15` on macOS, from an operator observation: **the
+Q2L's red light does not come on while Currawong transmits**, though the Q2L is
+demonstrably the microphone (tapped it, saw signal on the meter).
+
+That contradicts `BLUETOOTH-AUDIO.md`, which says the LED tracks the SCO link
+and that this makes it a usable TX indicator on macOS. So rather than argue
+about the LED, the link itself was measured.
+
+**Method.** A 30-line CoreAudio poller — `kAudioHardwarePropertyDefaultInput`/
+`OutputDevice`, then `kAudioDevicePropertyNominalSampleRate` and
+`kAudioDevicePropertyDeviceIsRunningSomewhere` — sampling every 50 ms and
+printing only transitions, run across one `BU15FirstOverUITests` session with
+the Q2L as the Mac's default input *and* output. Cheap, needs no root, and needs
+nothing from the app; worth keeping in mind as the way to answer "what is the
+route actually doing" on macOS, where there is no `AVAudioSession` to ask.
+
+```
+hold began   03:16:12.165                                       (app's own log)
+      +1.065s  out: 44100 → 16000 Hz, running=true              ← SCO comes up
+      +1.128s  in:  running=true                                ← capture starts
+hold ended   03:16:24.682
+      ...      out: still 16000 Hz, across a second over and the idle between
+03:17:33.879   out: 16000 → 44100 Hz                            ← 69 s later, teardown
+```
+
+**Two findings.**
+
+1. **SCO is up, and the LED is dark.** The 44100 → 16000 output swap is
+   unambiguous, it lands 1.065 s after the press — within 40 ms of the app's own
+   `carrier@1229` — and the input runs from 63 ms later. Whatever the LED tracks,
+   it is not this. `BLUETOOTH-AUDIO.md:102` needs correcting, and the macOS
+   operator has no handset TX indicator: the app's own strip is all there is.
+   Worth knowing before anything is designed on the assumption that the handset
+   reports transmit.
+
+2. **macOS does not hold SCO only while transmitting.** It held it for 69 s —
+   through the release, a whole second over, and the idle in between — and gave
+   it up only at teardown. So macOS receive audio is **narrowband from the first
+   transmit onwards**, which is exactly `BU-17`'s fault on the platform whose
+   behaviour `BU-17` was written to imitate. The likely cause is one line:
+   `discardsEngineOnHandback` is false on macOS, so the engine keeps its
+   instantiated input unit and CoreAudio has no reason to drop the route. The
+   reason it never surfaced is that macOS has no `BU-14` — the button keeps
+   working, so nothing forced the question.
+
+**Why this is not folded into `BU-17`.** That item is about iOS, is fixed, and is
+confirmed on air. This is the same shape on a different platform with a
+different consequence — quality, not a dead button — and it invalidates a
+premise `BLUETOOTH-AUDIO.md` leans on in several places ("a feature, not an
+inconsistency to be fixed"). It wants deciding, not appending.
+
+**Not investigated further.** One session, one accessory, found while confirming
+something else. Before fixing: confirm with a second session, and check whether
+a Mac on its built-in microphone shows the same hold (it should not — nothing to
+hold). The obvious experiment is flipping `discardsEngineOnHandback` on for
+macOS and re-running the poller.
