@@ -1289,21 +1289,31 @@ the `.xcodeproj` and `Info.plist` are generated.
 
 **What is missing, in the order it will bite:**
 
-1. **An App Store Connect record** for the identifier, and an **API key** — the
-   repo rule is that everything works from the terminal, so the upload wants
-   `xcrun altool --upload-app` with an issuer/key pair, not Xcode's Organizer.
-2. **`CFBundleVersion` has to move per upload.** It is `"1"` for both the app
-   and the Live Activity extension, hard-coded in `project.yml`, and App Store
-   Connect refuses a build number it has already seen. This wants a `make`
-   target rather than an edit somebody forgets.
+1. ✅ **An App Store Connect record** for the identifier. Created 2026-08-23,
+   against an explicit App ID registered in the portal — the New App form's
+   bundle-ID picker lists only explicit identifiers, so that registration has
+   to come first. `au.charlesmartin.currawong.liveactivity` needs an identifier
+   too, but nothing waits on it: it never appears in that picker and automatic
+   signing registers it on the first archive. It gets no record of its own.
+2. ✅ **`CFBundleVersion` has to move per upload.** App Store Connect refuses a
+   build number it has already accepted, and `"1"` is hard-coded in
+   `project.yml` for both the app and the extension — which must move
+   *together*, or the upload is rejected rather than the build. Handled by
+   `ci_scripts/ci_post_clone.sh` from Xcode Cloud's `CI_BUILD_NUMBER`, which is
+   better than the `make` target imagined here because nothing has to be
+   remembered. `CFBundleShortVersionString` is untouched: that one is a
+   release decision and belongs in a commit.
 3. **The `CurrawongOnAir` scheme must not ship.** It transmits on air, under a
    callsign from the environment, against live reflectors. Confirm it is not in
    the archived scheme's dependencies and cannot be.
-4. **Export compliance.** `ITSAppUsesNonExemptEncryption` is not declared, so
-   every upload will stop and ask. The answer follows from `FR-2.5` and `NG-1`:
-   no encryption UI, no AMBE, and the M17 scrambler/AES is out of scope — so the
-   declaration is `false`, but state it in `project.yml` rather than answering a
-   web form each time.
+4. ✅ **Export compliance.** `ITSAppUsesNonExemptEncryption: false`, declared in
+   `project.yml` rather than answered on a web form each upload. `false` is the
+   true answer and was checked rather than assumed: no cipher is implemented
+   anywhere in either tree. M17's TYPE encryption bits are *read* only, so an
+   encrypted stream is refused instead of played as noise (`FR-2.5`,
+   `M17ReflectorProtocol.Playability`); the IAX2 and EchoLink MD5
+   challenge-response is authentication; the portal login rides the OS's TLS.
+   All exempt. Revisit the day any of that stops being true.
 5. **App privacy answers**: no data collected, no tracking, no analytics. Worth
    writing down here once so the form is filled the same way twice.
 6. **`UIBackgroundModes: audio`** will draw a review question — the honest answer
@@ -1314,6 +1324,47 @@ the `.xcodeproj` and `Info.plist` are generated.
 7. **Beta test information**: what the tester is being asked to look at. Given
    `BRINGUP.md`, the honest brief is short — connect to a node, hold PTT, check
    the strip agrees with what they hear.
+
+**The route: Xcode Cloud, triggered by a release tag.** Chosen 2026-08-23 over
+the `xcrun altool` path this task first assumed, so that signing is Apple's
+problem rather than a set of certificates in CI secrets.
+
+The obstacle is that Xcode Cloud clones the repository and expects to open a
+project, and there is none — `*.xcodeproj` and `Codec2.xcframework` are both
+generated and gitignored. `ci_scripts/ci_post_clone.sh` covers it: Apple runs
+that hook after the clone and before dependency resolution, which is early
+enough to install xcodegen, build the framework and generate the project. Two
+consequences of that ordering are written into the script and are easy to
+forget:
+
+- **No SPM checkout exists yet**, so `build-codec2-xcframework.sh` takes its
+  clone fallback and builds the tag pinned *in that script*, not the one in
+  `project.yml`'s `from:`. Keep the two in step.
+- **The framework is rebuilt on every cloud build**, roughly four minutes.
+  Xcode Cloud caches SPM checkouts and derived data; an xcframework at the
+  repository root is neither. If that cost starts to matter the answer is a
+  prebuilt binary somewhere fetchable — never a static link, which `LP-4`
+  forbids.
+
+Configuring the workflow needs a **locally** generated project, because the
+setup wizard reads the scheme list off disk. Run `make generate` first. What
+the wizard stores is only the project and scheme names, both of which the
+post-clone script reproduces. The scheme is `Currawong`; both it and
+`CurrawongOnAir` are generated into `xcshareddata`, so item 3 above is settled
+by *selecting* the right one. The start condition is a tag change matching
+`v*` — a GitHub release creates the tag, which fires the build.
+
+**Two things this route does not cover:**
+
+- **macOS.** `PD-5` wants Developer ID plus notarisation for the Mac build, and
+  Xcode Cloud distributes to TestFlight and the App Store only. The Mac side
+  stays separate, most likely as an extension of `.github/workflows/ci.yml`.
+  Xcode Cloud is the iOS half of `PD-5`, not both halves.
+- **The terminal-first rule.** Xcode Cloud workflows are configured in Xcode or
+  App Store Connect and have no terminal equivalent, which is a real exception
+  to the rule in `CLAUDE.md` and is taken deliberately. Everything that *can*
+  live in the repository does: the post-clone script is an ordinary shell
+  script and runs by hand.
 
 **Not in scope:** anything about whether the app is *ready*. `BU-7`, `BU-10` and
 `BU-18` are all open, and a beta build with known open faults is fine so long as

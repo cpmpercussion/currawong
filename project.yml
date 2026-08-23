@@ -127,6 +127,18 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "Copyright 2026 Currawong contributors. Apache-2.0."
 
+        # Answers App Store Connect's export-compliance question once, here,
+        # instead of on every build upload. `false` is the true answer:
+        # nothing in the app or the library encrypts anything. M17's TYPE
+        # field encryption bits are *read* so an encrypted stream can be
+        # refused rather than played as noise (FR-2.5), and no cipher is
+        # implemented anywhere — see M17ReflectorProtocol.Playability. The
+        # IAX2 and EchoLink MD5 challenge-response is authentication, and the
+        # portal login's HTTPS is the OS's own TLS; both are exempt.
+        #
+        # Revisit this the day any of that stops being true.
+        ITSAppUsesNonExemptEncryption: false
+
         # PD-2. `audio` keeps the call alive with the screen locked; a
         # `bluetooth-central` app keeps its BLE PTT link in the background
         # (PT-2). Neither needs Apple approval, and nothing else is requested —
