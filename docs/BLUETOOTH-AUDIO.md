@@ -102,6 +102,17 @@ costs nothing real, and the operator gets hi-fi receive audio for free. The red
 LED tracks the SCO link, so on macOS it tracks transmit, which makes it a usable
 TX indicator.
 
+> ⚠️ **Both halves of that last sentence were measured false on 2026-08-23 —
+> see `BU-18`.** Polling CoreAudio through an over on macOS: SCO does come up
+> (default output swaps 44100 → 16000 Hz, 1.065 s after the press) and **the LED
+> stays dark**, so it is not tracking SCO on this accessory and there is no
+> handset TX indicator on macOS. And the route then stayed on HFP for **69 s** —
+> across the release, a second over and the idle between — dropping only at
+> teardown. So macOS is not holding SCO only while transmitting either, and
+> receive audio is narrowband from the first transmit onwards. The paragraph
+> below, and everything in this file that rests on the asymmetry being
+> deliberate, is on that footing.
+
 > ⚠️ **Corrected 2026-08-22.** An earlier version of this file said the
 > handset's *beep* was the SCO-established tone, landing ~100 ms into the
 > key-up and ~60 ms before audio flows. **That was wrong.** On iOS the Q2L was
