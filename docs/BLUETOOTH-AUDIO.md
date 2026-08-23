@@ -537,9 +537,13 @@ completes inside the linger and re-keys into a session still on radio, so no
 category change, no fresh cascade, convergence. `AudioPipelineIO` tracks the
 applied policy so the resume's escalation is a no-op rather than a redundant
 `setCategory`. SF-3 is not suppressed anywhere: every route change still drops
-transmit, and the residual cost is one `BU-15`-style drop-and-resume on the
+transmit, and the residual cost was one `BU-15`-style drop-and-resume on the
 first over after each hand-back — the same dance macOS does on a cold SCO
-link, for the same reason. The linger also mirrors macOS's measured ~2.1 s
+link, for the same reason. **`BU-15` removed that residual on 2026-08-23**: the
+escalation and the microphone now both happen before anything is keyed, so
+their cascade lands while nothing is on air. What remains of the cost is
+latency, not a drop — ~1.07 s from press to carrier on a cold over, of which
+~500 ms is the microphone opening. The linger also mirrors macOS's measured ~2.1 s
 SCO linger, sized up to outlast the resume cycle (300 ms settle + engine
 start + cascade tail).
 
@@ -565,8 +569,16 @@ first second of the first over after each hand-back — an ECHOTEST read of a
 callsign twice came back missing its first words. That is transmit truncation
 by the drop-and-resume, not receive truncation by the hand-back (the hand-back
 fires ~3 s after the *release*, which lands mid-echo; the missing audio was
-the *start*). Shrinking it is `BU-15`/`BU-16` work and the RC-13 causes —
-merged in the library, unreleased — are the tool.
+the *start*).
+
+**Fixed 2026-08-23 by `BU-15`, and the missing words should be back.** Nothing
+is keyed until the route has stopped moving, so there is no drop to truncate
+the start of an over. The first over of an exchange now waits ~1.07 s before the
+carrier goes up instead — the operator's own speech is not cut into, it simply
+begins with the carrier. Worth re-running the ECHOTEST read to confirm by ear
+what the instrument says. Shrinking the 1.07 s is route-conditional-policy work,
+not a shorter wait: the per-over hand-back is what makes an over cold, and it
+exists for a Bluetooth problem.
 
 ### Attempted twice and reverted twice, 2026-08-22. The cause is not enough
 
@@ -790,9 +802,13 @@ policy into the library precisely so the app would not own it, and that stands.
   `resumeAcrossRouteChange()` already implements the drop-and-resume. Deliberately
   causing a route change *on the transmit path* therefore means deliberately
   triggering that machinery on every key-down. See `BU-15`, which is this exact
-  interaction observed on macOS and visible to the operator. **Solve BU-15
-  first.** Harmonising iOS on top of an unresolved BU-15 would put the startup
-  dance on every over instead of just the first.
+  interaction observed on macOS and visible to the operator. **`BU-15` was
+  solved on 2026-08-23, and the way it was solved is the precondition this
+  bullet was asking for:** everything that moves the route now happens before
+  anything is keyed, so a deliberate route change on the transmit path lands
+  while nothing is on air and SF-3 has nothing to drop. What a harmonisation
+  would now cost is latency on the affected overs, which is measurable
+  (`BU15FirstOverUITests` prints it) rather than a visible dance.
 * **`AVAudioEngine` never revisits its input format.** The 0 Hz bootstrap
   deadlock (`BU-1`) came from an engine built before the session was up. An
   engine that survives a 44100 → 16000 switch is the same hazard wearing a new

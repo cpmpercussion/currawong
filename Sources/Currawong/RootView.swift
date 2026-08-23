@@ -92,7 +92,12 @@ struct RootView: View {
             // which state it is in by colour and wording.
             TransmitBanner(
                 isTransmitting: status.isTransmitting,
-                source: session.activeSource)
+                source: session.activeSource,
+                keyDownsInHold: session.keyDownsInCurrentHold,
+                routeTrace: "prep=\(session.routeSignalsDuringPreparation) "
+                    + "tx=\(session.routeSignalsWhileTransmitting) "
+                    + "prepMs=\(session.lastPreparationMilliseconds) "
+                    + "trace=\(session.holdTrace.joined(separator: ","))")
 
             panes
         }

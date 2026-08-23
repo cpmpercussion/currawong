@@ -40,27 +40,30 @@ import XCTest
 ///     TEST_RUNNER_CURRAWONG_ONAIR_CALLSIGN=<yours> test
 /// ```
 ///
-/// ## What this asserts, and what it does not
+/// ## What this asserts, and how it manages to
 ///
-/// **It does not count the flashes, and it cannot.** The dance happens inside
-/// one continuous press, and XCUITest will not let a test look at the app
-/// during its own gesture: `press(forDuration:)` blocks the main thread, and
-/// every route off it is refused — a backgrounded press throws
-/// `Must be called on the main thread`, and backgrounded sampling throws
-/// `Activity cannot be used after its scope has completed`, or
-/// `Current context must not be nil` if you wrap it in an activity of its own.
-/// All three were tried on the device on 2026-08-23.
+/// **A test cannot watch the app during its own gesture.**
+/// `press(forDuration:)` blocks the main thread, and every route off it is
+/// refused — a backgrounded press throws `Must be called on the main thread`,
+/// and backgrounded sampling throws `Activity cannot be used after its scope
+/// has completed`, or `Current context must not be nil` if you wrap it in an
+/// activity of its own. All three were tried on the device on 2026-08-23.
 ///
-/// So this produces **one repeatable, well-bounded over** and prints the window
-/// it happened in. Its own assertion is only that the key comes back up when
-/// the operator lets go — worth having, since a stuck key is the failure this
-/// app exists to prevent, but not what `BU-15` is about.
+/// So the count outlives the press instead. `RadioSession.keyDownsInCurrentHold`
+/// is reset only by a press the *operator* makes, so after the release it still
+/// holds the number of times the radio was keyed inside that one hold, and the
+/// transmit strip carries it as an accessibility value in DEBUG builds. **One
+/// press must produce exactly one key-down**; two is `BU-15`.
 ///
-/// The count comes from the app's own instrument. `RadioSession` already logs
-/// every key-down, key-up and SF-3 signal — including `resumes=`, which is
-/// incremented by exactly the `resumeAcrossRouteChange()` that *is* the dance.
-/// `scripts/bu15-measure.sh` runs this test and then reads those lines back off
-/// the device for the printed window.
+/// That replaces the log-reading this test used to depend on, which needed
+/// `sudo log collect` in a real terminal within a few minutes of the run (see
+/// `scripts/bu15-measure.sh` §8 of `docs/HANDOFF-BU15.md`). The script still
+/// exists and is still the way to see the *timing* — this is the way to see the
+/// *count*, unattended.
+///
+/// It also still prints the window it happened in, and asserts that the key
+/// comes back up when the operator lets go: a stuck key is the failure this app
+/// exists to prevent.
 final class BU15FirstOverUITests: XCTestCase {
 
     private let reflector = "m17-cbr.charlesmartin.au"
@@ -108,12 +111,9 @@ final class BU15FirstOverUITests: XCTestCase {
         // `Current context must not be nil`) for backgrounded sampling, with or
         // without an explicit `XCTContext.runActivity`.
         //
-        // So this test's job is to produce one repeatable, well-bounded over,
-        // and to print the window it happened in. The **count** of key-downs
-        // inside that window comes from the app's own instrument — the
-        // `Diagnostics` lines `RadioSession` already writes on every key-down,
-        // key-up and SF-3 signal, including `resumes=`. `scripts/bu15-measure.sh`
-        // runs this test and then reads them back off the device.
+        // So the count is read *after* the release instead, off the transmit
+        // strip's accessibility value, from a counter the app resets only on a
+        // fresh operator press. See the type note.
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
@@ -137,7 +137,50 @@ final class BU15FirstOverUITests: XCTestCase {
             waitUntil(timeout: 5) { idleStrip.exists },
             "the transmit strip still does not say the radio is unkeyed after PTT was released")
 
+        // **`BU-15` itself.** One continuous hold, one key-down. Before the fix
+        // this was 2: the escalation to the radio policy happened under a live
+        // carrier, iOS posted the route change it caused, and SF-3 correctly
+        // dropped the transmission the escalation was enabling.
+        let strip = app.descendants(matching: .any)["session.transmitStrip"].firstMatch
+        XCTAssertTrue(strip.waitForExistence(timeout: 5), "no transmit strip")
+        let keyDowns = keyDownsInHold(from: strip)
+        // The whole trace, printed whether or not the assertion holds: where
+        // the route changes landed is what says *why*. `prep=` are the
+        // escalation's own, ignored while nothing was on air; `tx=` are the ones
+        // that reached SF-3 with the radio keyed, and every one of those is a
+        // drop the operator saw.
+        print("=== BU-15 trace: \((strip.value as? String) ?? "unreadable")")
+        XCTAssertEqual(
+            keyDowns, 1,
+            "one press must key the radio once — more than one is the BU-15 dance")
+
+        // **The second over, inside the hand-back linger — `BU-16`'s fast
+        // path.** Nothing has moved the route since the first over: the session
+        // is still on the radio policy and the engine's input unit is still up,
+        // so `settleRoute()` must find nothing to wait for. `prepMs` is printed
+        // rather than asserted — it is a wall-clock number on a phone, and the
+        // invariant worth pinning is the key-down count.
+        ptt.press(forDuration: 2)
+        _ = waitUntil(timeout: 5) { idleStrip.exists }
+        let warm = (strip.value as? String) ?? "unreadable"
+        print("=== BU-15 warm over: \(warm)")
+        XCTAssertEqual(
+            keyDownsInHold(from: strip), 1,
+            "an over inside the linger must key once too")
+
         disconnectAndTidy(app)
+    }
+
+    /// Reads the DEBUG-only `keyDowns=N` the transmit strip carries as its
+    /// accessibility value. `nil` rather than a failure if it is absent, so the
+    /// caller can say *why* — a release build of the app is the likely reason,
+    /// and "unreadable" is a more useful report than "0".
+    private func keyDownsInHold(from strip: XCUIElement) -> Int? {
+        guard let value = strip.value as? String else { return nil }
+        for field in value.split(separator: " ") where field.hasPrefix("keyDowns=") {
+            return Int(field.dropFirst("keyDowns=".count))
+        }
+        return nil
     }
 
     // MARK: - Session

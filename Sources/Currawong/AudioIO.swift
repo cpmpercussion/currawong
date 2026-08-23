@@ -53,6 +53,37 @@ protocol AudioIO: AnyObject, Sendable {
     /// that lights up and sends silence.
     func configureSession() throws
 
+    /// Puts the session into the policy capture needs, without waiting for
+    /// anything. Call before ``startCapture(onFrame:)``; then ``settleRoute()``.
+    ///
+    /// **`BU-15`.** Escalating to the radio policy is a route change, and so is
+    /// opening the microphone. Both used to happen after the link was keyed, so
+    /// SF-3 — correctly, and non-negotiably — dropped the transmission they were
+    /// enabling. The fix is the ordering: everything that disturbs the route
+    /// happens first, ``settleRoute()`` waits for the disturbance to finish, and
+    /// only then is anything keyed. There is no transmission to drop while it is
+    /// going on, so nothing is suppressed and no route change has to be told
+    /// apart from an unplugged accessory.
+    ///
+    /// Deliberately not throwing. A failed escalation here is not the place to
+    /// report it: ``startCapture(onFrame:)`` asks again and its failure path
+    /// is the one that unkeys, alerts and describes the audio state.
+    func prepareForCapture() async
+
+    /// Waits until the route stops moving, having been disturbed by
+    /// ``prepareForCapture()`` and ``startCapture(onFrame:)``.
+    ///
+    /// **Returns immediately when nothing was disturbed**, which is what keeps
+    /// `BU-16`'s fast path: an over inside the hand-back linger finds the
+    /// session already on radio and an engine whose input unit is already
+    /// instantiated, so there is no cascade to wait for and the far end is
+    /// keyed with the press. The wait is paid on the first over after a pause
+    /// and nowhere else.
+    ///
+    /// Bounded three ways and unable to stall a key-down for ever: see the
+    /// implementation's constants.
+    func settleRoute() async
+
     /// Opens the microphone. Frames arrive off the main thread, 50 a second,
     /// 160 samples each.
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws
@@ -185,6 +216,28 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// the loop that killed `BU-17`'s first attempt.
     private var appliedPolicy: AudioSessionPolicy?
 
+    /// Whether anything since the last ``settleRoute()`` actually moved the
+    /// route: a category change that was really applied, or a capture opened on
+    /// an engine whose input unit had not been instantiated yet. Those are the
+    /// two things measured to produce a cascade, and an over that does neither
+    /// — every over inside the hand-back linger — must not wait for one
+    /// (`BU-15`, and `BU-16`'s fast path).
+    private var routeDisturbed = false
+
+    /// ``routeChangeCount`` as it was when the disturbance began, so
+    /// ``settleRoute()`` can tell "the cascade has not started" from "the
+    /// cascade arrived while the microphone was opening".
+    private var routeChangeBeforeDisturbance = 0
+
+    /// Route-change signals forwarded to ``signals``, ever.
+    ///
+    /// ``prepareForCapture()`` watches this number rather than a clock: the
+    /// question it has to answer is "has the cascade my own category change
+    /// started finished?", and the only honest evidence for that is signals
+    /// arriving and then not arriving. Counting them here rather than in
+    /// ``RadioSession`` keeps the wait beside the switch that causes it.
+    private var routeChangeCount = 0
+
     /// True between ``startCapture(onFrame:)`` and ``stopCapture()``. A linger
     /// that expires while this is true must not touch the session.
     private var isCapturing = false
@@ -218,6 +271,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// for nothing. Injectable so the discard logic stays testable on macOS.
     private let discardsEngineOnHandback: Bool
 
+    /// One step of ``prepareForCapture()``'s wait. Injectable so the settle
+    /// logic is testable without sleeping (AU-5) — the tests step it, the app
+    /// sleeps it.
+    private let settleTick: @Sendable () async -> Void
+
+    /// Whether an escalation is followed by a wait for the route to settle at
+    /// all. Platform truth by default, and for the same reason
+    /// ``discardsEngineOnHandback`` is: on macOS `applyPolicy` does nothing —
+    /// there is no `AVAudioSession` — so there is no cascade to wait out, and
+    /// waiting would put up to ``settleCapTicks`` of dead time in front of
+    /// every cold key-down in exchange for nothing at all.
+    private let settlesAfterEscalation: Bool
+
     /// SF-3, decoupled from any one pipeline's lifetime. See the type note.
     let signals: AsyncStream<AudioSessionSignal>
     private let signalContinuation: AsyncStream<AudioSessionSignal>.Continuation
@@ -234,6 +300,56 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// cascade tail), and the hand-back must comfortably outlast it so the
     /// resume re-keys into a session still on radio.
     static let listeningLingerNanoseconds: UInt64 = 3_000_000_000
+
+    // MARK: The settle wait (BU-15)
+    //
+    // All four numbers come from holds measured on melchior on 2026-08-23, no
+    // accessory attached. The one the fix was finally built against, read out
+    // of the app's own instrument by `BU15FirstOverUITests` (times in ms from
+    // the press):
+    //
+    //     press@0  escalate@16  mic@518   ... the microphone takes ~500 ms
+    //     signal@851, 859, 861             ... 333 ms after the mic, 8 ms apart
+    //     settled@1083  carrier@1089       ... one key-down, and it stays
+    //
+    // Two things in that shape decide the constants. **The cascade starts late**
+    // — 290, 333 and 534 ms after the disturbance across four runs — so a wait
+    // that only looked for quiet would declare victory before it began and hand
+    // the whole thing to SF-3 anyway; hence an onset budget separate from the
+    // quiet window. **And it is dense** — 8 to 140 ms between signals — so the
+    // quiet window has to be wider than any gap the cascade itself contains.
+
+    /// The granularity of the wait. Small enough that the quiet and onset
+    /// windows below are expressible, large enough not to spin.
+    static let settleTickNanoseconds: UInt64 = 60_000_000
+
+    /// How long to keep waiting for the *first* signal before concluding that
+    /// this switch is not going to produce one.
+    ///
+    /// 720 ms nominal, against onsets of 290, 333 and 534 ms measured across
+    /// four runs on melchior — deliberately several times the spread, because
+    /// **under-shooting here re-creates the whole fault**: the wait gives up,
+    /// the carrier goes up, the cascade arrives late, and SF-3 drops the
+    /// transmission exactly as it did before. Intermittently, which is worse
+    /// than reliably.
+    ///
+    /// The margin is close to free. A cold over on a route that posts anything
+    /// at all leaves by the quiet window instead — measured at 1.07 s from the
+    /// press, of which this budget accounts for none. Only a route that posts
+    /// *nothing* pays it, which on iOS means the simulator, where nothing is
+    /// posted for anything (`BU15SessionProbeTests`).
+    static let settleOnsetTicks = 12
+
+    /// How much quiet ends the cascade. 180 ms, comfortably past the 8–140 ms
+    /// spacing measured within it. Under-shooting here lets the tail land after
+    /// the carrier is up, which is `BU-15` again.
+    static let settleQuietTicks = 3
+
+    /// The hard ceiling: 1.2 s, or half a second past the whole measured
+    /// cascade. A route that will not stop changing is not something to wait
+    /// on — the key-down proceeds and SF-3, which is untouched by any of this,
+    /// resumes being the thing that protects the operator from it.
+    static let settleCapTicks = 20
 
     init(
         makePipeline: @escaping @Sendable () -> CapturePipeline = { AudioPipeline() },
@@ -266,12 +382,24 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             #else
                 return false
             #endif
+        }(),
+        settleTick: @escaping @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: AudioPipelineIO.settleTickNanoseconds)
+        },
+        settlesAfterEscalation: Bool = {
+            #if os(iOS)
+                return true
+            #else
+                return false
+            #endif
         }()
     ) {
         self.makePipeline = makePipeline
         self.applyPolicy = applyPolicy
         self.listeningLinger = listeningLinger
         self.discardsEngineOnHandback = discardsEngineOnHandback
+        self.settleTick = settleTick
+        self.settlesAfterEscalation = settlesAfterEscalation
         var escaped: AsyncStream<AudioSessionSignal>.Continuation!
         self.signals = AsyncStream { escaped = $0 }
         self.signalContinuation = escaped
@@ -316,8 +444,9 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         // Forward, never finish: this pipeline's stream ends when the pipeline
         // is released, and finishing the durable stream there would end SF-3
         // observation for the rest of the process.
-        forwarder = Task.detached {
+        forwarder = Task.detached { [weak self] in
             for await event in events {
+                if event == .routeChanged { self?.noteRouteChange() }
                 continuation.yield(event)
             }
         }
@@ -415,6 +544,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     private func activateSession() throws {
         lock.lock()
         handbackGeneration += 1
+        noteRouteDisturbanceLocked()
         lock.unlock()
         try applyPolicy(AudioSessionPolicy.radio)
         lock.lock()
@@ -438,9 +568,15 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     // the hand-back to listening happens on a **linger** rather than inside
     // `stopCapture()`, so SF-3's transient drop-and-resume completes inside it
     // and re-keys into a session still on radio — no category change, no fresh
-    // cascade, convergence. The residual cost is one `BU-15`-style drop-and-
+    // cascade, convergence. The residual cost was one `BU-15`-style drop-and-
     // resume on the first over after each hand-back, which is SF-3 performing
     // exactly as specified and is the same dance macOS does on a cold SCO link.
+    //
+    // **`BU-15` removed that residual on 2026-08-23**, and note *how*, because
+    // it is the same discipline as the paragraph above: not by suppressing the
+    // cascade, but by moving everything that causes one — this escalation, and
+    // the microphone opening — to before anything is keyed. See
+    // `prepareForCapture()` and `settleRoute()`.
     //
     // Why per-over switching is worth that residual, and is not merely the
     // receive-quality nicety it was first costed as: **the Q2L mutes its own
@@ -452,6 +588,109 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     // 2026-08-22, with the operator, on that evidence — and note that SF-3 is
     // *not* suppressed anywhere in it.
 
+    /// ``routeChangeCount``, for the settle tests: they have to know the
+    /// forwarder has *observed* a signal before stepping the clock, or they
+    /// would be racing a detached task rather than testing a wait.
+    var routeChangesObserved: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return routeChangeCount
+    }
+
+    /// Records that something is about to move the route. Must be called with
+    /// ``lock`` held. Only the *first* disturbance of a group stamps the
+    /// baseline, so a category change followed by a first capture is one
+    /// disturbance to be waited out once.
+    private func noteRouteDisturbanceLocked() {
+        if !routeDisturbed {
+            routeDisturbed = true
+            routeChangeBeforeDisturbance = routeChangeCount
+        }
+    }
+
+    /// Counted from the forwarder, off the main actor. See
+    /// ``routeChangeCount``.
+    private func noteRouteChange() {
+        lock.lock()
+        routeChangeCount += 1
+        lock.unlock()
+    }
+
+    /// **`BU-15`.** Escalate now, while nothing is on air. The wait for what
+    /// that disturbs is ``settleRoute()``, after the microphone is open, so one
+    /// wait covers the category change and the input unit's instantiation
+    /// together rather than paying for each in turn.
+    func prepareForCapture() async {
+        do {
+            try escalateForCapture()
+        } catch {
+            // Reported, not thrown: `startCapture(onFrame:)` asks again in a
+            // moment and owns the failure path. Silence here would make a
+            // refused escalation look like an ordinary cold over.
+            Diagnostics.route("audio session escalation before key-down failed: \(error)")
+        }
+    }
+
+    /// **`BU-15`.** Wait out the route-change cascade this over's own
+    /// preparation caused, so the key-down that follows happens on a route that
+    /// has stopped moving.
+    ///
+    /// Measured on melchior, 2026-08-23, with no accessory attached — and the
+    /// measurement is why this is one wait after both disturbances rather than
+    /// one after each:
+    ///
+    /// ```
+    /// press@0  escalate@19   category cascade@553,559,569   settled@797
+    /// carrier@801  mic@801   on air@1179   ROUTE CHANGE@1242,1261   ← dropped
+    /// ```
+    ///
+    /// The first fix caught the category cascade and the dance survived: opening
+    /// the microphone posts a route change of its own, 63 ms after the input
+    /// unit comes up, and the original diagnosis had folded that into the
+    /// category change. The microphone takes ~380 ms to open, which the category
+    /// cascade largely arrives during — so disturbing both and then waiting once
+    /// costs little more than waiting for either.
+    func settleRoute() async {
+        lock.lock()
+        let disturbed = routeDisturbed
+        let baseline = routeChangeBeforeDisturbance
+        let start = routeChangeCount
+        routeDisturbed = false
+        lock.unlock()
+        // Nothing moved the route: no category change (the session was already
+        // on radio) and no first capture on this engine. Every over inside the
+        // hand-back linger takes this exit, which is what keeps BU-16 intact.
+        guard disturbed, settlesAfterEscalation else { return }
+
+        var seen = start
+        // The tick of the last change seen, or 0 for "the cascade has not
+        // started". Signals that arrived while the microphone was opening count
+        // as started: they are the cascade, and waiting out an onset budget for
+        // a cascade that has already been and gone is dead air for nothing.
+        var lastChange = start > baseline ? 1 : 0
+        var ticks = 0
+        while ticks < Self.settleCapTicks {
+            await settleTick()
+            ticks += 1
+            lock.lock()
+            let now = routeChangeCount
+            lock.unlock()
+            if now != seen {
+                seen = now
+                lastChange = ticks
+                continue
+            }
+            if lastChange == 0 {
+                guard ticks < Self.settleOnsetTicks else { break }
+            } else if ticks - lastChange >= Self.settleQuietTicks {
+                break
+            }
+        }
+        Diagnostics.route(
+            "audio route settled before key-down: \(seen - baseline) route changes in "
+                + "\(ticks) x \(Self.settleTickNanoseconds / 1_000_000)ms")
+    }
+
     /// Ask for the radio policy before opening the microphone, skipping the
     /// category change when the session is already there — see
     /// ``appliedPolicy`` for why the skip is load-bearing, not an optimisation.
@@ -460,6 +699,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         handbackGeneration += 1
         isCapturing = true
         let alreadyRadio = appliedPolicy == AudioSessionPolicy.radio
+        if !alreadyRadio { noteRouteDisturbanceLocked() }
         lock.unlock()
         guard !alreadyRadio else { return }
         try applyPolicy(AudioSessionPolicy.radio)
@@ -642,6 +882,14 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             try escalateForCapture()
             let pipeline = pipeline()
             lock.lock()
+            // **The second half of `BU-15`.** The first capture on an engine
+            // instantiates its input audio unit, and that posts a route change
+            // of its own — measured 63 ms after the microphone came up, which is
+            // what survived the first attempt at this fix. So it is a
+            // disturbance for `settleRoute()` to wait out, exactly like the
+            // category change. A later capture on the same engine is not: the
+            // unit is already there.
+            if !captureAttemptedOnCurrent { noteRouteDisturbanceLocked() }
             captureAttemptedOnCurrent = true
             lock.unlock()
             try pipeline.startCapture(onFrame: onFrame)
@@ -650,6 +898,9 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
                 try activateSession()
                 let fresh = rebuildPipeline()
                 lock.lock()
+                // A repair re-applies the policy *and* builds a new engine, so
+                // it disturbs the route twice over.
+                noteRouteDisturbanceLocked()
                 captureAttemptedOnCurrent = true
                 lock.unlock()
                 try fresh.startCapture(onFrame: onFrame)

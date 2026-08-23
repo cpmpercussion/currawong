@@ -131,9 +131,9 @@ keep treating the app as unproven on air.
 | BU-12 | **On a short display, the whole app is taller than its window and macOS centres the overflow** — the status panel ends up above the top edge and the sidebar's contents halfway down. Reproduced with an empty channel list, which is a first launch | ✅ **Fixed 2026-08-21.** It was the **sidebar**, not the connect form: a wrapping caption with `.fixedSize(horizontal: false, vertical: true)`, which a `NavigationSplitView` measures at an *unspecified width* — one word per line — and which `fixedSize` then makes a minimum. `ChannelListView` is 67 points tall on its own and demanded 1237.5 in the sidebar. Both `fixedSize` calls are gone, nothing is truncated by their absence, and the sidebar's held-back top alignment shipped with it |
 | BU-13 | **A Bluetooth speaker-mic works for a while and then stops carrying audio, and keying is what stops it** — TIDRADIO Q2L, first accessory of any kind this app has met | Open, **not yet reproduced under instrumentation**, 2026-08-21. First suspect is `stopCapture()` stopping the whole engine on every unkey (see the `AudioIO` type note) against a route that goes away with it |
 | BU-14 | **The accessory's PTT button keys the app for a while and then stops** — same device, and possibly the same root cause or possibly nothing to do with BU-13 | **ROOT CAUSE PROVEN 2026-08-22 (evening): the accessory itself suppresses its BLE notifications while its Classic side sits in an idle HFP call.** Cross-tested with the Mac holding the BLE link while the phone held the call: zero notifications with the LED red, the same subscription delivering again the moment call mode ended — no reconnect, no re-subscribe. Reads answered throughout, which is how every probe lied. iOS shows it and macOS never did because iOS holds the session forever (`BU-17`) while macOS drops SCO ~2.1 s after capture — so `BU-14` **is** `BU-17`, and the fix is releasing the session when idle. Not fixable by link repair; the day's two probe-machinery bugs are fixed regardless. **Fix verified on air the same evening** (see BU-17): ten-plus consecutive overs, every press after a completed hand-back delivered — the press that always died. Still open for the closure criteria only: an over with the app backgrounded and the phone locked (stage with `BU-10`) |
-| BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link |
+| BU-16 | **A tap outruns the key-down, so the radio keys *after* the button is released** — the press begins an async key-down that costs ~163 ms on a Bluetooth accessory, and the button's edges are 90 ms apart | **Diagnosed 2026-08-22, ✅ fixed the same day.** Safe — the release had already cleared `transmitDesired` and the next apply unkeyed — but the operator transmitted after letting go. A latency fault, not a race. Fixed by reversing the key-down: `link.startTransmit()` first (milliseconds, so the carrier is up with the press), then `startCapture`; and a release that lands at the new suspension point abandons the key-down, unkeying without ever opening the microphone, so a tap now produces nothing at all. Three tests, one delivering the release from inside the awaited call. **Not yet confirmed on air** — what wants watching is the first over's audio against an already-keyed link. ⚠️ **The ordering was reversed again by `BU-15` on 2026-08-23**, and this fix's *purpose* survives it: opening the microphone is itself a route change, so keying the link first guaranteed the SF-3 drop `BU-15` is about. Audio bring-up now comes first and the carrier follows it, which costs the far end nothing — those 163 ms were a keyed-but-silent carrier either way — and improves this item's own case, since a tap this short now never keys at all. `testTheMicrophoneOpensBeforeTheLinkKeys` is the renamed test |
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
-| BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, not yet fixed. Two triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit |
+| BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Confirmed on air twice: one key-down per hold, cold (1.07 s press → carrier) and warm (**23 ms**, so BU-16's fast path is intact), no notice. Residual: the cold over's ~500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. Not yet run with the Q2L attached, which is the macOS trigger |
 
 ---
 
@@ -1302,7 +1302,7 @@ button is being fought with.
 overs, with the app backgrounded and the phone locked for at least one of them,
 and the operator can tell from the screen whether letting go will unkey them.
 
-### BU-15 — the first transmit of an over does a visible dance 🔬 DIAGNOSED 2026-08-22
+### BU-15 — the first transmit of an over does a visible dance ✅ FIXED AND CONFIRMED ON AIR 2026-08-23
 
 **What the operator sees**, first transmit of an over: press PTT → a pause →
 the UI flashes red → back to not-red → then red, and actually transmitting. On
@@ -1395,30 +1395,88 @@ on both platforms.
   trigger B has already taken the first step down that road, so the "solve
   BU-15 first" instruction there is now overdue rather than precautionary.
 
-**Where the fix probably is** — not decided, and deliberately not:
+**The fix, 2026-08-23 — and a correction to everything above it.**
 
-* **Suppress the resume when the route change is one we caused**, i.e. arriving
-  within a short window after our own `startCapture` and before
-  `isTransmitting` is set. Cheapest, and the risk is obvious: a suppression
-  window is a hole in SF-3, and SF-3 is not negotiable. Any such window must be
-  bounded, must not span an `await`, and needs a test that a *genuine* route
-  change inside the window still drops transmit.
-* **Let the route settle before keying at all** — bring the input up, wait for
-  configuration to stop changing, then `startTransmit()`. Honest, and pushes the
-  163 ms out to maybe 300 ms, which is the cost the operator would actually
-  feel. Note that `BU-16`'s fix deliberately went the other way — link first,
-  capture catches up — so this option now argues against a decision already
-  taken on air, and would have to be costed against it rather than in the
-  abstract. Measure the settle time for a category change separately from a
-  cold SCO link; they are not the same number.
-* **Accept it and make it legible** — do not surface the intermediate state to
-  the UI at all until the first resume has settled. Does not touch the safety
-  path, and is probably the smallest honest change.
+The diagnosis had one trigger too few. Escalating the category is a route
+change, as this item says; **so is opening the microphone**, and that second one
+is what survived the first attempt at the fix. From the device (times in ms from
+the press, read out of the app's own instrument — see below):
 
-**Closed when** the first transmit of an over looks like every other one — on
-iOS with no accessory connected *and* on macOS with the Q2L, since the two
-triggers are fixed or not fixed independently — with SF-3 still demonstrably
-dropping transmit on a route change the app did not cause.
+```
+attempt 1:  press@0  prep@19  sigPrep@553,559,569  prepped@797     ← category cascade: caught
+            carrier@801  mic@801  onair@1179
+            sigTx@1242,1261                                        ← the microphone's own, 63 ms
+            resume@1722 ... onair@1764                             ← still two key-downs
+```
+
+The first capture on an engine instantiates its input audio unit, and that posts
+a route change of its own about 63 ms later. The original trace could not
+separate the two, because both landed after a single key-down.
+
+So the fix is an **ordering, and it covers both**: escalate, open the
+microphone, wait for the cascade *they* caused to go quiet, and only then key
+the far end. Nothing is on air for any of it, so there is no transmission for
+SF-3 to drop, nothing has to be told apart from an unplugged accessory, and SF-3
+is not narrowed by a single line. `AudioIO.prepareForCapture()` escalates,
+`AudioIO.settleRoute()` waits, and `RadioSession.routePreparationInFlight` is
+the window in which a route change means nothing because nothing is keyed.
+
+```
+fixed:      press@0  prep@16  mic@518  sigPrep@851,859,861  prepped@1083  carrier@1089
+            keyDowns=1  tx=0  — one key-down, no notice, steady to the release
+warm over:  press@0  prep@12  mic@13   prepped@14  carrier@23
+            keyDowns=1 — nothing was disturbed, so nothing was waited for
+```
+
+**Three things that make this cheaper than it looks.**
+
+* **`BU-16`'s fast path is intact.** `settleRoute()` returns immediately unless
+  something really moved the route — a category change that was applied, or a
+  first capture on this engine. An over inside the 3 s hand-back linger does
+  neither, and keys the far end **23 ms** after the press, measured. It is the
+  first over after a pause, and only that, which pays the wait.
+* **`BU-16`'s ordering is reversed, deliberately, and it loses nothing.** The
+  163 ms it bought was a keyed-but-silent carrier either way, so the same audio
+  reaches the far end — it now starts *with* the carrier instead of 163 ms in.
+  And `BU-16`'s own case comes out better: a 90 ms tap now never keys at all,
+  rather than keying after the finger has lifted. `OnAirGate` drops anything the
+  microphone captures before the carrier, so the transmit meter still reports
+  only what actually left.
+* **The safety budget is no longer spent on ourselves.** `automaticResumes` is
+  untouched by a cold over now, so a *real* route change later in the same hold
+  has its full allowance. Separately, `resumeWork` is cancelled rather than
+  merely reassigned — which is what stopped the app re-keying 115 ms after
+  telling the operator it had stopped, and stops a resume already in the air
+  from undoing an SF-1 watchdog unkey.
+
+**The residual cost is 1.07 s from press to carrier on a cold over**, and the
+microphone is ~500 ms of it. That is the number to attack next, and the way to
+attack it is not a shorter wait: it is to stop making every over cold. The
+per-over hand-back exists for `BU-14`, which is a *Bluetooth* problem — with no
+Bluetooth device in the route there is nothing to hand back, so the session
+could hold `.radio` and keep its engine, and a cold over would stop existing for
+the majority of operators. Route-conditional policy is the follow-up; this item
+does not need it.
+
+**The instrument, which is the other thing this task leaves behind.**
+`sudo log collect` cannot be driven by an unattended test — root, a TTY, and an
+`.info` ring buffer that evicts the run within minutes (§8 of
+`docs/HANDOFF-BU15.md`). So the app carries the trace out itself:
+`RadioSession.keyDownsInCurrentHold`, `routeSignalsDuringPreparation`,
+`routeSignalsWhileTransmitting` and `holdTrace` are reset only by a press the
+*operator* makes, so they survive the release — which is the whole trick, since
+XCUITest cannot look at the app during its own gesture. The transmit strip
+carries them as its accessibility value in DEBUG builds, and
+`BU15FirstOverUITests` asserts one key-down per hold, cold and warm, on a
+device. `scripts/bu15-measure.sh` is still the way to see the phone's own log;
+it is no longer the way to count.
+
+**Closed:** confirmed on air 2026-08-23 (melchior, M17-CBR module A, no
+accessory), two consecutive runs, one key-down per hold in both the cold and the
+warm over, no safety notice. Still open for the **macOS trigger with the Q2L
+attached** — the SCO bring-up swapping A2DP for HFP — which this fix should also
+cover, since it is the same ordering, but which has not been run with the
+accessory connected. `BU15FirstOverUITests` is the test to run for it.
 
 ### BU-16 — a tap outruns the key-down, so the radio keys after you let go ✅ FIXED 2026-08-22
 
