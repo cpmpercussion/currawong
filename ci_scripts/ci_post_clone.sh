@@ -115,4 +115,38 @@ fi
 note "generating Currawong.xcodeproj"
 xcodegen generate
 
+# --------------------------------------------------------------------------
+# Package.resolved.
+#
+# Xcode Cloud resolves dependencies with automatic resolution *disabled*: it
+# insists on a resolved file and will not go and compute one. The message is
+# "a resolved file is required when automatic dependency resolution is
+# disabled", and it stops the build before the archive step. Running
+# `xcodebuild -resolvePackageDependencies` here would not help — the same
+# environment setting applies to our invocation.
+#
+# The file it wants lives inside the generated `.xcodeproj`, which is exactly
+# what this repository does not commit. So the pin is committed *outside* the
+# project, at `ci_scripts/Package.resolved`, and copied into place here — after
+# `xcodegen generate`, because generation creates the workspace directory it
+# goes in.
+#
+# Consequence worth knowing: this file, not `project.yml`'s `from:`, is what
+# the cloud build actually builds. Change the dependency and the pin goes
+# stale, and a stale pin fails the same way a missing one does. `make resolved`
+# refreshes it; it belongs in the same commit as the `project.yml` change.
+# --------------------------------------------------------------------------
+PINNED=ci_scripts/Package.resolved
+WORKSPACE_SWIFTPM=Currawong.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+
+if [[ -f "$PINNED" ]]; then
+    note "installing $PINNED"
+    mkdir -p "$WORKSPACE_SWIFTPM"
+    cp "$PINNED" "$WORKSPACE_SWIFTPM/Package.resolved"
+else
+    echo "error: $PINNED is missing. Xcode Cloud cannot resolve without it." >&2
+    echo "       Run \`make resolved\` and commit the result." >&2
+    exit 1
+fi
+
 note "post-clone complete"
