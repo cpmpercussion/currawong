@@ -7,8 +7,8 @@
 [![Library](https://img.shields.io/badge/swift--hamvoip-0.5.4-informational)](https://github.com/cpmpercussion/swift-hamvoip)
 [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
-Currawong is an app for communicating on internet-linked amateur radio voice modes.
-The app is designed for iOS and macOS.
+Currawong is an iOS and macOS app for communicating on internet-linked
+amateur radio voice modes.
 
 The app supports three open digital communication protocols:
 AllStarLink (IAX2), M17, and EchoLink. These protocols allow access to group communication nodes
@@ -33,35 +33,32 @@ talks to the libraries through `RadioCore.NetworkClient`.
 
 AllStarLink over IAX2, M17 to a reflector, and EchoLink through a proxy, all
 reached through one `RadioCore.NetworkClient` — `CompositionRoot.swift` is the
-only file that names a concrete client. What each mode asks the operator for
-differs enough that the connect form changes shape with the mode: a node number
-and a secret, a reflector and module, or a node address and an account
-password. `RadioMode` is where that fans out.
+only file that names a concrete client. The connect form changes shape with
+the mode: a node number and a secret, a reflector and module, or a node
+address and an account password. `RadioMode` is where that fans out.
 
-**AllStarLink has two routes to a node, and the app offers both.** A node secret
-is something the node's owner sets up for you, per node. **Web Transceiver**
-needs no arrangement with anyone: if the owner has switched it on, an
-allstarlink.org portal account reaches it. A _How to connect_ picker chooses
-between them and `NodeSettings.allStarAccess` records which route a channel
-takes. It is a credentials variant rather than a fourth mode — same protocol,
-same nodes. The token is stored under your callsign rather than with the
-channel, because the portal issues one per operator and it works on every
-WT-enabled node.
+**AllStarLink has two routes to a node, and the app offers both.** A node
+secret is arranged with the node's owner, per node. **Web Transceiver** needs
+no arrangement: if the owner has switched it on, an allstarlink.org portal
+account reaches it. A _How to connect_ picker chooses between them and
+`NodeSettings.allStarAccess` records the choice per channel — a credentials
+variant, not a fourth mode. The token is stored under your callsign rather
+than with the channel, because the portal issues one per operator and it works
+on every WT-enabled node.
 
 **Logging in to the portal works from the app.** Callsign and allstarlink.org
-password, press _Log in and fetch token_, and the token lands in the Keychain.
-The password is **used once and discarded**: only the token is stored. Pasting
-a token by hand still works, which is what will save you if allstarlink.org
-replaces its login service — it has a project open to do that.
+password, press _Log in and fetch token_, and the token lands in the Keychain;
+the password is used once and discarded. Pasting a token by hand still works,
+which is the fallback if allstarlink.org replaces its login service — it has a
+project open to do that.
 
 **The EchoLink proxy is not something you set up.** A phone cannot reach an
-EchoLink node directly, so every session is tunnelled through a proxy, and the
-app sources one at the moment it needs one — connecting, or refreshing the
-directory. There is no proxy field and no _connect to proxy_ step, and the
-proxy is released at disconnect so the next session gets a machine that is
-actually free. If you run your own — the answer for sustained operating, since
-the public ones carry one user at a time — it goes in _Settings_ once, for the
-whole station, with its password in the Keychain.
+EchoLink node directly, so every session is tunnelled through a proxy. The app
+sources one at the moment it needs one — connecting, or refreshing the
+directory — and releases it at disconnect, so there is no proxy field and no
+_connect to proxy_ step. If you run your own (the answer for sustained
+operating, since the public ones carry one user at a time) it goes in
+_Settings_ once, for the whole station, with its password in the Keychain.
 
 ### Finding somewhere to go
 
@@ -69,12 +66,13 @@ whole station, with its password in the Keychain.
   an address, so the directory listing is how a node is found: browse, search,
   and save a station as a channel. It opens a directory-only session that
   contacts no node and transmits nothing.
-- **Reflector chooser (M17).** The host file the M17 Project publishes at
-  [`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json) — the
-  underlying data is DVRef's, used under CC BY 4.0. The
-  module is what you actually pick, since a reflector without one is nowhere.
-  Multiprotocol URF reflectors are included but marked, and only their M17 and
-  transcoding modules are offered: linking to a DMR module is not supported.
+- **Reflector chooser (M17).** Populated from the host file the M17 Project
+  publishes at
+  [`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json)
+  (the underlying data is DVRef's, used under CC BY 4.0). The module is what
+  you actually pick. Multiprotocol URF reflectors are included but marked, and
+  only their M17 and transcoding modules are offered: linking to a DMR module
+  is not supported.
 - **Node lookup (AllStarLink).** A node number is what gets quoted on the air;
   the address behind it is not something anyone carries around, and for a node
   on a dynamic address it cannot be. Type the number, press _Look up_, and the
@@ -111,11 +109,10 @@ call of a run it is not there at all.
 ### Audio
 
 Peak meters for transmit and receive, scaled in dB with the good/hot/clipping
-zones marked to track signal level.
-Two gain controls sit with the meters rather than on the
-connect form, because they belong to the phone and not to any channel — and
-because the form locks its fields while a link is up, which is the only time you
-can tell what to set them to. Both apply to the transmission in progress.
+zones marked. Two gain controls sit with the meters rather than on the connect
+form, because they belong to the phone and not to any channel — and because the
+form locks its fields while a link is up, which is the only time you can tell
+what to set them to. Both apply to the transmission in progress.
 
 - **Microphone gain, 0 to +30 dB.** iOS does not let an app change the
   microphone's own level (`inputGain` is not settable on the built-in mic), so
@@ -130,10 +127,9 @@ does **not** key the transmitter — DTMF travels as its own reliable
 frame.
 
 A command reference sheet is readable while connected: `*3` plus a node number
-links, `*1` unlinks, and so on. It is transcribed from AllStarLink's own
-operator manual, which documents the _suggested_ defaults — the authority for
-any node is that node's `rpt.conf`, so the sheet is a memory aid for accepted practice rather than a
-contract.
+links, `*1` unlinks, and so on. It is transcribed from AllStarLink's operator
+manual, which documents the _suggested_ defaults — the authority for any node
+is that node's `rpt.conf`.
 
 ### On screen
 
