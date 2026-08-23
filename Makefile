@@ -10,6 +10,7 @@
 #   make build-macos  build for macOS
 #   make test         run the unit tests on an iOS simulator
 #   make test-macos   run the unit tests on macOS
+#   make resolved     refresh the committed Package.resolved pin (Xcode Cloud)
 #   make clean        remove generated project and build output
 #   make distclean    ...and the Codec2 framework and its build tree
 #
@@ -55,7 +56,10 @@ XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIV
 
 CODEC2 := Codec2.xcframework
 
-.PHONY: all generate codec2 build build-macos test test-macos clean distclean simulator
+# The dependency pin Xcode Cloud reads; see the `resolved` target.
+PINNED_RESOLVED := ci_scripts/Package.resolved
+
+.PHONY: all generate codec2 build build-macos test test-macos resolved clean distclean simulator
 
 all: build test
 
@@ -88,6 +92,26 @@ test: $(PROJECT)
 
 test-macos: $(PROJECT)
 	$(XCB) -destination '$(MACOS_DEST)' test
+
+# Xcode Cloud resolves with automatic resolution disabled, so it needs a
+# Package.resolved and will not compute one. That file lives inside the
+# generated .xcodeproj, which is never committed, so the pin is committed here
+# instead and `ci_scripts/ci_post_clone.sh` copies it into place.
+#
+# Run this whenever project.yml's package versions change, and commit the
+# result with that change: the pin, not `from:`, is what the cloud build
+# builds, and a stale pin fails the build exactly as a missing one does.
+# The guard is for the path-dependency swap in project.yml: a path dependency
+# is not pinned at all, so refreshing while swapped would commit a pin with no
+# swift-hamvoip in it — which fails the cloud build in the same place a missing
+# file does, one push later.
+resolved: $(PROJECT)
+	$(XCB) -resolvePackageDependencies
+	@grep -q 'swift-hamvoip' $(PROJECT)/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+	  || { echo "Resolved file has no swift-hamvoip pin — is the path dependency swapped in?"; exit 1; }
+	cp $(PROJECT)/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+	   $(PINNED_RESOLVED)
+	@echo "Refreshed $(PINNED_RESOLVED) — commit it."
 
 # Prints the simulator `make test` would pick, for when it picks a surprising one.
 simulator:

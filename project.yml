@@ -41,6 +41,13 @@ packages:
   # pins the build, and it is generated, so a fresh `make generate` resolves
   # forward. Pin exactly here if that ever bites.
   #
+  # Locally, that generated file is the whole story. **On Xcode Cloud it is
+  # not:** resolution runs with automatic resolution disabled there, so the pin
+  # is committed as `ci_scripts/Package.resolved` and copied into the generated
+  # project by the post-clone script. Change a version here and run
+  # `make resolved` in the same commit, or the cloud build keeps building the
+  # old one until the pin goes stale and then fails outright.
+  #
   # To work on the app and the library together, swap this for the path
   # dependency below and regenerate. Do not commit the swap.
   #

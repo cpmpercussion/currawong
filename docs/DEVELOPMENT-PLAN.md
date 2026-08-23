@@ -1340,6 +1340,17 @@ forget:
 - **No SPM checkout exists yet**, so `build-codec2-xcframework.sh` takes its
   clone fallback and builds the tag pinned *in that script*, not the one in
   `project.yml`'s `from:`. Keep the two in step.
+- **No `Package.resolved` exists yet either, and Xcode Cloud will not compute
+  one.** It resolves with automatic resolution disabled, so a clone with no
+  resolved file fails at *Resolve package dependencies* with "a resolved file
+  is required when automatic dependency resolution is disabled" — the first
+  cloud build failed exactly there, 2026-08-23. The file belongs inside the
+  generated `.xcodeproj`, which is never committed, so the pin is committed as
+  `ci_scripts/Package.resolved` and the post-clone script copies it into
+  `Currawong.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/` after
+  generating. That pin, not `project.yml`'s `from:`, is what the cloud build
+  builds; `make resolved` refreshes it and it belongs in the same commit as any
+  package change, because a stale pin fails the same way a missing one does.
 - **The framework is rebuilt on every cloud build**, roughly four minutes.
   Xcode Cloud caches SPM checkouts and derived data; an xcframework at the
   repository root is neither. If that cost starts to matter the answer is a
