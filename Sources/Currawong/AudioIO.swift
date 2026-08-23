@@ -96,6 +96,17 @@ protocol AudioIO: AnyObject, Sendable {
     /// Queues received audio for playback.
     func enqueuePlayback(_ pcm: [Int16])
 
+    /// How long the last ``startCapture(onFrame:)`` spent opening the
+    /// microphone, in milliseconds.
+    ///
+    /// Diagnostic, and the evidence for
+    /// `AudioPipelineIO.captureSlowThresholdNanoseconds` — which is the one
+    /// number the `BU-15` wait is conditioned on, so it should be a measurement
+    /// rather than an inference. Published by ``RadioSession`` on the transmit
+    /// strip in DEBUG builds; no behaviour outside `AudioPipelineIO` may branch
+    /// on it.
+    var lastCaptureStartMilliseconds: Int { get }
+
     /// What the audio system thinks is true, in one line, for the key/unkey log.
     ///
     /// On the protocol rather than on the implementation because the *point* is
@@ -328,17 +339,24 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// this switch is not going to produce one.
     ///
     /// 720 ms nominal, against onsets of 290, 333 and 534 ms measured across
-    /// four runs on melchior — deliberately several times the spread, because
-    /// **under-shooting here re-creates the whole fault**: the wait gives up,
-    /// the carrier goes up, the cascade arrives late, and SF-3 drops the
+    /// several runs on melchior — deliberately several times the spread, because
+    /// **under-shooting here re-creates the whole fault**: the wait gives up, the
+    /// carrier goes up, the cascade arrives late, and SF-3 drops the
     /// transmission exactly as it did before. Intermittently, which is worse
     /// than reliably.
     ///
-    /// The margin is close to free. A cold over on a route that posts anything
-    /// at all leaves by the quiet window instead — measured at 1.07 s from the
-    /// press, of which this budget accounts for none. Only a route that posts
-    /// *nothing* pays it, which on iOS means the simulator, where nothing is
-    /// posted for anything (`BU15SessionProbeTests`).
+    /// **This is the wait's one real cost, and it has been paid on air.** A
+    /// macOS run on 2026-08-23 opened the microphone in 111 ms — 11 ms past
+    /// ``captureSlowThresholdNanoseconds``, because SCO was already up from an
+    /// earlier session — and then saw **no signals at all**, so it spent the
+    /// whole budget, ~850 ms of wall clock, waiting for a cascade that was never
+    /// coming. One key-down, no dance, and 850 ms of latency for nothing.
+    ///
+    /// The trade is deliberate in this direction: latency the operator feels
+    /// once per cold over, against an intermittent visible drop mid-over. But it
+    /// is the number to revisit first if the cold over is being made faster, and
+    /// `APP-24` is the change that would make the whole question rarer by making
+    /// cold overs rare.
     static let settleOnsetTicks = 12
 
     /// How much quiet ends the cascade. 180 ms, comfortably past the 8–140 ms
@@ -349,27 +367,28 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// How slow opening the microphone has to be before it counts as having
     /// **brought something up** — and therefore as having moved the route.
     ///
-    /// This replaced a pair of platform flags, and it is a better question than
-    /// either of them was. Measured across both platforms, 2026-08-23:
+    /// Measured, 2026-08-23, by carrying the capture-start duration out of the
+    /// app on the transmit strip (`micMs` in `BU15FirstOverUITests`'s trace) —
+    /// which had to be instrumented, because the timeline in `holdTrace` cannot
+    /// show it: its gaps bracket the escalation and this wait as well.
     ///
     /// | | cold over | warm over |
     /// |---|---|---|
-    /// | iOS, no accessory | 441–494 ms | 1–2 ms |
-    /// | iOS, Q2L as the route | 421 ms | 1 ms |
-    /// | macOS, Q2L as the route | **798 ms** (SCO bring-up) | 35 ms |
+    /// | iOS, built-in mic | 16 ms | 0 ms |
+    /// | macOS, Q2L as the route | 798 ms, and 111 ms with SCO already up | 1 ms |
     ///
-    /// Two orders of magnitude apart, on both platforms, for the same reason:
-    /// a capture that has to raise a route takes hundreds of milliseconds, and
-    /// one that finds the route already up takes none. 100 ms sits an order of
-    /// magnitude clear of both ends.
+    /// **So this threshold is what carries macOS, and it is not what carries
+    /// iOS.** On macOS `startCapture` blocks on the SCO link and the
+    /// configuration change follows it, so the duration is the whole signal. On
+    /// iOS capture is fast either way and this never fires — what fires there is
+    /// the other half of ``settleRoute()``'s guard, because the escalation
+    /// itself blocks the main actor for ~480 ms while the forwarder (a detached
+    /// task, and so not blocked) counts the cascade arriving. Both conditions
+    /// are load-bearing; neither is redundant.
     ///
-    /// What this buys over asking the platform: **macOS is covered without
-    /// pretending its policy bookkeeping means anything.** `applyPolicy` does
-    /// nothing there, so the app's `listening`/`radio` state is fiction — but
-    /// SCO really does drop between overs, and a capture that has to bring it
-    /// back really does post a configuration change. The clock sees that; the
-    /// bookkeeping could not. And a Mac on its built-in microphone, which brings
-    /// nothing up and posts nothing, waits for nothing.
+    /// 100 ms is an order of magnitude above every warm figure and comfortably
+    /// below the cold ones. **The 111 ms case is the one to watch**: it is 11 ms
+    /// over, and it bought a full onset budget — see ``settleOnsetTicks``.
     static let captureSlowThresholdNanoseconds: UInt64 = 100_000_000
 
     /// The hard ceiling: 1.2 s, or half a second past the whole measured
@@ -993,6 +1012,12 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         playbackFrameCount += 1
         lock.unlock()
         pipeline().enqueuePlayback(pcm)
+    }
+
+    var lastCaptureStartMilliseconds: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return Int(lastCaptureStartNanoseconds / 1_000_000)
     }
 
     /// What the audio system thinks is true, in one line, for the failure alert.

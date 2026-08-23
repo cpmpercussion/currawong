@@ -367,6 +367,13 @@ final class RadioSession: ObservableObject {
     /// no-accessory case. This is how a device test tells those apart.
     @Published private(set) var lastKeyDownRoute = ""
 
+    /// How long opening the microphone took, from ``AudioIO``. This is the
+    /// quantity `AudioPipelineIO.captureSlowThresholdNanoseconds` is compared
+    /// against, so it is worth carrying out to a device test rather than
+    /// inferring it from the gaps in ``holdTrace`` — which cannot show it, since
+    /// they bracket the escalation and the settle wait as well.
+    @Published private(set) var lastCaptureStartMilliseconds = 0
+
     /// **`BU-15`'s trace**, DEBUG only: what happened during this hold and how
     /// many milliseconds after the press, in order.
     ///
@@ -1888,6 +1895,7 @@ final class RadioSession: ObservableObject {
             keyDownsInCurrentHold += 1
             trace("onair")
             lastKeyDownRoute = Self.routeField(of: audio.audioStateDescription)
+            lastCaptureStartMilliseconds = audio.lastCaptureStartMilliseconds
             Diagnostics.keying("key-down on air: \(audio.audioStateDescription)")
             // Each key-down starts its own watchdog, including one this class
             // made after a route change.
