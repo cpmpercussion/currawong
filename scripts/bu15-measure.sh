@@ -18,7 +18,18 @@
 #   scripts/bu15-measure.sh <callsign> [device-name]
 #
 # `log collect` needs root to reach an attached device, so this prompts for a
-# sudo password once, after the on-air part is over.
+# sudo password once, after the on-air part is over. It needs a real terminal:
+# sudo cannot prompt without a TTY.
+#
+# **Collect immediately, or there is nothing to collect.** `Diagnostics` logs at
+# `.info`, and os_log keeps info-level messages in a memory ring buffer rather
+# than persisting them — so they are evicted within minutes and a `log collect`
+# run even five minutes late returns almost nothing. Measured 2026-08-23: a
+# collect about three minutes after a run kept 4 lines out of a whole session,
+# and one about six minutes after it kept none of that run at all. That is why
+# this script does the run and the collect together rather than leaving the
+# collect to the operator. If the fuller trace is wanted, raising those calls
+# from `.info` to `.default` would persist them.
 
 set -euo pipefail
 
