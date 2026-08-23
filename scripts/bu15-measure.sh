@@ -1,8 +1,14 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# BU-15: drive one on-air over from an iPhone, then count the key-downs inside
-# it.
+# BU-15: drive one on-air over from an iPhone, then read the phone's own log for
+# the timing of it.
+#
+# **This is no longer how the key-downs are counted.** The app carries its own
+# trace out on the transmit strip's accessibility value in DEBUG builds, and
+# `BU15FirstOverUITests` asserts the count directly — no root, no TTY, no ring
+# buffer, and it runs unattended. Use this when you want os_log's account of a
+# run rather than the app's.
 #
 # **Why two steps.** The dance BU-15 is about happens inside a single continuous
 # PTT hold, and XCUITest cannot look at the app during its own gesture —

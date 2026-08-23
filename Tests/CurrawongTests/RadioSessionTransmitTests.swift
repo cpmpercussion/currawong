@@ -512,6 +512,12 @@ final class RadioSessionTransmitTests: XCTestCase {
     /// The release is delivered from inside the awaited call, which is the
     /// ordering a common-ordering test cannot produce — see the workspace
     /// `CLAUDE.md` on actor reentrancy.
+    ///
+    /// **`BU-15` improved this case rather than complicating it.** The audio
+    /// bring-up now happens *before* the link is keyed, so a tap this short does
+    /// not reach the air at all — where it used to key the carrier and then have
+    /// to take it back down. The microphone is still opened, because opening it
+    /// is part of what the route has to settle after; it is shut again here.
     func testAReleaseDuringTheKeyDownLeavesTheRadioOffAir() async {
         let harness = SessionHarness()
         await harness.connect()
@@ -529,18 +535,30 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertFalse(harness.client.isTransmitting)
         XCTAssertFalse(harness.session.isKeyDown)
         XCTAssertFalse(harness.audio.isCapturing, "the microphone must not be left open")
-        XCTAssertTrue(
-            harness.client.calls.contains(.stopTransmit),
-            "the link keyed before the release arrived, so it must be told to unkey")
         XCTAssertEqual(
-            harness.audio.startCaptureCount, 0,
-            "an abandoned key-down must not pay for a microphone nobody will speak into")
+            harness.audio.startCaptureCount, 1,
+            "the microphone opens before the carrier (BU-15), so this tap paid for one")
+        XCTAssertGreaterThan(
+            harness.audio.stopCaptureCount, 0, "and it must be shut again")
         XCTAssertNil(harness.session.alert, "an ordinary short tap is not a failure to report")
     }
 
-    /// **BU-16.** The link keys before the microphone opens, so the far end
-    /// hears the carrier with the press rather than 163 ms after it.
-    func testTheLinkKeysBeforeTheMicrophoneOpens() async {
+    /// **`BU-15` reverses `BU-16`'s ordering, and this is that decision.**
+    ///
+    /// `BU-16` keyed the link first so the far end heard the carrier with the
+    /// press rather than 163 ms after it. But opening the microphone *moves the
+    /// audio route* — measured 63 ms after the input unit comes up — and a route
+    /// change under a live carrier is a route change SF-3 must drop
+    /// transmission for. Keying first therefore guaranteed the drop it was
+    /// trying to avoid the cost of.
+    ///
+    /// So the microphone opens first now. What `BU-16` actually bought is not
+    /// lost: those 163 ms were a keyed-but-silent carrier either way, so the
+    /// same audio reaches the far end — it simply starts with the carrier
+    /// instead of 163 ms into it. And its own case, the 90 ms tap, comes out
+    /// strictly better: it now never keys at all rather than keying after the
+    /// finger has lifted.
+    func testTheMicrophoneOpensBeforeTheLinkKeys() async {
         let harness = SessionHarness()
         await harness.connect()
         let captureAtKeying = SessionHarness.Counter()
@@ -551,15 +569,15 @@ final class RadioSessionTransmitTests: XCTestCase {
         await harness.keyDown()
 
         XCTAssertEqual(
-            captureAtKeying.value, 0,
-            "capture must not be paid for before the link is keyed")
+            captureAtKeying.value, 1,
+            "the route must have finished moving before the carrier goes up")
         XCTAssertTrue(harness.session.isTransmitting)
-        XCTAssertTrue(harness.audio.isCapturing, "capture still follows the keying")
+        XCTAssertTrue(harness.audio.isCapturing)
     }
 
-    /// The fail-closed path still holds with the order reversed: a microphone
-    /// that refuses after the link has keyed must take the link down with it.
-    func testAMicrophoneFailureAfterKeyingUnkeysTheLink() async {
+    /// The fail-closed path, now on the near side of the carrier: a microphone
+    /// that refuses means the link is never keyed at all.
+    func testAMicrophoneFailureLeavesTheLinkUnkeyed() async {
         let harness = SessionHarness()
         await harness.connect()
         harness.audio.startCaptureError = SessionHarness.AudioFailed()
@@ -568,7 +586,9 @@ final class RadioSessionTransmitTests: XCTestCase {
 
         XCTAssertFalse(harness.session.isTransmitting)
         XCTAssertFalse(harness.client.isTransmitting, "the carrier must not outlive the failure")
-        XCTAssertTrue(harness.client.calls.contains(.stopTransmit))
+        XCTAssertFalse(
+            harness.client.calls.contains(.startTransmit),
+            "and with the audio bring-up first, it never went up at all")
         XCTAssertEqual(harness.session.lastStopReason, .transmitFailed)
     }
 

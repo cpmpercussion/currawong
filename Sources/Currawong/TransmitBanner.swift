@@ -58,6 +58,26 @@ struct TransmitBanner: View {
     /// as momentary, which is the presentation that claims least.
     let source: PTTSource?
 
+    /// **`BU-15`, and DEBUG only.** How many times the radio was keyed during
+    /// the current or most recent hold — see
+    /// ``RadioSession/keyDownsInCurrentHold``.
+    ///
+    /// It reaches the screen as this element's accessibility *value*, which
+    /// nothing else uses, so the label VoiceOver reads — and which SF-4's own
+    /// tests pin — is untouched. It is the only way an XCUITest can count the
+    /// key-downs inside a hold: the test cannot look at the app during its own
+    /// gesture, so the count has to be readable after the release.
+    ///
+    /// Defaulted, because every caller but ``RootView`` is a preview or a test
+    /// of the strip's layout rather than of the session.
+    var keyDownsInHold: Int = 0
+
+    /// The rest of `BU-15`'s trace, DEBUG only: where the route changes landed
+    /// and how long the wait took. See
+    /// ``RadioSession/routeSignalsDuringPreparation``.
+    var routeTrace: String = ""
+
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: isTransmitting
@@ -80,6 +100,14 @@ struct TransmitBanner: View {
         .animation(.easeInOut(duration: 0.15), value: isTransmitting)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityDescription)
+        // Named so a UI test can address *this* element. The PTT button reports
+        // the same fact in its own accessibility value, so a query written
+        // against the words alone can land on either.
+        .accessibilityIdentifier("session.transmitStrip")
+        // Not in a shipping build: it is an instrument, not an interface.
+        #if DEBUG
+            .accessibilityValue("keyDowns=\(keyDownsInHold) \(routeTrace)")
+        #endif
     }
 
     /// **PT-4.** Whether the key is held by something that will not release it

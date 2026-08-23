@@ -277,6 +277,18 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     private var storedConfigureCount = 0
 
     private var storedPermissionRequestCount = 0
+    private var storedPrepareCount = 0
+    private var storedSettleCount = 0
+
+    /// Called from inside ``settleRoute()``.
+    ///
+    /// This is what lets a test stand where iOS's cascade stands: the closure
+    /// runs *inside* the session's `await`, after the microphone has opened and
+    /// before the link is keyed, so emitting `.routeChanged` from it delivers a
+    /// route change in exactly the window the fix is about. That is the
+    /// reentrancy discipline the workspace `CLAUDE.md` asks for — deliver the
+    /// event from inside the awaited call, not before or after it.
+    var onSettleRoute: (@Sendable () async -> Void)?
 
     var configureSessionError: Error?
     var startCaptureError: Error?
@@ -308,6 +320,23 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
         storedConfigureCount += 1
         lock.unlock()
         if let configureSessionError { throw configureSessionError }
+    }
+
+    /// **`BU-15`.** Counts the call. The cascade goes in ``onSettleRoute``,
+    /// which is where the session actually waits.
+    func prepareForCapture() async {
+        lock.lock()
+        storedPrepareCount += 1
+        lock.unlock()
+    }
+
+    /// **`BU-15`.** Runs whatever the test installed in ``onSettleRoute``.
+    func settleRoute() async {
+        lock.lock()
+        storedSettleCount += 1
+        let hook = onSettleRoute
+        lock.unlock()
+        await hook?()
     }
 
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
@@ -352,6 +381,18 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storedIsCapturing
+    }
+
+    var prepareForCaptureCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedPrepareCount
+    }
+
+    var settleRouteCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedSettleCount
     }
 
     var startCaptureCount: Int {

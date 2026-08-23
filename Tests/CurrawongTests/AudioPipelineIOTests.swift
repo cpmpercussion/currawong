@@ -539,3 +539,207 @@ final class AudioPipelineIOPolicyTests: XCTestCase {
         XCTAssertEqual(recorder.applied, [.listening], "one hand-back, not one per over")
     }
 }
+
+
+/// The settle wait's clock, with the operating system's part of it scripted.
+///
+/// Each tick returns immediately, having first run whatever the test wants to
+/// have "happened" during it — so a wait that needs more ticks than the script
+/// provides runs out of ticks rather than parking for ever, and a test that
+/// mis-counts fails instead of hanging the suite. `elapsed` is what the
+/// assertions read: the number of ticks the wait actually spent.
+private final class ScriptedClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedElapsed = 0
+    private let duringTick: @Sendable (Int) async -> Void
+
+    /// - Parameter duringTick: run at the start of tick *n*, 1-based. This is
+    ///   where a test emits the route changes that tick is supposed to carry.
+    init(duringTick: @escaping @Sendable (Int) async -> Void) {
+        self.duringTick = duringTick
+    }
+
+    var elapsed: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedElapsed
+    }
+
+    var tick: @Sendable () async -> Void {
+        { [self] in
+            lock.lock()
+            storedElapsed += 1
+            let n = storedElapsed
+            lock.unlock()
+            await duringTick(n)
+        }
+    }
+}
+
+/// **`BU-15`.** The wait that makes the escalation's route-change cascade land
+/// while the app is idle, so there is no transmission for SF-3 to drop.
+///
+/// The fault these are about: `escalateForCapture()` used to run under a live
+/// carrier, iOS posted the route change, SF-3 correctly dropped transmit, and
+/// the operator watched one press key down, unkey and key down again — losing
+/// 385 ms of speech and being told to press a button they were still holding.
+/// Measured on melchior, 2026-08-23; the numbers the wait is built from, and
+/// the cascade the first test reproduces tick for tick, are in the comment
+/// above `settleTickNanoseconds`.
+///
+/// None of this can be tested on the simulator, and the reason is worth
+/// repeating where somebody will read it: `BU15SessionProbeTests` proved on
+/// 2026-08-23 that the simulator posts **no** route-change notification for a
+/// category change it demonstrably performs. So these tests script the
+/// cascade, and the device test is what confirms the real one.
+final class AudioPipelineIOSettleTests: XCTestCase {
+
+    /// Builds the subject with a scripted clock. `cascadeTicks` are the ticks
+    /// during which the operating system posts a route change.
+    private func makeIO(
+        cascadeOn cascadeTicks: Set<Int>,
+        settles: Bool = true
+    ) -> (AudioPipelineIO, PolicyRecorder, ScriptedClock) {
+        let recorder = PolicyRecorder()
+        let pipeline = FakeCapturePipeline()
+        // Captured and filled in below: the clock's script has to be able to
+        // ask the subject what it has observed, and the subject needs the
+        // clock. One of the two references has to be late.
+        let box = IOBox()
+        let clock = ScriptedClock { tick in
+            guard cascadeTicks.contains(tick), let io = box.io else { return }
+            let target = io.routeChangesObserved + 1
+            pipeline.emit(.routeChanged)
+            // Wait for the forwarder — a detached task — to have counted it.
+            // Without this the script would race the thing it is scripting.
+            while io.routeChangesObserved < target {
+                await Task.yield()
+            }
+        }
+        let io = AudioPipelineIO(
+            makePipeline: { pipeline },
+            applyPolicy: recorder.apply,
+            listeningLinger: LingerGate().wait,
+            settleTick: clock.tick,
+            settlesAfterEscalation: settles)
+        box.io = io
+        return (io, recorder, clock)
+    }
+
+    /// Breaks the reference cycle between the clock's script and the subject.
+    private final class IOBox: @unchecked Sendable {
+        var io: AudioPipelineIO?
+    }
+
+    /// **The measured cascade, tick for tick.** Four quiet ticks (the 290 ms
+    /// before iOS posted anything), five signals, then quiet — and the wait
+    /// returns only after the quiet, which is what leaves the microphone to be
+    /// opened on a route that has stopped moving.
+    func testPreparationWaitsOutTheWholeCascade() async throws {
+        let (io, recorder, clock) = makeIO(cascadeOn: [5, 6, 7, 8, 9])
+        try io.configureSession()
+        recorder.clear()
+
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(
+            recorder.applied, [.radio],
+            "escalate once, then wait — waiting must not re-apply the category (BU-17)")
+        XCTAssertEqual(
+            clock.elapsed, 9 + AudioPipelineIO.settleQuietTicks,
+            "the wait ends one quiet window after the last signal, and not before")
+        XCTAssertEqual(io.routeChangesObserved, 5)
+    }
+
+    /// Under-shooting the quiet window is `BU-15` all over again: the tail of
+    /// the cascade lands after the microphone is open and SF-3 drops it. So the
+    /// wait must not stop at a gap the cascade itself contains — 80–140 ms
+    /// between signals, measured.
+    func testAGapInsideTheCascadeDoesNotEndTheWait() async throws {
+        let quiet = AudioPipelineIO.settleQuietTicks
+        // A signal well inside the onset window, a gap one tick shorter than
+        // the quiet window, another signal. The wait must see this through.
+        let last = 2 + quiet - 1
+        let (io, _, clock) = makeIO(cascadeOn: [2, last])
+        try io.configureSession()
+
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(clock.elapsed, last + quiet)
+        XCTAssertEqual(io.routeChangesObserved, 2)
+    }
+
+    /// A switch that posts nothing must not cost a whole cap's worth of dead
+    /// air in front of the key-down. The wait gives up looking for a cascade
+    /// that never started after ``AudioPipelineIO/settleOnsetTicks``.
+    func testPreparationGivesUpWhenTheCascadeNeverStarts() async throws {
+        let (io, _, clock) = makeIO(cascadeOn: [])
+        try io.configureSession()
+
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(
+            clock.elapsed, AudioPipelineIO.settleOnsetTicks,
+            "a silent route costs the onset window and no more")
+    }
+
+    /// **The fast path, and the one that keeps BU-16 intact.** An over inside
+    /// the hand-back linger finds the session already on radio: there is no
+    /// category change, so there is no cascade, so there is nothing to wait
+    /// for. A quick exchange must still key the far end with the press.
+    func testAnOverInsideTheLingerWaitsForNothing() async throws {
+        let (io, recorder, clock) = makeIO(cascadeOn: [1, 2, 3])
+        try io.configureSession()
+        // A full first over, which is the one that does the disturbing: the
+        // category change, and the first capture on this engine.
+        await io.prepareAndCapture()
+        io.stopCapture()
+        let afterTheFirstOver = clock.elapsed
+        XCTAssertGreaterThan(afterTheFirstOver, 0, "the first over waits — that is BU-15")
+        recorder.clear()
+
+        // A second over inside the linger: still on radio, still the same
+        // engine, its input unit already up. Nothing has moved.
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(clock.elapsed, afterTheFirstOver, "no wait at all the second time")
+        XCTAssertEqual(recorder.applied, [], "and no category change to wait on")
+    }
+
+    /// A route that will not stop changing is not something to wait on. The cap
+    /// is what hands the operator back their key-down — and SF-3, untouched by
+    /// any of this, is what protects them once it is keyed.
+    func testAFlappingRouteIsCappedRatherThanWaitedOnForever() async throws {
+        let (io, _, clock) = makeIO(cascadeOn: Set(1...AudioPipelineIO.settleCapTicks))
+        try io.configureSession()
+
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(
+            clock.elapsed, AudioPipelineIO.settleCapTicks,
+            "the wait stops at the cap however hard the route flaps")
+    }
+
+    /// macOS has no `AVAudioSession`, so `applyPolicy` does nothing, so there
+    /// is no cascade — and waiting for one would put dead time in front of
+    /// every cold key-down in exchange for nothing.
+    func testAPlatformWithNoSessionDoesNotWait() async throws {
+        let (io, _, clock) = makeIO(cascadeOn: [1, 2, 3], settles: false)
+        try io.configureSession()
+
+        await io.prepareAndCapture()
+
+        XCTAssertEqual(clock.elapsed, 0)
+    }
+}
+
+extension AudioPipelineIO {
+    /// The three calls the transmit path makes, in the order it makes them:
+    /// escalate, open the microphone, wait for what that disturbed to settle.
+    /// Test-only, so each test states the sequence once rather than five times.
+    fileprivate func prepareAndCapture() async {
+        await prepareForCapture()
+        try? startCapture { _ in }
+        await settleRoute()
+    }
+}

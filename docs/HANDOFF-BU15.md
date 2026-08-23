@@ -1,8 +1,27 @@
-# Handoff — `BU-15`, the dance at the start of every over
+# `BU-15`, the dance at the start of every over — the investigation
 
-Written 2026-08-23, for someone picking this up cold to **fix** it. The
-diagnosis is done and the instrument is built; what is left is a design
-decision and the change that follows from it.
+Written 2026-08-23 as a handoff to whoever fixed it; **kept, because §5, §7 and
+§8 are still the only record of what the device costs to instrument.** The fix
+landed the same day. Read `BRINGUP.md`'s `BU-15` section for what it was and
+what it now is; read this for the traps.
+
+> ⚠️ **§1, §4 and §5 below are the diagnosis as it stood before the fix, and it
+> was one trigger short.** Escalating the category is a route change, as they
+> say; **so is opening the microphone**, which instantiates the engine's input
+> audio unit and posts a change ~63 ms later. The first attempt at the fix
+> caught the category cascade, the dance survived, and that is how the second
+> trigger was found. Both are handled the same way — see `BRINGUP.md`.
+>
+> ⚠️ **§10's answer to "how do you know this is your own switch?" turned out to
+> be the wrong question**, and that is the useful lesson here. Nothing
+> distinguishes the app's own route change from an unplugged accessory by
+> inspection, and nothing has to: if every disturbance happens *before* anything
+> is keyed, there is no transmission for SF-3 to drop and no judgement to make.
+>
+> ⚠️ **§8 is superseded for counting.** The app now carries its own trace out on
+> the transmit strip's accessibility value in DEBUG builds, so an unattended UI
+> test can assert the key-down count without root, a TTY or a log ring buffer.
+> `scripts/bu15-measure.sh` is still the way to read the phone's *log*.
 
 Read `BRINGUP.md`'s `BU-15` and `BU-17` rows first — they are short. Read
 `BLUETOOTH-AUDIO.md` only if you touch the macOS side; it is long, organised by
@@ -151,7 +170,7 @@ that genuinely differ; the `BU-9` delete tests stay macOS-only behind
 `#if os(macOS)` because they are about the macOS context menu.
 
 ```sh
-scripts/bu15-measure.sh VK1CPM          # from the repo root, in a real terminal
+scripts/bu15-measure.sh <your-callsign>   # from the repo root, in a real terminal
 ```
 
 That drives one over and collects the device log immediately. Both halves
@@ -208,10 +227,25 @@ The reviewer's question will be "how do you know this is your own switch and
 not an unplugged accessory?", so whatever distinguishes them should be the
 first thing the change explains.
 
-## 11. Open questions, offered rather than prescribed
+## 11. Open questions, and how they were answered
 
-Not researched, and deliberately not implemented — the design decision is the
-next person's.
+Offered rather than prescribed when this was written. The answers, from
+2026-08-23:
+
+- **A window that identifies the app's own switch** — not needed, and the
+  premise was wrong. See the warning at the top.
+- **Escalating before the key-down** — this is the fix, extended to cover the
+  microphone as well as the category. ~1.07 s from press to carrier on a cold
+  over; **23 ms** on a warm one, because nothing was disturbed and nothing is
+  waited for.
+- **Excluding self-inflicted changes from the resume budget** — comes for free:
+  a cold over no longer spends the budget at all, so a real route change later
+  in the same hold has its full allowance.
+- **The un-cancelled `resumeWork`** — wanted cancelled, and now is. It was what
+  let the app re-key 115 ms after telling the operator it had stopped, and it
+  could have undone an SF-1 watchdog unkey. One line, one test.
+
+The original text follows.
 
 - Is there a signal that identifies the app's own switch? A window around the
   `setCategory` call is the obvious candidate and is the crudest; the previous

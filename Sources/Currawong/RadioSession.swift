@@ -316,6 +316,72 @@ final class RadioSession: ObservableObject {
     /// own appearance so it responds on touch-down rather than on the network.
     @Published private(set) var isKeyDown = false
 
+    /// **`BU-15`'s instrument.** How many times the radio has actually been
+    /// keyed during the current hold — the number that *is* the fault, because
+    /// one continuous press should produce exactly one.
+    ///
+    /// Reset by a press the operator makes, never by one this class makes, so it
+    /// survives the release and can be read after the gesture has ended. That
+    /// is the whole reason it exists: XCUITest cannot look at the app during its
+    /// own `press(forDuration:)`, so the count has to outlive the press to be
+    /// assertable at all. `BU15FirstOverUITests` reads it off the transmit strip
+    /// on a device, which is the only place `BU-15` is visible — the simulator
+    /// posts no route-change notifications (`BU15SessionProbeTests`).
+    @Published private(set) var keyDownsInCurrentHold = 0
+
+    /// **`BU-15`'s instrument, continued.** Where in the hold the route changes
+    /// landed, and how long the wait for them took, so the device test can say
+    /// *why* a hold keyed twice rather than only that it did.
+    ///
+    /// The distinction is what found the second trigger. Signals that arrive
+    /// during preparation are this over's own doing — the category change, and
+    /// the microphone opening — and land while nothing is on air, so they cost
+    /// nothing. Signals that arrive after the key-down are the ones SF-3 drops.
+    /// A fix that catches only the category change leaves `tx=2` here, which is
+    /// exactly what the first attempt measured on 2026-08-23 and how the
+    /// microphone's own route change came to light.
+    ///
+    /// Reset with the hold, like ``keyDownsInCurrentHold``.
+    @Published private(set) var routeSignalsDuringPreparation = 0
+
+    /// Route changes that arrived with the radio on air during this hold — the
+    /// ones SF-3 acts on. See ``routeSignalsDuringPreparation``.
+    @Published private(set) var routeSignalsWhileTransmitting = 0
+
+    /// How long this over's audio bring-up took, press to settled, in
+    /// milliseconds — the escalation, the microphone, and the wait for what they
+    /// disturbed. Measured at ~1030–1090 ms on a cold over and 2–13 ms on a warm
+    /// one (melchior, 2026-08-23), the second of which is `BU-16`'s fast path
+    /// being intact.
+    @Published private(set) var lastPreparationMilliseconds = 0
+
+    /// **`BU-15`'s trace**, DEBUG only: what happened during this hold and how
+    /// many milliseconds after the press, in order.
+    ///
+    /// This is the device instrument that replaces `sudo log collect` — see
+    /// `docs/HANDOFF-BU15.md` §8 for why reading the phone's log is not
+    /// something an unattended test can do (root, a TTY, and an `.info` ring
+    /// buffer that evicts the run within minutes). The same facts, carried out
+    /// of the app on the transmit strip's accessibility value, cost none of
+    /// that.
+    ///
+    /// Zeroed by a press the operator makes, so it describes one hold and
+    /// survives the release to be read after the gesture.
+    @Published private(set) var holdTrace: [String] = []
+
+    /// Appends to ``holdTrace``, stamped from the start of the hold. Compiled
+    /// away outside DEBUG: it is an instrument, not a feature.
+    private func trace(_ event: String) {
+        #if DEBUG
+            guard let holdBegan else { return }
+            let ms = Int(now().timeIntervalSince(holdBegan) * 1000)
+            holdTrace.append("\(event)@\(ms)")
+            // A hold that produces more than this has something wrong with it
+            // that the first two dozen events will already have said.
+            if holdTrace.count > 24 { holdTrace.removeFirst() }
+        #endif
+    }
+
     /// **PT-4's honesty requirement.** Which input keyed the radio, while it is
     /// keyed. `nil` when nothing is.
     ///
@@ -533,6 +599,34 @@ final class RadioSession: ObservableObject {
     /// ``heldSource``, because a route change that cannot be recovered from also
     /// leaves the hold alive and must **not** keep the activity.
     private var routeResumeInFlight = false
+
+    /// **`BU-15`.** Whether the app is between the operator's press and the
+    /// key-down, doing the two things that move the audio route — escalating the
+    /// session policy and opening the microphone — and then waiting for the
+    /// route-change cascade they cause to go quiet.
+    ///
+    /// The one window in which a route change is expected and means nothing.
+    /// It is safe to say so — and this is the crux of the fix, so it is worth
+    /// being precise about why:
+    ///
+    /// * **Nothing is on air.** The link has not been keyed. The microphone
+    ///   *is* open for part of this window — opening it is one of the
+    ///   disturbances being waited out — but `OnAirGate` drops every frame it
+    ///   produces, so nothing reaches the wire or the transmit meter. SF-3's
+    ///   requirement is that *transmission* drops on a route change; there is no
+    ///   transmission here to drop, so nothing is being suppressed and no route
+    ///   change is being second-guessed.
+    /// * **It cannot be entered while transmitting.** The wait completes before
+    ///   ``RadioLink/startTransmit()`` is called, so this and `isTransmitting`
+    ///   are never both true. The guard below checks both regardless.
+    /// * **It is bounded by the audio layer**, three ways, and cannot outlive
+    ///   the press: a release clears the hold and the key-down is abandoned.
+    ///
+    /// What this replaces is the fault itself: both disturbances used to happen
+    /// *under* a live carrier, SF-3 correctly dropped it, and the operator
+    /// watched the app key down, unkey and key down again inside one press,
+    /// with a notice telling them to press a button they had never released.
+    private var routePreparationInFlight = false
 
     /// When the current hold began, for the activity's elapsed clock. Survives
     /// a route-change resume, so the clock measures the over rather than the
@@ -1549,10 +1643,17 @@ final class RadioSession: ObservableObject {
         safetyNotice = nil
         // A press the operator made, rather than one this class made for them,
         // starts a fresh hold — and a fresh allowance of automatic resumes.
-        if heldSource == nil { automaticResumes = 0 }
+        if heldSource == nil {
+            automaticResumes = 0
+            keyDownsInCurrentHold = 0
+            routeSignalsDuringPreparation = 0
+            routeSignalsWhileTransmitting = 0
+            holdTrace = []
+        }
         // SF-4's elapsed clock measures the *hold*, so an automatic resume
         // under a button that was never released keeps the original stamp.
         if holdBegan == nil { holdBegan = now() }
+        trace(heldSource == nil ? "press" : "resume")
         heldSource = source
         transmitDesired = true
         isKeyDown = true
@@ -1591,8 +1692,15 @@ final class RadioSession: ObservableObject {
         watchdogDeadline = nil
         // Only a route change may leave a repair pending; every other reason
         // settles the question, so anything left over from an earlier route
-        // change is stale and must not keep the indicator up.
-        if reason != .routeChanged { routeResumeInFlight = false }
+        // change is stale and must not keep the indicator up — nor key back
+        // down, which is what cancelling the task prevents. A watchdog unkey
+        // (SF-1) is the case that matters: it must not be undone by a resume
+        // that was already in the air when it fired.
+        if reason != .routeChanged {
+            routeResumeInFlight = false
+            resumeWork?.cancel()
+            resumeWork = nil
+        }
         // **Synchronously, with the microphone, and not behind the task
         // chain.** This is the call that takes the lock-screen banner down, and
         // it must not queue behind a key-down that is still in flight to the
@@ -1640,6 +1748,7 @@ final class RadioSession: ObservableObject {
             isKeyDown = false
             transmitDesired = false
             routeResumeInFlight = false
+            routePreparationInFlight = false
             watchdogDeadline = nil
             refreshActivity()
             return
@@ -1648,31 +1757,33 @@ final class RadioSession: ObservableObject {
         if transmitDesired {
             guard connection.isConnected, !isTransmitting else { return }
             do {
-                // **BU-16: the link keys first, and capture catches up.**
-                // Keying the link is milliseconds; opening capture costs
-                // ~163 ms on a Bluetooth route (the SCO measurement in
-                // `BLUETOOTH-AUDIO.md`), and paying capture first is how a
-                // 90 ms tap put the radio on air *after* the finger had
-                // lifted. This order keys the far end with the press, at the
-                // cost of a moment of keyed-but-silent carrier while the
-                // microphone comes up — the same moment a handheld's operator
-                // covers by pausing after keying. If capture then fails, the
-                // catch below unkeys: the carrier is bounded either way.
-                try await link.startTransmit()
-
-                // The release may have arrived at the suspension above —
-                // `endTransmit` runs synchronously on this actor and has
-                // already closed the microphone and cleared the hold. Keying
-                // on regardless is BU-16's other half: the radio going on air
-                // after the operator let go. Unkey and stop; the release's own
-                // queued apply finds nothing left to do.
-                guard transmitDesired else {
-                    await link.stopTransmit()
-                    transmitState = link.transmitState()
-                    refreshActivity()
-                    Diagnostics.keying("key-down abandoned: released while the link was keying")
-                    return
-                }
+                // **`BU-15`: everything that moves the audio route happens
+                // before anything is keyed.**
+                //
+                // Two things move it — escalating to the radio policy, and
+                // opening the microphone, which instantiates the engine's input
+                // audio unit. Both used to happen *after* the link was keyed, so
+                // SF-3 saw route changes under a live carrier and did what SF-3
+                // must do: dropped the transmission they were enabling. The
+                // operator watched one press key down, unkey and key down again,
+                // and was told to press a button they had never released.
+                //
+                // So: escalate, open the microphone, wait for the cascade to go
+                // quiet, and only then key the far end. Nothing is on air for
+                // any of it, so there is nothing for SF-3 to drop and nothing
+                // to tell apart from an accessory being unplugged.
+                //
+                // **BU-16's fast path is intact.** `settleRoute()` returns
+                // immediately unless something really was disturbed, which for
+                // an over inside the 3 s hand-back linger is nothing at all —
+                // the session is already on radio and the engine's input unit is
+                // already up. A quick exchange still keys the far end with the
+                // press. It is the first over after a pause, and only that, which
+                // pays the wait.
+                routePreparationInFlight = true
+                let preparationBegan = now()
+                trace("prep")
+                await audio.prepareForCapture()
 
                 // Gain, then meter, then the wire. The order is the point: the
                 // meter reports what actually leaves, so the operator is
@@ -1682,17 +1793,52 @@ final class RadioSession: ObservableObject {
                 // Every step is bounded work on 160 samples with no awaits —
                 // see `TransmitGainBox`, `TransmitGain.apply(to:)` and
                 // `AudioLevelMeter.note(_:)`.
+                //
+                // **`onAir` is what makes opening the microphone early safe.**
+                // Capture now starts before the carrier, and nothing captured
+                // in that window may reach the wire or the meter: the meter
+                // reports what left, and until the link is keyed nothing has.
                 let gainBox = self.gainBox
                 let meter = transmitMeter
+                let onAir = OnAirGate()
                 transmitMeter.reset()
+                trace("mic")
                 try audio.startCapture { frame in
+                    guard onAir.isOpen else { return }
                     let amplified = gainBox.gain.apply(to: frame)
                     meter.note(amplified)
                     link.sendCapturedFrame(amplified)
                 }
+
+                await audio.settleRoute()
+                routePreparationInFlight = false
+                lastPreparationMilliseconds = Int(
+                    now().timeIntervalSince(preparationBegan) * 1000)
+                trace("prepped")
+
+                // The release may have arrived at either suspension above.
+                // `endTransmit` runs synchronously on this actor and has already
+                // closed the microphone and cleared the hold, so nothing here
+                // has to unkey — the whole point of preparing first is that
+                // there is no carrier yet to take down. This is `BU-16`'s rule
+                // reaching its best case: a tap shorter than the route takes to
+                // settle never goes on air at all, rather than going on air
+                // after the finger has lifted.
+                guard transmitDesired, connection.isConnected else {
+                    audio.stopCapture()
+                    Diagnostics.keying(
+                        "key-down abandoned: released while the audio route settled")
+                    refreshActivity()
+                    return
+                }
+
+                try await link.startTransmit()
+                onAir.open()
+                trace("carrier")
             } catch {
                 // Fail closed: microphone shut, client unkeyed, button
                 // released. The operator must make a fresh, deliberate press.
+                routePreparationInFlight = false
                 audio.stopCapture()
                 await link.stopTransmit()
                 transmitDesired = false
@@ -1717,6 +1863,8 @@ final class RadioSession: ObservableObject {
                 return
             }
             isTransmitting = true
+            keyDownsInCurrentHold += 1
+            trace("onair")
             Diagnostics.keying("key-down on air: \(audio.audioStateDescription)")
             // Each key-down starts its own watchdog, including one this class
             // made after a route change.
@@ -1786,6 +1934,23 @@ final class RadioSession: ObservableObject {
         case .interruptionBegan:
             endTransmit(reason: .audioInterrupted)
         case .routeChanged:
+            // **`BU-15`.** The app is between the press and the key-down,
+            // waiting out the cascade its own escalation and microphone caused.
+            // Nothing is on air — the link is not keyed, and anything the
+            // microphone produces is dropped by `OnAirGate` — so there is no
+            // transmission for SF-3 to drop, and the key-down that follows will
+            // happen on a route that has stopped moving. See
+            // ``routePreparationInFlight`` for why this is an ordering fix and
+            // not a suppression.
+            if routePreparationInFlight, !isTransmitting {
+                routeSignalsDuringPreparation += 1
+                trace("sigPrep")
+                Diagnostics.route(
+                    "route change during preparation: nothing on air, key-down still pending")
+                return
+            }
+            if isTransmitting { routeSignalsWhileTransmitting += 1 }
+            trace(isTransmitting ? "sigTx" : "sigIdle")
             resumeAcrossRouteChange()
             // Checked *after* `resumeAcrossRouteChange`, because that is what
             // decides whether a resume is in flight. See
@@ -1837,11 +2002,25 @@ final class RadioSession: ObservableObject {
         guard let source = resumable else { return }
 
         automaticResumes += 1
+        // **Cancelled, not merely replaced.** Each signal of a cascade used to
+        // leave its own resume task running, so the app could key back down off
+        // a resume scheduled *before* the budget ran out — 115 ms after telling
+        // the operator, past the cap, that transmission had stopped and they
+        // should press again. Only the first survived `beginTransmit`'s
+        // `guard !transmitDesired`, which made the rest harmless by accident
+        // rather than by design; the notice it contradicted was not harmless.
+        resumeWork?.cancel()
         resumeWork = Task { @MainActor [weak self] in
             // Let the graph settle before asking for the microphone again:
             // the route change is the notification that it is *being* rebuilt,
             // not that it is finished.
             try? await Task.sleep(nanoseconds: Self.routeSettleNanoseconds)
+            // `try?` swallows the cancellation, so it has to be asked about
+            // explicitly: a cancelled sleep returns *early* rather than
+            // throwing out of here, and keying back down would be exactly the
+            // thing the cancellation was for. Whoever cancelled has already
+            // cleared `routeResumeInFlight` and refreshed the indicator.
+            guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.heldSource == source, self.connection.isConnected else {
                 // The hold ended, or the link did, while the graph settled.
@@ -2275,5 +2454,38 @@ extension RadioSession: PTTSink {
     /// actually stopped something.
     func accessoryLinkLost() {
         endTransmit(reason: .accessoryLinkLost)
+    }
+}
+
+/// A one-way latch the capture tap reads, and the key-down opens.
+///
+/// **`BU-15`.** The microphone now opens *before* the link is keyed, so that the
+/// route change instantiating the input audio unit causes lands while nothing is
+/// on air (see `applyTransmit()`). That leaves a window — as long as the route
+/// takes to settle — in which frames arrive from the audio thread with no
+/// carrier to put them on. They are dropped here rather than sent, and the
+/// transmit meter never sees them either: the meter's contract is that it
+/// reports what actually left, and until the link is keyed nothing has.
+///
+/// Closed once and opened once, from the main actor, read fifty times a second
+/// from the audio thread behind an uncontended lock — the same arrangement
+/// ``GainBox`` uses. There is deliberately no way to close it again: the release
+/// path closes the *microphone*, which is the stronger guarantee, and a gate
+/// that could be shut would be one more thing that has to be shut on every
+/// safety path.
+final class OnAirGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+
+    var isOpen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return opened
+    }
+
+    func open() {
+        lock.lock()
+        opened = true
+        lock.unlock()
     }
 }
