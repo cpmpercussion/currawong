@@ -1210,6 +1210,115 @@ not been driven by hand** — no XCUITest reaches iOS (see APP-21) and this
 machine's automation grant has lapsed, so the push, the ⓘ and the jump to the
 Session tab are covered by the hosted-view and view-model tests rather than by a
 run on the phone.
+### APP-24 — the audio policy follows the route, so a cold over stops existing
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-23, while
+`BU-15` was being fixed — and it is their idea, recorded in their words: *"in
+the olden days when I coded up iOS apps using my own brain and hands, I was
+totally comfortable having a music app in `.playAndRecord` from launch. So
+opening after connect doesn't seem wrong."*
+
+`BU-15` is fixed: one press, one key-down, on iOS and macOS, with and without an
+accessory. What it costs is **~1.0–1.2 s from press to carrier on a cold over**,
+because everything that moves the route now happens before anything is keyed and
+the route has to be waited out. A warm over — one inside the 3 s hand-back
+linger — costs **23 ms**, measured.
+
+**So the fix is not a shorter wait. It is to stop making overs cold.** The
+per-over hand-back exists for `BU-14`, which is a *Bluetooth* problem: the Q2L
+mutes its own BLE PTT notifications while its Classic side sits in an idle HFP
+call, so the session must drop back to `.listening` between overs to keep the
+button alive. **With no Bluetooth device in the route there is nothing to hand
+back** — no HFP to pin, no LED, no muted button — so the session could hold
+`.radio` and keep its engine, and a cold over would stop existing.
+
+That is the configuration the maintainer says they will mostly be running
+(2026-08-23): *"mostly I'll just run currawong on iOS and macOS with normal
+audio hardware."* It is also the configuration every operator without a
+Bluetooth PTT accessory is in.
+
+**The shape.** `AudioSessionPolicy` selection becomes conditional on whether a
+Bluetooth device is in the current route, rather than unconditional:
+
+| route at connect | policy between overs | first PTT |
+|---|---|---|
+| speaker, wired, receiver | `.radio`, held from connect | instant, no wait, no dance |
+| Bluetooth (Q2L, AirPods, car) | `.listening`, as now — `BU-14` requires it | ~1.0 s, as now |
+
+Bluetooth arriving or leaving mid-QSO is itself a route change while idle, which
+the app already observes (`RadioSession.onIdleAudioRouteChange`), so the policy
+can follow the route rather than being decided once at connect.
+
+**Two things to verify on a device before believing the table**, both raised when
+this was costed and neither measured yet:
+
+* That a held `.radio` on a speaker route does **not** light the recording
+  indicator. It should not — that follows the microphone tap, not the category —
+  but it is the one outcome that would make this unshippable, because an app
+  showing a live-microphone dot while merely connected is exactly the impression
+  this app must never give.
+* That `.voiceChat` mode is not quietly degrading receive audio on the speaker
+  for the whole QSO. If it is, the held policy wants `.playAndRecord` without
+  `.voiceChat` while idle, and only the full `.radio` policy while capturing.
+
+**Related, and possibly the same change:** `BU-18`. macOS holds HFP for the whole
+session after the first over — measured 69 s, across overs and idle — because
+`discardsEngineOnHandback` is false there, so the engine keeps its input unit and
+CoreAudio keeps the route. Both items are about what the app holds between overs;
+whoever takes one should read the other.
+
+**Closed when** a cold over on a non-Bluetooth route keys the carrier in the same
+tens of milliseconds a warm one does, `BU15FirstOverUITests` still passes with the
+Q2L attached, and the two verifications above are recorded rather than assumed.
+
+### APP-25 — a TestFlight build somebody outside can install
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-23: *"I'll also
+want to get to the point where I can setup the testflight entry in appstore
+connect in case someone wants to see a beta."*
+
+Not started, and deliberately scoped as **the plumbing only** — the first
+question is whether an archive can be built, uploaded and installed at all, not
+whether the app is finished.
+
+**What exists already:** the bundle identifier (`au.charlesmartin.currawong`),
+the team (`DEVELOPMENT_TEAM: EDH387FRHA`, `CODE_SIGN_STYLE: Automatic`), a
+version and build number (`CFBundleShortVersionString: 0.1.0`,
+`CFBundleVersion: 1`), the usage descriptions the two prompts need
+(`NSMicrophoneUsageDescription`, `NSBluetoothAlwaysUsageDescription`), and an
+entitlements file. All in `project.yml`, which is where they must be changed —
+the `.xcodeproj` and `Info.plist` are generated.
+
+**What is missing, in the order it will bite:**
+
+1. **An App Store Connect record** for the identifier, and an **API key** — the
+   repo rule is that everything works from the terminal, so the upload wants
+   `xcrun altool --upload-app` with an issuer/key pair, not Xcode's Organizer.
+2. **`CFBundleVersion` has to move per upload.** It is `"1"` for both the app
+   and the Live Activity extension, hard-coded in `project.yml`, and App Store
+   Connect refuses a build number it has already seen. This wants a `make`
+   target rather than an edit somebody forgets.
+3. **The `CurrawongOnAir` scheme must not ship.** It transmits on air, under a
+   callsign from the environment, against live reflectors. Confirm it is not in
+   the archived scheme's dependencies and cannot be.
+4. **Export compliance.** `ITSAppUsesNonExemptEncryption` is not declared, so
+   every upload will stop and ask. The answer follows from `FR-2.5` and `NG-1`:
+   no encryption UI, no AMBE, and the M17 scrambler/AES is out of scope — so the
+   declaration is `false`, but state it in `project.yml` rather than answering a
+   web form each time.
+5. **App privacy answers**: no data collected, no tracking, no analytics. Worth
+   writing down here once so the form is filled the same way twice.
+6. **`UIBackgroundModes: audio`** will draw a review question — the honest answer
+   is `PD-2`'s: it is what keeps a *received* signal alive with the screen
+   locked. `PD-4` (no CallKit) and `PD-3` (no multicast entitlement) are the two
+   things reviewers might otherwise expect of a VoIP-shaped app and which this
+   app deliberately does not do.
+7. **Beta test information**: what the tester is being asked to look at. Given
+   `BRINGUP.md`, the honest brief is short — connect to a node, hold PTT, check
+   the strip agrees with what they hear.
+
+**Not in scope:** anything about whether the app is *ready*. `BU-7`, `BU-10` and
+`BU-18` are all open, and a beta build with known open faults is fine so long as
+the tester is told which.
+
 ## Phase 5 — BLE PTT (after APP-2)
 
 ✅ **DELIVERED — but in the app, under APP-5, not as BLE-1 … BLE-3.** The three

@@ -5,6 +5,23 @@
 > are superseded by later ones in the same file. The handoff is the summary, with
 > the eleven attempts and why each failed.
 
+> ⚖️ **Keep this file's weight in proportion — the maintainer's call,
+> 2026-08-23**, after `BU-15` and `BU-18`: *"ultimately I think the Q2L and its
+> ilk are probably weird little accessories… mostly I'll just run currawong on
+> iOS and macOS with normal audio hardware."*
+>
+> Everything here is measured and worth keeping. But it is measured against
+> **one** accessory that attaches twice, mutes its own button in an idle call,
+> and does not light its own LED when the link it is documented to track comes
+> up. Two of those three are almost certainly the accessory's own idiosyncrasies
+> rather than anything about HFP.
+>
+> So: do not let this file's length decide priorities. **The configuration to get
+> right is the built-in microphone and speaker, wired earbuds, and ordinary
+> Bluetooth headphones** — see `APP-24`, which is exactly the change that follows
+> from taking that seriously. An accessory-shaped constraint should not be paid
+> for by every operator who does not own one.
+
 What a Bluetooth speaker-mic actually does, measured against a TIDRADIO Q2L on
 2026-08-22. This exists because the accessory note in `BRINGUP.md` asked one
 question — *how does this thing attach?* — and could not tell `BU-13` from
