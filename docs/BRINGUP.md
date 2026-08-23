@@ -28,6 +28,14 @@ model.
 > still unknown. Everything built so far is *recovery* on top of an unknown cause,
 > which is why it kept producing new failure modes.
 
+> 📄 **Fixing `BU-15`: read `HANDOFF-BU15.md` first.** Unlike the one above, the
+> diagnosis there is *done* — the fault is traced on a device, second by second,
+> and the instrument to re-measure it is built (`scripts/bu15-measure.sh`). What
+> is left is a design decision. It also carries the two things that will
+> otherwise cost a morning each: the simulator cannot reproduce this fault at all
+> and will pass a broken fix, and reading an iPhone's log has a sudo and a
+> stopwatch in the way.
+
 **Inflection point, 2026-08-22.** After two failed attempts at `BU-17`, the
 operator settled the priority: a permanently lit accessory LED is acceptable if
 the button works. **The LED is not what blocks the button** — after a fresh
