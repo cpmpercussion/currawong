@@ -18,6 +18,13 @@ what it now is; read this for the traps.
 > inspection, and nothing has to: if every disturbance happens *before* anything
 > is keyed, there is no transmission for SF-3 to drop and no judgement to make.
 >
+> ⚠️ **The fix is in, on both platforms, and the numbers are:** one key-down per
+> hold, cold and warm, on iOS with no accessory, iOS with the Q2L as the route,
+> and macOS with the Q2L as the route. Cold overs cost ~1.0–1.2 s from press to
+> carrier; warm ones (inside the 3 s hand-back linger) cost 23–145 ms. Removing
+> the cold cost is `APP-24`, and it is not a shorter wait — it is not making
+> overs cold in the first place.
+>
 > ⚠️ **§8 is superseded for counting.** The app now carries its own trace out on
 > the transmit strip's accessibility value in DEBUG builds, so an unattended UI
 > test can assert the key-down count without root, a TTY or a log ring buffer.
