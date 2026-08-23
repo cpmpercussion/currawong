@@ -276,13 +276,14 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// sleeps it.
     private let settleTick: @Sendable () async -> Void
 
-    /// Whether an escalation is followed by a wait for the route to settle at
-    /// all. Platform truth by default, and for the same reason
-    /// ``discardsEngineOnHandback`` is: on macOS `applyPolicy` does nothing —
-    /// there is no `AVAudioSession` — so there is no cascade to wait out, and
-    /// waiting would put up to ``settleCapTicks`` of dead time in front of
-    /// every cold key-down in exchange for nothing at all.
-    private let settlesAfterEscalation: Bool
+    /// A monotonic clock, for timing how long opening the microphone took. See
+    /// ``captureSlowThresholdNanoseconds``. Injectable so the settle logic is
+    /// testable without a real audio stack (AU-5).
+    private let monotonicNanoseconds: @Sendable () -> UInt64
+
+    /// How long the last ``startCapture(onFrame:)`` took to open the
+    /// microphone. See ``captureSlowThresholdNanoseconds``.
+    private var lastCaptureStartNanoseconds: UInt64 = 0
 
     /// SF-3, decoupled from any one pipeline's lifetime. See the type note.
     let signals: AsyncStream<AudioSessionSignal>
@@ -345,6 +346,32 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// the carrier is up, which is `BU-15` again.
     static let settleQuietTicks = 3
 
+    /// How slow opening the microphone has to be before it counts as having
+    /// **brought something up** — and therefore as having moved the route.
+    ///
+    /// This replaced a pair of platform flags, and it is a better question than
+    /// either of them was. Measured across both platforms, 2026-08-23:
+    ///
+    /// | | cold over | warm over |
+    /// |---|---|---|
+    /// | iOS, no accessory | 441–494 ms | 1–2 ms |
+    /// | iOS, Q2L as the route | 421 ms | 1 ms |
+    /// | macOS, Q2L as the route | **798 ms** (SCO bring-up) | 35 ms |
+    ///
+    /// Two orders of magnitude apart, on both platforms, for the same reason:
+    /// a capture that has to raise a route takes hundreds of milliseconds, and
+    /// one that finds the route already up takes none. 100 ms sits an order of
+    /// magnitude clear of both ends.
+    ///
+    /// What this buys over asking the platform: **macOS is covered without
+    /// pretending its policy bookkeeping means anything.** `applyPolicy` does
+    /// nothing there, so the app's `listening`/`radio` state is fiction — but
+    /// SCO really does drop between overs, and a capture that has to bring it
+    /// back really does post a configuration change. The clock sees that; the
+    /// bookkeeping could not. And a Mac on its built-in microphone, which brings
+    /// nothing up and posts nothing, waits for nothing.
+    static let captureSlowThresholdNanoseconds: UInt64 = 100_000_000
+
     /// The hard ceiling: 1.2 s, or half a second past the whole measured
     /// cascade. A route that will not stop changing is not something to wait
     /// on — the key-down proceeds and SF-3, which is untouched by any of this,
@@ -386,20 +413,16 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         settleTick: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: AudioPipelineIO.settleTickNanoseconds)
         },
-        settlesAfterEscalation: Bool = {
-            #if os(iOS)
-                return true
-            #else
-                return false
-            #endif
-        }()
+        monotonicNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        }
     ) {
         self.makePipeline = makePipeline
         self.applyPolicy = applyPolicy
         self.listeningLinger = listeningLinger
         self.discardsEngineOnHandback = discardsEngineOnHandback
         self.settleTick = settleTick
-        self.settlesAfterEscalation = settlesAfterEscalation
+        self.monotonicNanoseconds = monotonicNanoseconds
         var escaped: AsyncStream<AudioSessionSignal>.Continuation!
         self.signals = AsyncStream { escaped = $0 }
         self.signalContinuation = escaped
@@ -597,6 +620,21 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         return routeChangeCount
     }
 
+    /// Runs the capture start and records how long it took, for
+    /// ``settleRoute()``. Timed even when it throws: a capture that spent
+    /// 800 ms on an SCO link and *then* failed moved the route just the same,
+    /// and the repair path that follows will want it waited out.
+    private func timingCaptureStart(_ start: () throws -> Void) throws {
+        let began = monotonicNanoseconds()
+        defer {
+            let elapsed = monotonicNanoseconds() &- began
+            lock.lock()
+            lastCaptureStartNanoseconds = elapsed
+            lock.unlock()
+        }
+        try start()
+    }
+
     /// Records that something is about to move the route. Must be called with
     /// ``lock`` held. Only the *first* disturbance of a group stamps the
     /// baseline, so a category change followed by a first capture is one
@@ -655,19 +693,36 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         let disturbed = routeDisturbed
         let baseline = routeChangeBeforeDisturbance
         let start = routeChangeCount
+        let openingWasSlow = lastCaptureStartNanoseconds >= Self.captureSlowThresholdNanoseconds
         routeDisturbed = false
         lock.unlock()
-        // Nothing moved the route: no category change (the session was already
-        // on radio) and no first capture on this engine. Every over inside the
-        // hand-back linger takes this exit, which is what keeps BU-16 intact.
-        guard disturbed, settlesAfterEscalation else { return }
+
+        // Two ways to know the route moved, and either is enough.
+        //
+        // `start > baseline` — signals have **already** arrived since the
+        // disturbance began. On iOS the category cascade can land while the
+        // microphone is still opening, so this is the common case there.
+        //
+        // `openingWasSlow` — the microphone took long enough that the audio
+        // stack must have brought something up: an input unit, or an SCO link.
+        // This is what covers macOS, where the policy bookkeeping means nothing
+        // but SCO really does have to come back between overs.
+        //
+        // Neither, and there is nothing to wait for. Every over inside the
+        // hand-back linger takes that exit, which is what keeps `BU-16` intact —
+        // as does a Mac on its built-in microphone, which brings nothing up.
+        guard disturbed, start > baseline || openingWasSlow else { return }
 
         var seen = start
-        // The tick of the last change seen, or 0 for "the cascade has not
-        // started". Signals that arrived while the microphone was opening count
-        // as started: they are the cascade, and waiting out an onset budget for
-        // a cascade that has already been and gone is dead air for nothing.
-        var lastChange = start > baseline ? 1 : 0
+        // Signals that arrived while the microphone was opening mean the cascade
+        // has already begun, so the onset budget is spent and what is left is to
+        // wait for quiet. Waiting out an onset for a cascade that has been and
+        // gone is dead air for nothing.
+        var started = start > baseline
+        /// The tick the last change was seen on; 0 for "none during this wait",
+        /// which is also where quiet is measured from for a cascade that began
+        /// before it.
+        var lastChange = 0
         var ticks = 0
         while ticks < Self.settleCapTicks {
             await settleTick()
@@ -677,10 +732,11 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             lock.unlock()
             if now != seen {
                 seen = now
+                started = true
                 lastChange = ticks
                 continue
             }
-            if lastChange == 0 {
+            if !started {
                 guard ticks < Self.settleOnsetTicks else { break }
             } else if ticks - lastChange >= Self.settleQuietTicks {
                 break
@@ -892,7 +948,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             if !captureAttemptedOnCurrent { noteRouteDisturbanceLocked() }
             captureAttemptedOnCurrent = true
             lock.unlock()
-            try pipeline.startCapture(onFrame: onFrame)
+            try timingCaptureStart { try pipeline.startCapture(onFrame: onFrame) }
         } catch let first {
             do {
                 try activateSession()
@@ -903,7 +959,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
                 noteRouteDisturbanceLocked()
                 captureAttemptedOnCurrent = true
                 lock.unlock()
-                try fresh.startCapture(onFrame: onFrame)
+                try timingCaptureStart { try fresh.startCapture(onFrame: onFrame) }
             } catch let second {
                 // The key-down failed outright: nothing is capturing, so hand
                 // the route back now rather than leaving the accessory in a
