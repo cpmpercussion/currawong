@@ -107,7 +107,7 @@ final class BU15FirstOverTests: XCTestCase {
         harness.session.start()
         await harness.connect()
 
-        let session = harness.session
+        let session = harness.session!
         harness.audio.onSettleRoute = {
             await MainActor.run { session.endTransmit(reason: .released) }
         }
