@@ -104,6 +104,17 @@ func showChannelList(in app: XCUIApplication) {
         dismissKeyboard(in: app)
         let channels = app.tabBars.buttons["Channels"].firstMatch
         if channels.waitForExistence(timeout: 5) { channels.tap() }
+
+        // **The tab is not the screen.** `Add channel` *pushes* the connect
+        // form inside the Channels tab, and switching tabs and back leaves that
+        // form on top — so the channel list, and every row query against it, is
+        // still covered. Measured 2026-08-23: this is why the on-air test
+        // reported "the test's channel vanished before it could be deleted"
+        // after an over that had otherwise gone perfectly.
+        let back = app.buttons["BackButton"].firstMatch
+        if back.waitForExistence(timeout: 2), back.isHittable {
+            back.tap()
+        }
     #endif
 }
 
