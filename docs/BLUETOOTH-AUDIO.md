@@ -802,9 +802,11 @@ policy into the library precisely so the app would not own it, and that stands.
   `resumeAcrossRouteChange()` already implements the drop-and-resume. Deliberately
   causing a route change *on the transmit path* therefore means deliberately
   triggering that machinery on every key-down. See `BU-15`, which is this exact
-  interaction observed on macOS and visible to the operator. **`BU-15` was
-  solved on 2026-08-23, and the way it was solved is the precondition this
-  bullet was asking for:** everything that moves the route now happens before
+  interaction observed on macOS and visible to the operator — and **measured
+  there on 2026-08-23: `startCapture` blocks ~798 ms raising SCO, and the
+  configuration change arrives ~1 ms after it returns.** `BU-15` was solved the
+  same day, and the way it was solved is the precondition this bullet was asking
+  for:** everything that moves the route now happens before
   anything is keyed, so a deliberate route change on the transmit path lands
   while nothing is on air and SF-3 has nothing to drop. What a harmonisation
   would now cost is latency on the affected overs, which is measurable
