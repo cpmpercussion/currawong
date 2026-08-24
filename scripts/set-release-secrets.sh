@@ -42,6 +42,10 @@ info() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 note() { printf '\033[1;32m  ->\033[0m %s\n' "$1"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 
+# Because this script has already failed once by exiting silently mid-way, and a
+# script that handles a private key is the wrong place to guess what happened.
+trap 'rc=$?; [[ ${rc} -eq 0 ]] || printf "\033[1;31mFAILED\033[0m at line %s (exit %s). Nothing was uploaded unless it says so above.\n" "${LINENO}" "${rc}" >&2' ERR
+
 WORK=""
 cleanup() {
     # The export contains a private key, so it goes whatever happens — including
@@ -66,7 +70,15 @@ readonly P12="${WORK}/devid.p12"
 # Generated, not chosen: it exists only to encrypt the export in transit to the
 # secret store, and nothing ever needs to know it again. It is written straight
 # to the secret and never printed.
-EXPORT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)"
+#
+# One command, no pipe, deliberately. This was `tr -dc … </dev/urandom | head -c
+# 40`, which is worse than it looks under `set -euo pipefail`: `head` exits at 40
+# bytes, `tr` takes SIGPIPE, the pipeline reports 141, and because that is a
+# command substitution `set -e` kills the script — after the identity line and
+# before the export, with nothing printed. Which is exactly how it failed the
+# first time it was run.
+EXPORT_PASSWORD="$(openssl rand -hex 20)"
+[[ ${#EXPORT_PASSWORD} -ge 32 ]] || die "could not generate an export password"
 
 info "exporting the Developer ID certificate and key"
 printf '  macOS will ask you to authorise this. Click Allow.\n'
@@ -76,6 +88,38 @@ security export -t identities -f pkcs12 -P "${EXPORT_PASSWORD}" -o "${P12}" \
     || die "the export was refused or cancelled — nothing was uploaded"
 [[ -s "${P12}" ]] || die "the export produced nothing"
 note "exported $(du -h "${P12}" | cut -f1)"
+
+# `security export -t identities` takes *every* codesigning identity in the
+# keychain, not only the one we want, and there is no flag to narrow it. Usually
+# that means an Apple Development key travels along with the Developer ID one.
+# Signing still picks the right one by name, but it is more key material in a
+# secret than the job needs, so at least say so rather than let it pass unseen.
+# `-legacy` is an OpenSSL 3 flag and macOS has shipped LibreSSL as `openssl`,
+# which rejects it — so this is allowed to come back empty, and an empty string
+# in the integer test below would itself fail the script. Both tries are
+# best-effort: this is a courtesy warning, not a gate.
+certs="$(openssl pkcs12 -in "${P12}" -passin "pass:${EXPORT_PASSWORD}" \
+    -nokeys -legacy 2>/dev/null | grep -c 'BEGIN CERTIFICATE' || true)"
+if [[ ! "${certs}" =~ ^[0-9]+$ ]]; then
+    certs="$(openssl pkcs12 -in "${P12}" -passin "pass:${EXPORT_PASSWORD}" \
+        -nokeys 2>/dev/null | grep -c 'BEGIN CERTIFICATE' || true)"
+fi
+[[ "${certs}" =~ ^[0-9]+$ ]] || certs=0
+
+if [[ "${certs}" -gt 1 ]]; then
+    printf '\033[1;33m  note\033[0m the export contains %s certificates, not just the Developer ID one.
+' "${certs}"
+    printf '       Signing picks the right one by name, so this works. To upload only the
+'
+    printf '       one identity, export it from Keychain Access instead — select just
+'
+    printf '       "Developer ID Application", File > Export Items — and set the secret with:
+'
+    printf '         base64 -i <file>.p12 | gh secret set MACOS_CERTIFICATE_P12
+'
+    printf '         printf <its password> | gh secret set MACOS_CERTIFICATE_PASSWORD
+'
+fi
 
 info "your Apple ID and an app-specific password"
 printf '  The app-specific password is the one from appleid.apple.com, not your\n'
