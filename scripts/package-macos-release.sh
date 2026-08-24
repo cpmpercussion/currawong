@@ -38,8 +38,16 @@
 #   one, which needs an Apple ID signed in to Xcode locally, or in CI:
 #     ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID   (an App Store Connect API key)
 #
-#   --notarise uses the same API key, or an Apple ID and app-specific password:
+#   --notarise is separate from that and an app-specific password is enough for
+#   it. Any one of these:
+#     NOTARY_KEYCHAIN_PROFILE                     stored by store-credentials
+#     ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID     the same API key as above
 #     NOTARY_APPLE_ID, NOTARY_TEAM_ID, NOTARY_PASSWORD
+#
+#   The keychain profile is the nicest locally — set it up once with:
+#     xcrun notarytool store-credentials currawong-notary \
+#       --apple-id you@example.com --team-id EDH387FRHA --password <app-specific>
+#   then: make release-macos NOTARISE=--notarise  (with NOTARY_KEYCHAIN_PROFILE set)
 #
 # USAGE
 #   scripts/package-macos-release.sh [--identity auto|<name>] [--notarise]
@@ -110,14 +118,31 @@ if [[ ${NOTARISE} -eq 1 ]]; then
     # Either credential works. The API key is preferred because the same key
     # also authenticates the provisioning-profile fetch, so CI holds one secret
     # for both instead of an Apple ID and an app-specific password as well.
-    if [[ -n "${ASC_KEY_PATH:-}" ]]; then
+    # Three credentials work, in this order of preference.
+    #
+    # A stored keychain profile is best on a laptop: `xcrun notarytool
+    # store-credentials` puts the app-specific password in the Keychain once, and
+    # nothing after that has the password in an environment variable or in shell
+    # history — the concern the workspace CLAUDE.md raises about `--secret`.
+    #
+    # The API key is best in CI, because the same key also authenticates the
+    # provisioning-profile fetch that signing needs, so one secret covers both.
+    #
+    # An Apple ID and app-specific password in the environment works everywhere
+    # and is the plainest thing to set up.
+    if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+        note "notarising with the stored keychain profile ${NOTARY_KEYCHAIN_PROFILE}"
+    elif [[ -n "${ASC_KEY_PATH:-}" ]]; then
         : "${ASC_KEY_ID:?ASC_KEY_PATH needs ASC_KEY_ID}"
         : "${ASC_ISSUER_ID:?ASC_KEY_PATH needs ASC_ISSUER_ID}"
     elif [[ -n "${NOTARY_APPLE_ID:-}" ]]; then
         : "${NOTARY_TEAM_ID:?NOTARY_APPLE_ID needs NOTARY_TEAM_ID}"
         : "${NOTARY_PASSWORD:?NOTARY_APPLE_ID needs NOTARY_PASSWORD (an app-specific password)}"
     else
-        die "--notarise needs either ASC_KEY_PATH/ASC_KEY_ID/ASC_ISSUER_ID or NOTARY_APPLE_ID/NOTARY_TEAM_ID/NOTARY_PASSWORD"
+        die "--notarise needs one of:
+       NOTARY_KEYCHAIN_PROFILE                     (xcrun notarytool store-credentials)
+       ASC_KEY_PATH + ASC_KEY_ID + ASC_ISSUER_ID   (App Store Connect API key)
+       NOTARY_APPLE_ID + NOTARY_TEAM_ID + NOTARY_PASSWORD"
     fi
 fi
 
@@ -325,7 +350,9 @@ if [[ ${NOTARISE} -eq 1 ]]; then
     ditto -c -k --keepParent --sequesterRsrc "${APP}" "${submission}"
 
     notary_args=(submit "${submission}" --wait)
-    if [[ -n "${ASC_KEY_PATH:-}" ]]; then
+    if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+        notary_args+=(--keychain-profile "${NOTARY_KEYCHAIN_PROFILE}")
+    elif [[ -n "${ASC_KEY_PATH:-}" ]]; then
         notary_args+=(--key "${ASC_KEY_PATH}" --key-id "${ASC_KEY_ID}" --issuer "${ASC_ISSUER_ID}")
     else
         notary_args+=(--apple-id "${NOTARY_APPLE_ID}" --team-id "${NOTARY_TEAM_ID}" --password "${NOTARY_PASSWORD}")

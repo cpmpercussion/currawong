@@ -158,8 +158,46 @@ are triggered by the same release.
 
 The API key does two jobs — it authenticates the provisioning-profile fetch and
 it notarises — which is why there is no app-specific password in the list.
-`NOTARY_APPLE_ID`/`NOTARY_TEAM_ID`/`NOTARY_PASSWORD` still work as an
-alternative for notarisation if that is easier.
+
+### An app-specific password is not a substitute for the API key
+
+It covers notarisation and nothing else, and the two credentials answer different
+questions. `xcrun notarytool` takes `--password`; `xcodebuild
+-allowProvisioningUpdates` does not, and its own help is explicit that it
+"requires a developer account to have been added in Xcode's Accounts settings or
+an App Store Connect authentication key". There is no third option. So:
+
+| | signing (needs a profile) | notarising |
+|---|---|---|
+| **Locally** | Xcode signed in — re-auth if the export says *No Accounts* | app-specific password ✅ |
+| **In CI** | App Store Connect API key | app-specific password ✅ |
+
+Which means **locally an app-specific password is all that is missing**: fix the
+Xcode account and `make release-macos NOTARISE=--notarise` does the whole
+release, no API key anywhere. In CI the key is still wanted, for the profile
+rather than for the notary.
+
+Store the password in the Keychain rather than putting it in the environment —
+once, and then never in shell history:
+
+```sh
+xcrun notarytool store-credentials currawong-notary \
+  --apple-id you@example.com --team-id EDH387FRHA --password <app-specific>
+
+NOTARY_KEYCHAIN_PROFILE=currawong-notary make release-macos NOTARISE=--notarise
+```
+
+`NOTARY_APPLE_ID`/`NOTARY_TEAM_ID`/`NOTARY_PASSWORD` work too, and are what CI
+uses since a runner's keychain does not persist between runs.
+
+**The alternative to the API key in CI**, if getting one is not wanted: export
+the Developer ID provisioning profile once, keep it as a secret, write it to
+`Currawong.app/Contents/embedded.provisionprofile` and sign the bundle directly
+with `codesign` — the profile is the whole of what direct signing was missing,
+and a profile plus the entitlements was measured launching. It is not
+implemented here because it means a second signing path to maintain and a
+profile to renew by hand — this one expires 2027-08-16 — where the API key
+route has neither. Worth knowing it exists.
 
 With no secrets at all the workflow still runs and attaches an ad-hoc build,
 with the warning above. That exercises the pipeline; it does not produce

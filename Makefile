@@ -132,7 +132,13 @@ licences:
 # release is reproducible on your own machine.
 #
 #   make release-macos                      # ad-hoc, or your Developer ID
-#   make release-macos NOTARISE=--notarise  # ...and notarise (needs NOTARY_*)
+#   make release-macos NOTARISE=--notarise  # ...and notarise
+#
+# Notarising needs a credential in the environment. An app-specific password
+# stored once in the Keychain is the least painful:
+#   xcrun notarytool store-credentials currawong-notary \
+#     --apple-id you@example.com --team-id EDH387FRHA --password <app-specific>
+#   NOTARY_KEYCHAIN_PROFILE=currawong-notary make release-macos NOTARISE=--notarise
 NOTARISE ?=
 release-macos:
 	scripts/package-macos-release.sh --identity auto $(NOTARISE)

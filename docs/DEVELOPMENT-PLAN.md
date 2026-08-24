@@ -1440,9 +1440,19 @@ open, and the read-me the download carries says what it is.
 **Unverified at hand-off:** the export and notarise legs have not run to
 completion anywhere. Locally the export fails at *No Accounts* — a stale Apple
 ID token in Xcode, which the script now names and tells you to fix — and CI
-needs the five secrets in `LICENSING.md`. Everything before and after those two
+needs the secrets in `LICENSING.md`. Everything before and after those two
 steps is exercised: the unsigned build, the ad-hoc path, Developer ID signing of
 the bundle, the licence checks against the built app, and the packaging.
+
+**On credentials**, since the two legs want different ones: an app-specific
+password covers notarisation and nothing else. `xcodebuild
+-allowProvisioningUpdates` takes only a signed-in Xcode account or an App Store
+Connect API key — its own help says so — so the profile fetch cannot use one.
+The upshot is that *locally* an app-specific password is all that is missing:
+fix the Xcode account and the whole release runs with no API key involved. In CI
+the key is still wanted, for the profile rather than the notary. The script takes
+the password three ways, preferring `NOTARY_KEYCHAIN_PROFILE` so it lives in the
+Keychain rather than in shell history.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
