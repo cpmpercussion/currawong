@@ -163,16 +163,28 @@ routes, both supported:
 
 **Route A — certificate and profile as files.** Four secrets, no API key.
 
-The two that need care are set by `scripts/set-release-secrets.sh`, which
-exports the identity to a temporary `.p12` under a generated password, pipes
-both into `gh secret set` so neither reaches a shell history or a process list,
-prompts for the Apple ID and app-specific password without echoing them, and
-deletes the export on the way out including on failure. macOS will ask you to
-authorise the key export — that prompt is why it cannot run unattended.
+The two that need care are set by `scripts/set-release-secrets.sh`. Export the
+certificate from Keychain Access first — `login` → *My Certificates*, select
+**Developer ID Application** (not Installer), File → Export Items… as `.p12`:
 
 ```sh
-scripts/set-release-secrets.sh
+scripts/set-release-secrets.sh --certificate ~/Desktop/devid.p12
 ```
+
+It checks the file opens with the password you give and that it really holds a
+Developer ID Application identity — a wrong password or an Installer export
+otherwise becomes a secret that fails in CI complaining about neither — then
+prompts for the Apple ID and app-specific password without echoing, and pipes
+everything into `gh secret set` so none of it reaches a shell history or a
+process list. Delete the `.p12` afterwards; it is a private key.
+
+**The export step is deliberately not scripted.** `security export -t
+identities` has no way to select one identity, so it tries to export every
+private key in the keychain — three here, Apple Development and both Developer
+ID ones — raising a separate authorisation dialog for each and re-asking until
+you pick "Always Allow". It presents as an endless prompt loop, and what it
+would upload is two private keys the release has no use for. Keychain Access
+exports exactly what you select and asks once.
 
 The other two are not sensitive and were set directly:
 
