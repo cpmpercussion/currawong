@@ -148,56 +148,53 @@ are triggered by the same release.
 
 ### Secrets
 
-| Secret | What it is |
+Signing on a runner needs three things, and it is worth being clear about which
+of them a credential can *fetch* and which have to be handed over as files:
+
+| Thing | Can an Apple ID + app-specific password get it? |
 |---|---|
-| `MACOS_CERTIFICATE_P12` | Developer ID Application certificate and key, `base64`-encoded |
-| `MACOS_CERTIFICATE_PASSWORD` | the password the `.p12` was exported with |
-| `ASC_KEY_P8` | App Store Connect API key (`.p8`), `base64`-encoded |
-| `ASC_KEY_ID` | that key's ID |
-| `ASC_ISSUER_ID` | the issuer ID from App Store Connect |
+| The Developer ID certificate **and its private key** | **No.** The private key exists only where it was generated — this Mac. Apple never re-issues it. |
+| A provisioning profile | **No.** `xcodebuild -allowProvisioningUpdates` takes a signed-in Xcode account or an App Store Connect API key, and nothing else. |
+| A notarisation ticket | **Yes.** This is the one an app-specific password covers. |
 
-The API key does two jobs — it authenticates the provisioning-profile fetch and
-it notarises — which is why there is no app-specific password in the list.
+So the certificate is a secret either way. And once you accept that, the profile
+may as well be one too — which removes the last thing the API key was for. Two
+routes, both supported:
 
-### An app-specific password is not a substitute for the API key
+**Route A — certificate and profile as files.** Four secrets, no API key.
 
-It covers notarisation and nothing else, and the two credentials answer different
-questions. `xcrun notarytool` takes `--password`; `xcodebuild
--allowProvisioningUpdates` does not, and its own help is explicit that it
-"requires a developer account to have been added in Xcode's Accounts settings or
-an App Store Connect authentication key". There is no third option. So:
+| Secret | How to produce it |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | Keychain Access → your *Developer ID Application* identity → Export as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password you exported the `.p12` with |
+| `MACOS_PROVISIONING_PROFILE` | `base64 -i <profile> \| pbcopy` — see below for where the profile is |
+| `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD` | your Apple ID, `EDH387FRHA`, and the app-specific password |
 
-| | signing (needs a profile) | notarising |
-|---|---|---|
-| **Locally** | Xcode signed in — re-auth if the export says *No Accounts* | app-specific password ✅ |
-| **In CI** | App Store Connect API key | app-specific password ✅ |
-
-Which means **locally an app-specific password is all that is missing**: fix the
-Xcode account and `make release-macos NOTARISE=--notarise` does the whole
-release, no API key anywhere. In CI the key is still wanted, for the profile
-rather than for the notary.
-
-Store the password in the Keychain rather than putting it in the environment —
-once, and then never in shell history:
+The profile is the one a successful local release already created:
 
 ```sh
-xcrun notarytool store-credentials currawong-notary \
-  --apple-id you@example.com --team-id EDH387FRHA --password <app-specific>
-
-NOTARY_KEYCHAIN_PROFILE=currawong-notary make release-macos NOTARISE=--notarise
+ls ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile
+# the Developer ID one is named "Mac Team Direct Provisioning Profile: au.charlesmartin.currawong"
 ```
 
-`NOTARY_APPLE_ID`/`NOTARY_TEAM_ID`/`NOTARY_PASSWORD` work too, and are what CI
-uses since a runner's keychain does not persist between runs.
+or, equivalently, lift it out of an app you exported —
+`Currawong.app/Contents/embedded.provisionprofile`. It is long-lived: the one
+this was developed against expires **2044-08-19**, so it outlasts the
+certificate, which is the thing that will actually need renewing (Developer ID
+certificates run five years).
 
-**The alternative to the API key in CI**, if getting one is not wanted: export
-the Developer ID provisioning profile once, keep it as a secret, write it to
-`Currawong.app/Contents/embedded.provisionprofile` and sign the bundle directly
-with `codesign` — the profile is the whole of what direct signing was missing,
-and a profile plus the entitlements was measured launching. It is not
-implemented here because it means a second signing path to maintain and a
-profile to renew by hand — this one expires 2027-08-16 — where the API key
-route has neither. Worth knowing it exists.
+**Route B — an App Store Connect API key.** Replaces
+`MACOS_PROVISIONING_PROFILE` with `ASC_KEY_P8`, `ASC_KEY_ID` and
+`ASC_ISSUER_ID`, and the key notarises as well, so the three `NOTARY_*` secrets
+can go. The profile is then fetched or created per build rather than stored.
+Fewer files to keep, one more credential to mint and rotate.
+
+Route A is the recommendation when you already have a Developer ID and an
+app-specific password, which is the usual case: it adds one file you already
+have on disk instead of a new credential. The script prefers a supplied profile
+when both are present, and the workflow fails early — before the build — if a
+certificate is set with neither, because the alternative is an app that signs
+cleanly and gets killed on launch.
 
 With no secrets at all the workflow still runs and attaches an ad-hoc build,
 with the warning above. That exercises the pipeline; it does not produce
@@ -208,7 +205,33 @@ something to give anybody.
 The identity is in the keychain but nothing can fetch a profile. Open Xcode →
 Settings → Accounts and sign in again — a stale Apple ID token reports exactly
 this (`Invalid credentials in keychain … missing Xcode-Token`), which is how it
-presented here on 2026-08-24.
+presented here on 2026-08-24. Or pass `MACOS_PROVISIONING_PROFILE` and skip the
+fetch entirely, which is route A above.
+
+### What was actually run
+
+Both signing routes produce a Developer ID-signed, hardened, launching app; that
+was checked rather than inferred, because "valid on disk" is precisely the
+reassuring signal that does not mean it will start.
+
+| Route | Signature | Download | Launches |
+|---|---|---|---|
+| A — supplied profile, direct `codesign` | Developer ID Application → Developer ID CA → Apple Root CA, secure timestamp, `flags=0x10000(runtime)`, profile sealed in the bundle, universal (`x86_64 arm64`) | 4.3 MB | ✅ |
+| B — `archive` + `-exportArchive` | same | 3.8 MB | ✅ |
+| ad-hoc fallback | `adhoc`, no entitlements | 5.7 MB | ✅, without a working secret store |
+
+Both signed routes were run on 2026-08-24 and the resulting app launched. That
+matters more than it sounds: the failure this task spent its time on produced a
+bundle `codesign` called *valid on disk* and the kernel then killed, so the only
+check that distinguishes a good build from that one is starting it.
+
+Comparing the two routes is also how the strip settings in `build_unsigned` were
+found: `archive` strips the installed product and a plain `build` does not, which
+was about 2 MB of symbols on a 4 MB download until route A was told to do the
+same.
+
+**Notarisation is the one step never run to completion here**, and it is the
+last one. Everything either side of it is exercised.
 
 ## Redistributing the framework at all
 

@@ -159,6 +159,46 @@ fi
 info "generating the project"
 xcodegen generate
 
+# Shared by the two paths that do their own signing. `CODE_SIGNING_ALLOWED=NO`
+# is how CI already builds (see .github/workflows/ci.yml): entitlements are what
+# make xcodebuild demand a profile, and it demands one even to sign ad-hoc.
+#
+# The two strip settings are what `archive` does and a plain `build` does not,
+# and the difference is about 2 MB of symbols on a 4 MB download — noticed by
+# comparing the two routes' output rather than by reading about it.
+build_unsigned() {
+    xcodebuild build \
+        -project Currawong.xcodeproj \
+        -scheme Currawong \
+        -configuration Release \
+        -destination 'platform=macOS' \
+        -derivedDataPath "${DERIVED}" \
+        CODE_SIGNING_ALLOWED=NO \
+        DEPLOYMENT_POSTPROCESSING=YES \
+        STRIP_INSTALLED_PRODUCT=YES
+
+    mkdir -p "${EXPORT_DIR}"
+    APP="${EXPORT_DIR}/Currawong.app"
+    rm -rf "${APP}"
+    # Copied out of DerivedData so the thing signed, verified and zipped is one
+    # directory nothing else writes to.
+    ditto "${DERIVED}/Build/Products/Release/Currawong.app" "${APP}"
+    [[ -d "${APP}" ]] || die "no app at ${APP}"
+}
+
+# Signs the nested code, then the bundle. **Inside out**, because a bundle's
+# signature seals its nested code and an outer signature made first is stale
+# immediately. `--deep` would do it in one call and is discouraged for exactly
+# the reason it matters here: it applies the *same* entitlements to everything it
+# touches, and the frameworks must have none.
+sign_nested() {
+    while IFS= read -r nested; do
+        note "$(basename "${nested}")"
+        codesign --force --timestamp --options runtime --sign "$1" "${nested}"
+    done < <(find "${APP}/Contents/Frameworks" -maxdepth 1 -mindepth 1 \
+        \( -name '*.framework' -o -name '*.dylib' \) 2>/dev/null || true)
+}
+
 info "building Currawong for macOS"
 rm -rf "${DERIVED}" "${ARCHIVE}.xcarchive" "${EXPORT_DIR}"
 
@@ -184,16 +224,91 @@ rm -rf "${DERIVED}" "${ARCHIVE}.xcarchive" "${EXPORT_DIR}"
 # So `com.apple.security.cs.*` needs no profile and the keychain group does. An
 # earlier version of this script signed the bundle directly with codesign to
 # avoid profiles altogether; it produced an app that passed every check here and
-# died on launch. Hence `archive` plus `-exportArchive`, which is Apple's own
-# path for this and which fetches, or creates, the Developer ID profile and
-# embeds it. The static check after the export is there so that this specific
-# failure can never be silent again.
+# died on launch.
+#
+# **Two ways to get a profile, and they suit different places.**
+#
+#   1. `archive` plus `-exportArchive` with method `developer-id`, which fetches
+#      or creates the profile and embeds it. Wants a signed-in Xcode or an App
+#      Store Connect API key. This is the default, and the right thing on a
+#      laptop where Xcode is signed in anyway.
+#
+#   2. A profile handed to us as a file (`MACOS_PROVISIONING_PROFILE`), embedded
+#      and signed directly. What CI wants when the credentials to hand are a
+#      certificate and an app-specific password rather than an API key: neither
+#      the private key nor the profile can be *fetched* with an Apple ID and an
+#      app-specific password, so both are files either way, and once the profile
+#      is a file there is nothing left for an API key to do. A Developer ID
+#      profile is also long-lived — the one this was built against expires in
+#      2044 — so it is not a thing to renew every year.
+#
+# The static check after either route is there so that a missing profile can
+# never be silent again.
 
 if [[ -n "${IDENTITY}" ]]; then
     TEAM_ID="$(sed -n 's/^ *DEVELOPMENT_TEAM: *\([A-Z0-9]*\).*/\1/p' project.yml | head -1)"
     [[ -n "${TEAM_ID}" ]] || die "could not read DEVELOPMENT_TEAM from project.yml"
     note "team ${TEAM_ID}"
 
+    # The expanded entitlements both signing routes need. `$(AppIdentifierPrefix)`
+    # is a placeholder the signing phase normally fills in from the profile; when
+    # we sign the bundle ourselves it is filled in here. It expands to the team
+    # identifier and a dot.
+    entitlements="${REPO_ROOT}/build/Currawong-signing.entitlements"
+
+    make_entitlements() {
+        sed "s/\$(AppIdentifierPrefix)/${TEAM_ID}./g" \
+            Sources/Currawong/Currawong-macOS.entitlements > "${entitlements}.raw"
+        # Through plutil, which drops the comments. codesign parses entitlements
+        # with AMFI's XML reader, which is stricter than most: it rejected this
+        # file outright over a double hyphen inside a comment, reporting only
+        # "AMFIUnserializeXML: syntax error near line 48". This makes that class
+        # of failure impossible rather than fixed — what codesign sees is a plist
+        # with no comments in it at all.
+        plutil -convert xml1 -o "${entitlements}" "${entitlements}.raw" \
+            || die "Currawong-macOS.entitlements is not a valid plist"
+        rm -f "${entitlements}.raw"
+        grep -q "${TEAM_ID}.au.charlesmartin.currawong" "${entitlements}" \
+            || die "the keychain access group did not expand — check Currawong-macOS.entitlements"
+        grep -q 'disable-library-validation' "${entitlements}" \
+            || die "the library-validation entitlement is missing, and docs/LICENSING.md explains why it is there"
+    }
+fi
+
+# Route 2: a profile we were handed. Checked before the build so a wrong path
+# costs no minutes.
+if [[ -n "${IDENTITY}" && -n "${MACOS_PROVISIONING_PROFILE:-}" ]]; then
+    [[ -f "${MACOS_PROVISIONING_PROFILE}" ]] \
+        || die "MACOS_PROVISIONING_PROFILE is set but ${MACOS_PROVISIONING_PROFILE} is not a file"
+
+    # A profile that does not authorise the keychain group is the SIGKILL above
+    # wearing a different hat, so it is rejected now rather than shipped.
+    profile_ents="$(security cms -D -i "${MACOS_PROVISIONING_PROFILE}" 2>/dev/null || true)"
+    grep -q 'keychain-access-groups' <<<"${profile_ents}" \
+        || die "${MACOS_PROVISIONING_PROFILE} does not authorise keychain-access-groups.
+     The app claims that entitlement, so macOS would kill it on launch. Use a
+     Developer ID profile for au.charlesmartin.currawong."
+    grep -q "${TEAM_ID}" <<<"${profile_ents}" \
+        || die "${MACOS_PROVISIONING_PROFILE} is not for team ${TEAM_ID}"
+    note "profile $(sed -n 's/.*<key>Name<\/key>//p' <<<"${profile_ents}" | head -1 | sed 's/[[:space:]]*<string>\(.*\)<\/string>.*/\1/')"
+
+    info "building unsigned, to sign with the supplied profile"
+    build_unsigned
+
+    # Embedded *before* signing, so the app's signature seals it. A profile
+    # dropped in afterwards is not part of the signature and does not count.
+    cp "${MACOS_PROVISIONING_PROFILE}" "${APP}/Contents/embedded.provisionprofile"
+
+    make_entitlements
+
+    info "signing with ${IDENTITY}"
+    sign_nested "${IDENTITY}"
+    note "Currawong.app"
+    codesign --force --timestamp --options runtime \
+        --entitlements "${entitlements}" \
+        --sign "${IDENTITY}" "${APP}"
+
+elif [[ -n "${IDENTITY}" ]]; then
     # A fresh CI runner has no Apple ID signed in, so an App Store Connect API
     # key is how `-allowProvisioningUpdates` authenticates. Locally, Xcode's own
     # accounts cover it and these are unset.
@@ -280,26 +395,10 @@ else
     # honest shape of a build nobody should be handed, and the read-me this
     # packages says so.
     info "building unsigned (no Developer ID identity)"
-    xcodebuild build \
-        -project Currawong.xcodeproj \
-        -scheme Currawong \
-        -configuration Release \
-        -destination 'platform=macOS' \
-        -derivedDataPath "${DERIVED}" \
-        CODE_SIGNING_ALLOWED=NO
-
-    mkdir -p "${EXPORT_DIR}"
-    APP="${EXPORT_DIR}/Currawong.app"
-    rm -rf "${APP}"
-    ditto "${DERIVED}/Build/Products/Release/Currawong.app" "${APP}"
+    build_unsigned
 
     info "signing ad-hoc"
-    # Inside out: a bundle's signature seals its nested code, so the framework
-    # is signed first or the outer signature is stale the moment it is made.
-    while IFS= read -r nested; do
-        codesign --force --sign - "${nested}"
-    done < <(find "${APP}/Contents/Frameworks" -maxdepth 1 -mindepth 1 \
-        \( -name '*.framework' -o -name '*.dylib' \) 2>/dev/null || true)
+    sign_nested -
     codesign --force --sign - "${APP}"
 fi
 

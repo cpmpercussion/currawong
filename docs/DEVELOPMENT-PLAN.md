@@ -1437,12 +1437,26 @@ cannot be modified at all, so the iOS question stands exactly where it did.
 **Not in scope:** whether the app is *ready*. `BU-7`, `BU-10` and `BU-18` are
 open, and the read-me the download carries says what it is.
 
-**Unverified at hand-off:** the export and notarise legs have not run to
-completion anywhere. Locally the export fails at *No Accounts* — a stale Apple
-ID token in Xcode, which the script now names and tells you to fix — and CI
-needs the secrets in `LICENSING.md`. Everything before and after those two
-steps is exercised: the unsigned build, the ad-hoc path, Developer ID signing of
-the bundle, the licence checks against the built app, and the packaging.
+**Unverified at hand-off: notarisation, and only that.** Both signing routes
+have now been run end to end and the resulting apps launch — Developer ID chain
+to the Apple Root CA, secure timestamp, hardened runtime, profile sealed in the
+bundle, universal. Which is the check that counts, because the failure above
+produced something `codesign` called *valid on disk* and the kernel killed.
+
+**Two ways to sign, because CI and a laptop want different things.** The default
+archives and exports, which fetches the profile and wants a signed-in Xcode or an
+App Store Connect API key. `MACOS_PROVISIONING_PROFILE` instead takes a profile
+as a file and signs directly. The second is what CI wants when the credentials to
+hand are a certificate and an app-specific password: neither the private key nor
+a profile can be *fetched* with those, so both are files regardless, and once the
+profile is a file there is nothing left for an API key to do. A Developer ID
+profile is long-lived — the one this was built against expires 2044 — so it is
+not a yearly chore. `LICENSING.md` has the table of which credential answers
+which question.
+
+Comparing the two routes is also what turned up the missing strip settings:
+`archive` strips the installed product and a plain `build` does not, worth about
+2 MB of symbols on a 4 MB download.
 
 **On credentials**, since the two legs want different ones: an app-specific
 password covers notarisation and nothing else. `xcodebuild

@@ -74,6 +74,7 @@ jobs:
         env:
           CERT: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
         run: |
           if [ -n "$CERT" ]; then
             echo "signing=true" >> "$GITHUB_OUTPUT"
@@ -85,9 +86,17 @@ jobs:
             echo "asckey=true" >> "$GITHUB_OUTPUT"
           else
             echo "asckey=false" >> "$GITHUB_OUTPUT"
-            if [ -n "$CERT" ]; then
-              echo "::warning::No ASC_KEY_P8 secret. Signing needs a provisioning profile and a runner has no Apple ID to fetch one with, so the export will fail. See docs/LICENSING.md."
-            fi
+          fi
+          if [ -n "$PROFILE" ]; then
+            echo "profile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Signing needs a provisioning profile, and a runner has no Apple ID to
+          # fetch one with, so one of the two has to be here.
+          if [ -n "$CERT" ] && [ -z "$ASC_KEY_P8" ] && [ -z "$PROFILE" ]; then
+            echo "::error::A certificate but no way to get a provisioning profile. Set MACOS_PROVISIONING_PROFILE (simplest) or ASC_KEY_P8. Without one the app is signed and then killed on launch — see docs/LICENSING.md."
+            exit 1
           fi
 
       - name: Import the Developer ID certificate
@@ -140,8 +149,24 @@ jobs:
           chmod 600 "$path"
           echo "path=$path" >> "$GITHUB_OUTPUT"
 
+      # The other half of signing, and the cheaper half to supply: a Developer ID
+      # profile is a file, it is long-lived (the one this was developed against
+      # expires in 2044), and unlike the API key it does one job you can see. It
+      # is embedded in the bundle before signing so the signature seals it.
+      - name: Install the provisioning profile
+        if: steps.secrets.outputs.signing == 'true' && steps.secrets.outputs.profile == 'true'
+        id: profile
+        env:
+          PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          path="$RUNNER_TEMP/currawong.provisionprofile"
+          echo "$PROFILE" | base64 --decode > "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
       - name: Build and package
         env:
+          MACOS_PROVISIONING_PROFILE: ${{ steps.profile.outputs.path }}
           ASC_KEY_PATH: ${{ steps.asckey.outputs.path }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
