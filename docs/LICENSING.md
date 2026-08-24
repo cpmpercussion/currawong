@@ -163,6 +163,27 @@ routes, both supported:
 
 **Route A — certificate and profile as files.** Four secrets, no API key.
 
+The two that need care are set by `scripts/set-release-secrets.sh`, which
+exports the identity to a temporary `.p12` under a generated password, pipes
+both into `gh secret set` so neither reaches a shell history or a process list,
+prompts for the Apple ID and app-specific password without echoing them, and
+deletes the export on the way out including on failure. macOS will ask you to
+authorise the key export — that prompt is why it cannot run unattended.
+
+```sh
+scripts/set-release-secrets.sh
+```
+
+The other two are not sensitive and were set directly:
+
+```sh
+base64 -i ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/<uuid>.provisionprofile \
+  | gh secret set MACOS_PROVISIONING_PROFILE
+printf EDH387FRHA | gh secret set NOTARY_TEAM_ID
+```
+
+For reference, what each one is:
+
 | Secret | How to produce it |
 |---|---|
 | `MACOS_CERTIFICATE_P12` | Keychain Access → your *Developer ID Application* identity → Export as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
