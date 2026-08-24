@@ -58,6 +58,15 @@ jobs:
           brew list cmake >/dev/null 2>&1 || brew install cmake
           scripts/build-codec2-xcframework.sh
 
+      # **APP-26.** Cheap, and it guards a condition on the right to distribute
+      # rather than a style rule: that the versions the About screen claims match
+      # the artefacts they describe, that Codec2 still ships as a dynamic library
+      # with its licence text, and that the notices the LGPL and libgsm require
+      # are still in the source. Runs on every push, so drift is caught by the
+      # commit that causes it rather than by a release. See docs/LICENSING.md.
+      - name: Licence notices
+        run: scripts/check-licence-notices.sh
+
       # Resolves swift-hamvoip from its tag over the network; no sibling
       # checkout is involved since the dependency became versioned.
       - name: Generate the project

@@ -10,6 +10,8 @@ Sources/CurrawongLiveActivity/Info.plist
 .build/
 DerivedData/
 build/
+# APP-26: the packaged macOS download and the Codec2 source tarball beside it.
+dist/
 
 # Codec2.xcframework is built by scripts/build-codec2-xcframework.sh and never
 # committed: 7.6 MB of LGPL-2.1 binary, and redistributing a third-party binary

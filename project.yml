@@ -82,6 +82,7 @@ targets:
           - Info.plist
           # Consumed by the signing phase, not copied into the bundle.
           - Currawong.entitlements
+          - Currawong-macOS.entitlements
       # Compiled into the app *and* into the widget extension, which are two
       # processes that have to agree on the archived shape of the Live Activity's
       # state. A shared source directory rather than a framework target: it is
@@ -225,6 +226,17 @@ targets:
         # keychain `KeychainSecretStore` asks for, and a no-op restatement of
         # the implicit group on iOS — see the comment in the file itself.
         CODE_SIGN_ENTITLEMENTS: Sources/Currawong/Currawong.entitlements
+
+        # **APP-26.** macOS gets a superset: the same keychain group plus
+        # `com.apple.security.cs.disable-library-validation`, without which the
+        # hardened runtime a notarised build requires refuses to load a
+        # Codec2.framework the user built themselves — which is the substitution
+        # LGPL-2.1 §6 exists to permit, and the whole basis on which the Mac
+        # build is distributable outside the App Store. Conditioned on the SDK
+        # for the same reason LD_RUNPATH_SEARCH_PATHS above is: one
+        # multiplatform target, and a `cs.*` entitlement means nothing to iOS.
+        # See docs/LICENSING.md.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Sources/Currawong/Currawong-macOS.entitlements
     scheme:
       testTargets:
         - CurrawongTests

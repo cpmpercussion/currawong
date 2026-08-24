@@ -48,16 +48,26 @@ binary. That is why `project.yml` declares it `embed: true, codeSign: true`
 Do not add `-force_load` or `-all_load` for it, and do not convert it to a
 static link: either would pull LGPL objects into the app binary.
 
-Still outstanding: the app should surface an acknowledgements screen naming
-Codec2 and its licence. That is not done yet.
+The acknowledgements screen naming Codec2 and its licence exists as of
+**APP-26**: `Settings → About`, from `Sources/Currawong/Acknowledgements.swift`.
+The macOS build distributed outside the App Store additionally makes the
+substitution §6 exists to permit performable, and that was measured rather than
+asserted. See [`LICENSING.md`](LICENSING.md), which is now the place for all of
+this; what stays here is the mechanics of building the framework.
 
-### OQ-6 is open
+### OQ-6 is open — for the App Store, and only there
 
 Shipping Codec2 as a dynamic framework satisfies the letter of LP-4, but a
 signed iOS app cannot have its framework substituted by the user, which is
-precisely what LGPL §6 relinking exists to permit. This is a licensing
-judgement the maintainer owns, it is unresolved, and it wants deciding *before*
-App Store submission rather than after.
+precisely what LGPL §6 relinking exists to permit. That remains a licensing
+judgement the maintainer owns, unresolved, and wanting a decision *before* App
+Store submission rather than after.
+
+**APP-26 narrowed it rather than answering it.** On the directly distributed Mac
+build the substitution is genuinely performable — replace the framework,
+re-sign, launch, all three confirmed working — so for that channel §6 is
+satisfied rather than argued about. Nothing about it helps inside an App Store
+bundle, which cannot be modified at all. `LICENSING.md` has the measurements.
 
 ## Building it
 

@@ -11,6 +11,8 @@
 #   make test         run the unit tests on an iOS simulator
 #   make test-macos   run the unit tests on macOS
 #   make resolved     refresh the committed Package.resolved pin (Xcode Cloud)
+#   make licences     check the licence notices against what is shipped (APP-26)
+#   make release-macos  build, sign and package the Mac download (APP-26)
 #   make clean        remove generated project and build output
 #   make distclean    ...and the Codec2 framework and its build tree
 #
@@ -59,7 +61,7 @@ CODEC2 := Codec2.xcframework
 # The dependency pin Xcode Cloud reads; see the `resolved` target.
 PINNED_RESOLVED := ci_scripts/Package.resolved
 
-.PHONY: all generate codec2 build build-macos test test-macos resolved clean distclean simulator
+.PHONY: all generate codec2 build build-macos test test-macos resolved licences release-macos clean distclean simulator
 
 all: build test
 
@@ -113,12 +115,34 @@ resolved: $(PROJECT)
 	   $(PINNED_RESOLVED)
 	@echo "Refreshed $(PINNED_RESOLVED) — commit it."
 
+# **APP-26.** The licence claims, checked against the artefacts they describe.
+# Most of it needs no build; the Codec2 checks are skipped rather than failed
+# when the framework is absent, so this is safe on a fresh clone. CI runs the
+# same script on every push, and so does `release-macos` before it packages
+# anything — those checks are conditions on the right to distribute, so the
+# moment to fail is before an artefact exists to attach. See docs/LICENSING.md.
+licences:
+	scripts/check-licence-notices.sh
+
+# **APP-26.** The macOS download: builds, signs, notarises and packages the app
+# together with the licence texts and the corresponding Codec2 source.
+# `--identity auto` uses whatever Developer ID is in your keychain; with none it
+# produces an ad-hoc build, which tests the packaging and must not be handed to
+# anybody. `.github/workflows/release-macos.yml` calls this same script, so a
+# release is reproducible on your own machine.
+#
+#   make release-macos                      # ad-hoc, or your Developer ID
+#   make release-macos NOTARISE=--notarise  # ...and notarise (needs NOTARY_*)
+NOTARISE ?=
+release-macos:
+	scripts/package-macos-release.sh --identity auto $(NOTARISE)
+
 # Prints the simulator `make test` would pick, for when it picks a surprising one.
 simulator:
 	@echo '$(SIMULATOR)'
 
 clean:
-	rm -rf $(PROJECT) $(DERIVED_DATA) build
+	rm -rf $(PROJECT) $(DERIVED_DATA) build dist
 
 # Separate from `clean` because rebuilding the framework costs about four
 # minutes and a codec2 checkout, and almost nothing you would run `clean` for
