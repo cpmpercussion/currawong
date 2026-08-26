@@ -1030,10 +1030,31 @@ final class SessionHarness {
 /// Polls until a condition holds, so a test never has to guess how many
 /// `Task.yield()`s an `AsyncStream` hand-off takes. Fails the test on timeout
 /// rather than hanging the suite.
+///
+/// ## Why the default is 20 seconds and not 5
+///
+/// Because a CI runner can stop scheduling detached work for **fourteen
+/// seconds**, and did. Measured on `main`, run 32959937776, in
+/// `testReplyAudioArrivingDuringTheLingerDefersTheHandback`: the test's own
+/// escalation logged at t=17.812, and the hand-back that follows one linger —
+/// with the linger injected, so the wait was for a `Task.detached` to be
+/// scheduled at all, not for a timer — logged at t=32.060. The test had given
+/// up 9 seconds earlier. The work was not stuck; it was not run.
+///
+/// The host is an app whose launch alone took 7 seconds on that runner, so the
+/// process is doing real audio-session work on a machine with few cores, and
+/// blocking calls on the cooperative pool starve everything scheduled on it.
+/// See `BU-20`.
+///
+/// **A longer timeout costs a passing test nothing** — every predicate here is
+/// polled, so a wait returns as soon as it holds — and costs a failing test
+/// fifteen more seconds before it says so. That is the right way round: a
+/// five-second budget was reporting a scheduling stall as a product fault, and
+/// the diagnosis of a red `main` is worth more than the seconds.
 @MainActor
 func waitUntil(
     _ description: String,
-    timeout: TimeInterval = 5,
+    timeout: TimeInterval = 20,
     file: StaticString = #filePath,
     line: UInt = #line,
     _ predicate: @MainActor () -> Bool

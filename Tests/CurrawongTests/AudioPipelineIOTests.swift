@@ -114,9 +114,49 @@ private struct StubError: Error, CustomStringConvertible {
 /// process, so every PTT press failed with `converterUnavailable` and no amount
 /// of retrying on the same engine could ever succeed.
 final class AudioPipelineIOTests: XCTestCase {
+
+    /// An `AudioPipelineIO` with **the real audio session kept out of it**, and
+    /// a hand-back linger that never elapses.
+    ///
+    /// These seven tests are about engine lifetime and said nothing about
+    /// policy, so they took the initialiser's defaults — which are the real
+    /// `AVAudioSession` and a real three-second linger. On the simulator the
+    /// hand-back's `setCategory` is refused with `'!pri'`, so each of them left
+    /// a **retry chain of up to five attempts, three seconds apart**, running
+    /// past the end of the test that started it: fifteen seconds of blocking
+    /// audio calls on the cooperative thread pool, for tests that never wanted
+    /// a session at all. That is the `!pri` noise smeared across unrelated
+    /// tests in every CI log, and `BU-20`'s best candidate for what stops
+    /// detached work being scheduled on a small runner.
+    ///
+    /// **The linger is a gate that is never opened**, which is what the real
+    /// three seconds was doing here by accident: these tests assume the
+    /// hand-back does *not* complete while they run — `testNoPipelineIsBuilt…`
+    /// asserts that nothing was built, and a completed hand-back on iOS builds
+    /// the replacement engine. An instant linger would break them; expressing
+    /// "this linger does not elapse" as a gate says so out loud.
+    private func makeIO(
+        _ factory: PipelineFactory, discardsEngineOnHandback: Bool? = nil
+    ) -> AudioPipelineIO {
+        let neverElapses = LingerGate()
+        // Passed through only when a test asks, so the platform default — which
+        // is the product's rule, not a number to copy into a test — still
+        // applies everywhere else.
+        if let discardsEngineOnHandback {
+            return AudioPipelineIO(
+                makePipeline: factory.make,
+                applyPolicy: { _ in },
+                listeningLinger: neverElapses.wait,
+                discardsEngineOnHandback: discardsEngineOnHandback)
+        }
+        return AudioPipelineIO(
+            makePipeline: factory.make,
+            applyPolicy: { _ in },
+            listeningLinger: neverElapses.wait)
+    }
     func testFirstCaptureBuildsExactlyOnePipeline() throws {
         let factory = PipelineFactory([])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         try io.startCapture { _ in }
 
@@ -126,7 +166,7 @@ final class AudioPipelineIOTests: XCTestCase {
 
     func testNoPipelineIsBuiltUntilSomethingNeedsOne() {
         let factory = PipelineFactory([])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         // Reading `signals` is what `RadioSession.start()` does at launch, long
         // before the session is configured. It must not instantiate audio
@@ -142,7 +182,7 @@ final class AudioPipelineIOTests: XCTestCase {
     /// where the SF-3 interruption observers come from.
     func testConfigureSessionBuildsTheEngineAndCaptureReusesIt() throws {
         let factory = PipelineFactory([])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         try io.configureSession()
         XCTAssertEqual(factory.built.count, 1)
@@ -156,7 +196,7 @@ final class AudioPipelineIOTests: XCTestCase {
         let poisoned = FakeCapturePipeline(startCaptureError: StubError(description: "0 Hz input"))
         let healthy = FakeCapturePipeline()
         let factory = PipelineFactory([poisoned, healthy])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         try io.startCapture { _ in }
 
@@ -173,7 +213,7 @@ final class AudioPipelineIOTests: XCTestCase {
         let factory = PipelineFactory([first, second])
         // The discard on, explicitly: the third engine below is the iOS
         // hand-back's, and these tests run on macOS, where it is off by default.
-        let io = AudioPipelineIO(makePipeline: factory.make, discardsEngineOnHandback: true)
+        let io = makeIO(factory, discardsEngineOnHandback: true)
 
         do {
             try io.startCapture { _ in }
@@ -205,7 +245,7 @@ final class AudioPipelineIOTests: XCTestCase {
         let poisoned = FakeCapturePipeline(startCaptureError: StubError(description: "0 Hz input"))
         let healthy = FakeCapturePipeline()
         let factory = PipelineFactory([poisoned, healthy])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         var iterator = io.signals.makeAsyncIterator()
 
@@ -221,7 +261,7 @@ final class AudioPipelineIOTests: XCTestCase {
         let poisoned = FakeCapturePipeline(startCaptureError: StubError(description: "0 Hz input"))
         let healthy = FakeCapturePipeline()
         let factory = PipelineFactory([poisoned, healthy])
-        let io = AudioPipelineIO(makePipeline: factory.make)
+        let io = makeIO(factory)
 
         try io.startCapture { _ in }
         io.enqueuePlayback([1, 2, 3])
