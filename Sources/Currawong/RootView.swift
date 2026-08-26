@@ -303,15 +303,6 @@ struct RootView: View {
         #endif
     }
 
-    /// **APP-18.** Whether the connect form is on screen at all.
-    ///
-    /// The other half of the switch ``SessionPane`` makes for the meters and the
-    /// PTT button, and exactly its complement — which is why both come from
-    /// ``SessionPaneLayout`` rather than from a comparison written out twice.
-    private var showsConnectForm: Bool {
-        SessionPaneLayout(connection: session.connection).showsConnectForm
-    }
-
     // MARK: - Regular: split view
 
     /// Mac and iPad. Channels on the left, the radio on the right.
@@ -390,9 +381,32 @@ struct RootView: View {
     ///
     /// The column is still not a scroll view, and that is deliberate: the
     /// status panel and the button that ends a transmission must not be
-    /// scrollable away while one is running. `minHeight` is still a request —
-    /// a window may be made smaller than it — but with the picker out of the
-    /// stack, overflow can no longer cost the operator their way out.
+    /// scrollable away while one is running.
+    ///
+    /// ## Why there is no `minHeight` any more
+    ///
+    /// There was one — 620 points, "what the session pane and a usable amount
+    /// of the tallest pane need" — and it was the BU-12 shape all over again on
+    /// an **iPad mini in landscape**, where the column has around 650 points to
+    /// work with and connecting adds the meters, the PTT button and the link
+    /// button at once. A `minHeight` larger than the window does not scroll and
+    /// does not clip at the bottom: the parent **centres** what it could not
+    /// fit, so the overflow is split between both edges and the status panel —
+    /// the LCD, the first thing in the pane — goes off the top. The operator
+    /// loses the display exactly when a link comes up, which is when they are
+    /// looking at it.
+    ///
+    /// A number cannot be right here, because the column has to hold two panes
+    /// on a Mac window and one on an iPad mini. So the column now takes what it
+    /// is given and lets the stack distribute it: the session pane is rigid and
+    /// keeps its size (the PTT button's own `minHeight` is the floor that
+    /// matters, and it is 190), and what compresses is whichever pane is under
+    /// it — which is a directory or a settings list, both of which scroll.
+    /// Nothing load-bearing is in the part that gives.
+    ///
+    /// The `.session` pane is the other half of the same fix: connected, there
+    /// *is* no pane under the session pane, so on the display where the height
+    /// was tightest the column is holding one thing.
     private var detailColumn: some View {
         VStack(spacing: 0) {
             #if !os(macOS)
@@ -408,17 +422,33 @@ struct RootView: View {
                 .padding(20)
                 .paneColumn()
 
-            Divider()
+            // `.session` is the radio with the column to itself: no divider and
+            // no pane under it, so the meters and the PTT button get the height
+            // a directory would otherwise have taken.
+            //
+            // **Written as one branch below the session pane, not two branches
+            // around it.** The obvious shape — `if .session { pane } else {
+            // pane; Divider(); content }` — puts ``SessionPane`` in two arms of
+            // a conditional, which is two view identities to SwiftUI, so moving
+            // the picker between Radio and anything else would tear the pane
+            // down and build it again. ``PushToTalkButton``'s
+            // `onDisappear { onRelease(.viewDisappeared) }` would fire on the
+            // way past: **changing pane while keyed would unkey the radio**,
+            // with the button still on screen the whole time. Safe, and wrong —
+            // the tab layout unkeys on a tab change because the button really
+            // does leave, and here it does not. One position in the stack keeps
+            // one identity.
+            if effectiveDetailPane != .session {
+                Divider()
 
-            detailContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                detailContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        // Overflow still goes off the bottom rather than being shared between
-        // both edges. Nothing load-bearing is down there any more, but a pane
-        // clipped symmetrically reads as a rendering fault.
+        // Overflow goes off the bottom rather than being shared between both
+        // edges — a pane clipped symmetrically reads as a rendering fault, and
+        // the edge it would be clipped at is the one the status panel is on.
         .frame(maxHeight: .infinity, alignment: .top)
-        // What the session pane and a usable amount of the tallest pane need.
-        .frame(minHeight: 620)
         #if os(macOS)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -440,7 +470,7 @@ struct RootView: View {
                 get: { effectiveDetailPane },
                 set: { detailPane = $0 })
         ) {
-            ForEach(visibleDetailPanes) { pane in
+            ForEach(detailPanes.panes) { pane in
                 Text(pane.title).tag(pane)
             }
         }
@@ -452,6 +482,10 @@ struct RootView: View {
     @ViewBuilder
     private var detailContent: some View {
         switch effectiveDetailPane {
+        // Drawn by the column itself, expanded — see `detailColumn`. Reaching
+        // here would mean the session pane was on screen twice.
+        case .session:
+            EmptyView()
         case .connect:
             ScrollView {
                 connectForm
@@ -489,70 +523,20 @@ struct RootView: View {
         }
     }
 
-    /// The detail column's secondary panes.
-    private enum DetailPane: String, CaseIterable, Identifiable, Hashable {
-        case connect
-        case keypad
-        case stations
-        case reflectors
-        case setup
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .connect: return "Connect"
-            case .keypad: return "Keypad"
-            case .stations: return "Stations"
-            case .reflectors: return "Reflectors"
-            case .setup: return "Settings"
-            }
-        }
+    /// The panes this mode and this connection state offer, and the picker's
+    /// order for them. See ``DetailPaneSet``, which is where the decision — and
+    /// the reason a connect lands on ``DetailPane/session`` rather than on
+    /// whatever the mode's first optional pane happens to be — actually lives.
+    private var detailPanes: DetailPaneSet {
+        DetailPaneSet(connection: session.connection, mode: session.settings.mode)
     }
 
-    /// Which panes the current mode has. Same conditions as the tabs: no keypad
-    /// without a DTMF path (``RadioMode/sendsDTMF``), and each of the two
-    /// directories only in the mode it belongs to. They are separate panes
-    /// rather than one that changes contents because they are separate
-    /// networks — nothing in an EchoLink listing means anything to M17 — and a
-    /// pane whose title stayed put while everything under it changed would
-    /// suggest otherwise.
-    private var visibleDetailPanes: [DetailPane] {
-        DetailPane.allCases.filter { pane in
-            switch pane {
-            case .keypad: return session.settings.mode.sendsDTMF
-            case .stations: return session.settings.mode == .echoLink
-            case .reflectors: return session.settings.mode == .m17
-            // **APP-18.** The form is the disconnected state's pane, and only
-            // that state's: see ``showsConnectForm``. It leaves the picker
-            // rather than staying in it showing nothing, because a pane that is
-            // offered and then turns out to be a wall of greyed fields is worse
-            // than one that is not offered.
-            case .connect: return showsConnectForm
-            case .setup: return true
-            }
-        }
-    }
-
-    /// The selection, resolved against what this mode and this connection state
-    /// actually offer.
-    ///
-    /// Changing mode can take the selected pane away, and since APP-18 so can
-    /// connecting — the selection is state and neither of those is — so it is
-    /// corrected on read rather than mutated from an `onChange`. There is then
-    /// no frame in which the picker points at a pane that is not there, and the
-    /// stored choice comes back when its pane does: connect while the form is
-    /// showing and the picker moves on; disconnect and it is showing again.
-    ///
-    /// The fallback is the first pane there is, which is `.connect` whenever
-    /// that exists — the pane that can put the operator back on a working link —
-    /// and otherwise the leftmost of what a live link has: the keypad for a mode
-    /// that sends DTMF, then the directory, then Settings, which is always
-    /// there. So the list is never empty and the picker never has nothing to
-    /// select.
+    /// The selection, resolved against what is actually on offer. Resolved on
+    /// read rather than mutated from an `onChange`, because a mode change and a
+    /// connect can both take the selected pane away and neither of them is
+    /// state: see ``DetailPaneSet/resolving(_:)``.
     private var effectiveDetailPane: DetailPane {
-        guard !visibleDetailPanes.contains(detailPane) else { return detailPane }
-        return visibleDetailPanes.first ?? .setup
+        detailPanes.resolving(detailPane)
     }
 
     // MARK: - Shared pieces

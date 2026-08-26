@@ -105,8 +105,28 @@ final class ViewHost {
     }
 
     /// The hosted view's root, for a test that needs to walk the platform view
-    /// tree. Only `ChannelListContextMenuTests` does, and only on macOS.
+    /// tree — `ChannelListContextMenuTests` on macOS, and the sizing tests on
+    /// both, where what is being measured is the frame SwiftUI handed the
+    /// platform rather than anything SwiftUI will answer a question about.
     #if os(macOS)
     var contentView: NSView { hosting }
+    #else
+    var contentView: UIView { hosting.view }
+    #endif
+
+    /// What the hosted view **asks** for, as opposed to what it got — the
+    /// number a `minHeight` larger than the window shows up in. See
+    /// `DetailColumnSizingTests`, and the note in ``WindowSizingTests`` about
+    /// why the ask is not always the fault.
+    ///
+    /// **macOS only, deliberately.** The UIKit equivalent —
+    /// `UIHostingController.sizeThatFits(in:)` — answers with the *scene's*
+    /// geometry for a controller attached to the test host's window, not with
+    /// the view's own demand: on an iPad Pro simulator it returned the same
+    /// 716.5 for every mode, every connection state, and both sides of a fix
+    /// that moved this number by 240 points on macOS. It is not that the
+    /// number is unavailable there; it is that it does not mean this.
+    #if os(macOS)
+    var fittingHeight: CGFloat { hosting.fittingSize.height }
     #endif
 }
