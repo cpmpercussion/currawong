@@ -136,6 +136,8 @@ keep treating the app as unproven on air.
 | BU-18 | **On macOS the route stays on HFP for the rest of the session after the first over, and the Q2L's red LED never lights at all** — so receive audio is 16 kHz from the first transmit onwards, and the operator has no TX indicator on the handset | **Measured 2026-08-23** while confirming `BU-15`, by polling CoreAudio through an over (`kAudioDevicePropertyNominalSampleRate` and `…IsRunningSomewhere` on the default devices, 50 ms). SCO **does** come up: the default output swaps 44100 → 16000 Hz **1.065 s after the press**, matching the app's own `sigPrep@957`/`carrier@1229`, and the input starts running 63 ms later. So the LED is **not** tracking SCO on this accessory, and `BLUETOOTH-AUDIO.md`'s claim that it therefore makes a usable TX indicator on macOS is wrong — the operator reported the LED dark while transmitting, and the mic demonstrably working (tapped it, saw signal). ⚠️ **The second finding is the bigger one:** the output stayed at 16000 Hz for **69 s** — across the release, across a second over, and through the idle between them — returning to 44100 only at teardown. macOS is *not* holding SCO only while transmitting, which is the premise the whole iOS-versus-macOS asymmetry rests on (`BLUETOOTH-AUDIO.md`: "a feature, not an inconsistency to be fixed"). Likely cause: `discardsEngineOnHandback` is false on macOS, so the engine keeps its instantiated input unit and CoreAudio keeps the HFP route — i.e. macOS has `BU-17`'s fault too, just without the muted button that made it urgent on iOS. Not investigated further; found while confirming something else. Data: `experiment-data/bu15-2026-08-23/13-macos-coreaudio-poll.log` |
 | BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Data in `experiment-data/bu15-2026-08-23/` (outside the repo, sixteen runs, manifest separated from interpretation). Confirmed on air: one key-down per hold, cold and warm, no notice — on the bare phone (`route=MicrophoneBuiltIn`, 1.03–1.09 s press → carrier cold, 23–31 ms warm) **and with the Q2L as the audio route** (`route=BluetoothHFP`, 0.81 s cold, 23 ms warm), so BU-16's fast path is intact on both. `lastKeyDownRoute` exists because the first Q2L run carried no route field and so could not be checked; see the detail section for what that did and did not establish, and for what was **not** tested — which includes ordinary Bluetooth headphones and the accessory's own button as the PTT source. Residual: the cold over's ~440–500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. ✅ **macOS with the Q2L confirmed 2026-08-23 too**, and it needed one more change: the wait was switched off there by a platform flag, but `startCapture` blocked **798 ms** raising SCO and the configuration change landed **1 ms after the carrier**. The flag is gone — how long the microphone took to open is the evidence that something was raised (cold 421–798 ms, warm 1–35 ms across both platforms), which covers macOS without pretending its policy bookkeeping means anything and stops a Mac on its built-in microphone waiting for a notification nobody will send |
 | BU-19 | **On an iPad, connecting takes the top of the status panel off the screen, and an M17 link lands the operator on the reflector directory** — the detail column's fixed 620-point floor is taller than an iPad mini in landscape has once the transmit controls arrive, and APP-18's fallback picked the first pane left rather than the radio | ✅ **Fixed 2026-08-26.** Two faults, one report. (1) `.frame(minHeight: 620)` on the detail column: a demand larger than the window is neither scrolled nor clipped at the bottom — the parent **centres** it, which is `BU-12`'s mechanism, and the edge the status panel is on is the top. The floor is gone; the column takes what it is given and what compresses is the pane *under* the session pane, which is a directory or a settings list and scrolls. (2) A `session` pane, complementing `connect` the way `SessionPaneLayout`'s two halves already do: connected, the radio has the column to itself and Reflectors is a tap away rather than the default. The pane set moved out of `RootView` into `DetailPaneSet`, which is where the landing is now decided and tested |
+| BU-20 | **`main` has been red since 2026-08-23 and no PR could see it** — four tests in the iOS-simulator step fail intermittently, and that step is skipped on pull requests (`ci.yml`: `if: github.event_name != 'pull_request'`), so every PR was green while the merge that followed it was not | ✅ **Fixed 2026-08-26.** None of the four was a product fault. Three were observation races in the tests — a cascade whose delivery was assumed rather than waited for, and two waits on *transient* state (the 300 ms gap between an SF-3 drop and its repair) that a poll arriving late misses entirely, then spends its whole timeout on. The fourth was a **fourteen-second scheduling stall**: injected linger, no timer involved, and the hand-back logged 3 ms after the test had given up. Fixed by waiting on monotonic instruments instead of transient ones, by making the cascade wait for the session to *handle* each signal, and by a 20 s default timeout with the measurement written next to it. `AudioPipelineIOTests` also stopped taking the real `AVAudioSession` and the real 3 s linger by default, which is where the `!pri` retry chains in every CI log came from |
+| BU-21 | **The `BU-15` preparation gate closes one step before the carrier is up** — a route change handled between `routePreparationInFlight = false` and `isTransmitting = true` is treated as an SF-3 event on a hold with nothing on air, which drops the hold and schedules a repair while the original key-down is still in flight | Open, **found by analysis on 2026-08-26, never observed.** Narrow and self-healing — the transmit work chain serialises, so the carrier comes up and goes down again and the repair keys it back — but the operator-visible result is `BU-15`'s dance, from the one window the `BU-15` fix does not cover. The fix is not obviously "extend the gate": that would swallow a real route change in the window where the carrier is coming up, which is SF-3's business. Wants a decision, not a patch |
 
 ---
 
@@ -2135,3 +2137,120 @@ pane holds one position in the stack and one identity.
 and the tests above cannot see the device's chrome. What is confirmed is the
 suite green on macOS, an iPhone simulator and an iPad Pro simulator, and the
 demand measured on both sides of the change.
+
+### BU-20 — `main` is red, and the failures are in the tests ✅ FIXED 2026-08-26
+
+**Four tests, three causes, no product fault** — and a fifth thing worth as
+much as the fixes: **a pull request cannot see any of this.** `ci.yml` carries
+`if: github.event_name != 'pull_request'` on the `Test (iOS Simulator)` step, by
+a deliberate trade written out above it (four times the cost to gate every PR
+with a run that is mostly view modifiers). The consequence is that the iOS suite
+is only ever exercised on merge, nightly and on demand, so a green PR check and
+a red `main` are the *expected* pair when a fault lives in that step. Four
+nightly runs said so before anyone read them:
+
+| Run | Trigger | Failed |
+|---|---|---|
+| 32651299165 | nightly, 23 Aug | `testTheCascadeDuringPreparationCostsNeitherAKeyDownNorANotice` |
+| 32751300742 | nightly, 24 Aug | `testARouteChangeAfterPreparationStillDropsTransmit` |
+| 32872444133 | nightly, 25 Aug | the above, plus `testReplyAudioArrivingDuringTheLingerDefersTheHandback` |
+| 32959937776 | push (`BU-19` merge) | all of the above, plus `testAWatchdogUnkeyCancelsAResumeAlreadyScheduled` |
+
+A different subset each time, from the same small family. That shape is the
+diagnosis: not a break, a race.
+
+#### 1. The cascade was assumed to have been delivered
+
+`BU15FirstOverTests.cascade(_:on:)` emitted a route change, slept 20 ms, and
+emitted the next. But `emit` yields into an `AsyncStream` and returns — the
+session handles the signal later, on the main actor, when its consumer task is
+scheduled. With a core to spare that is well inside 20 ms. On a loaded runner it
+is not, and the tail of the cascade was handled *after* `settleRoute()` returned
+and `routePreparationInFlight` had been cleared. SF-3 then did what SF-3 does
+with a signal outside preparation: dropped the hold and scheduled a repair. The
+test observed two key-downs, seven unkeys and a safety notice — `BU-15`'s exact
+symptom, produced by the test itself.
+
+It now waits, after each signal, until the session's own
+`routeSignalsDuringPreparation` has counted it. That is what the file's own
+doc comment always claimed ("delivered *and handled* inside the awaited call")
+and what the sleep only hoped for; a signal that never lands during preparation
+is now a named failure rather than a confusing one.
+
+#### 2. Two waits were watching a state that is only briefly true
+
+An SF-3 drop under a held button is followed by a repair 300 ms later, so
+`!client.isTransmitting` is true only inside that gap. A poll that does not land
+in it sees a transmitting client before and after — and then waits out its whole
+timeout reporting that SF-3 never fired, which is what
+`testAWatchdogUnkeyCancelsAResumeAlreadyScheduled` did for five seconds. Both
+waits now use instruments that only ever grow: the client's call log for the
+stop, and `routeSignalsWhileTransmitting` for "the signal was handled, the hold
+dropped and the repair scheduled", which is the precondition that test actually
+needs.
+
+The third, in the same test file, was subtler and reproduced **locally on an
+idle machine**: `waitUntil { client.isTransmitting }` followed by
+`XCTAssertEqual(session.keyDownsInCurrentHold, 2)`. The client is keyed inside
+`link.startTransmit()`; the session counts the key-down when that call *resumes*.
+Waiting on one and asserting the other is a race across a resumption, and it
+lost — 1 instead of 2. It now waits on the counter it asserts.
+
+#### 3. Fourteen seconds in which nothing was scheduled
+
+`testReplyAudioArrivingDuringTheLingerDefersTheHandback` injects its linger, so
+no timer is involved: after `gate.open()` the hand-back is one `Task.detached`
+away. On run 32959937776 the test's own escalation logged at **t=17.812** and
+the deferred hand-back at **t=32.060** — fourteen seconds later, and **3 ms
+after the test had given up**. The work was not stuck. It was not run.
+
+On a runner where the host app alone took 7 seconds to launch, a five-second
+budget is not measuring the product. `waitUntil`'s default is now 20 s, with
+those numbers written next to it: a longer timeout costs a passing test nothing,
+because every predicate is polled, and costs a failing one fifteen more seconds
+before it says so.
+
+**And the likeliest source of the stall got fixed while we were there.** Seven
+tests in `AudioPipelineIOTests` are about engine lifetime and said nothing about
+policy, so they took the initialiser's defaults — the real `AVAudioSession` and
+a real three-second linger. On the simulator the hand-back's `setCategory` is
+refused with `'!pri'`, so each of them left a retry chain of up to five attempts,
+three seconds apart, running past the end of the test that started it: fifteen
+seconds of blocking audio calls on the cooperative thread pool, from tests that
+never wanted a session. That is the `!pri` noise in every CI log, and blocking
+calls on the cooperative pool are exactly what stops detached work being
+scheduled on a machine with few cores. They now inject a no-op policy and a
+linger that never elapses — which is what the real three seconds was doing there
+by accident, since these tests assume the hand-back does not complete while they
+run.
+
+**What was checked before calling it fixed.** The rewritten tests were run
+against a deliberately broken product — the `BU-15` preparation gate removed —
+and they fail. A test that cannot fail is not a fix.
+
+### BU-21 — the preparation gate closes one step early 🔧 OPEN 2026-08-26
+
+**Found by reading, not by watching.** `applyTransmit` clears
+`routePreparationInFlight` as soon as `settleRoute()` returns, and then awaits
+`link.startTransmit()` before setting `isTransmitting = true`. A `.routeChanged`
+handled in between passes both halves of the gate's condition — preparation is
+over, nothing is on air — so `handle(_:)` falls through to
+`resumeAcrossRouteChange()`: the hold is dropped and a repair is scheduled while
+the key-down that caused the route change is *still in flight*. The key-down
+then completes and sets `isTransmitting = true` against a `transmitDesired` that
+the stop has already cleared, and 300 ms later the repair keys down again.
+
+It is narrow — the window is one `await` on a live link — and self-healing,
+because the transmit work chain serialises: the stop's `applyTransmit` waits for
+the key-down's, then unkeys, and the repair follows. What the operator sees
+while it heals is `BU-15`'s dance, from the one window `BU-15`'s fix does not
+cover.
+
+**Not fixed here, deliberately.** The obvious change — hold the gate until the
+carrier is up — swallows a *real* route change in the window where the carrier
+is coming up, and that is SF-3's business, not a test's. The alternative is to
+defer rather than swallow: record that a route change arrived, let the key-down
+finish or abandon, then act on it once. That is a design decision about SF-3's
+behaviour and wants the maintainer's call, on evidence, rather than a patch
+attached to a test fix. Never observed on air; `holdTrace` would show it as
+`sigIdle` between `prepped` and `carrier`.

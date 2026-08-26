@@ -30,22 +30,64 @@ import XCTest
 @MainActor
 final class BU15FirstOverTests: XCTestCase {
 
-    /// Emits `count` route changes from inside `settleRoute()` and gives
-    /// the session's signal task room to consume them — which is the whole
+    /// Emits `count` route changes from inside `settleRoute()`, waiting after
+    /// each one until the session has **handled** it — which is the whole
     /// point: the signals have to be *delivered and handled* inside the awaited
     /// call, the reentrancy discipline the workspace `CLAUDE.md` asks for.
     /// Common-ordering delivery — before the press, or after the key-down —
     /// would miss this entirely.
+    ///
+    /// **It used to sleep 20 ms between signals and hope.** `emit` yields into
+    /// an `AsyncStream` and returns; the session handles the signal later, on
+    /// the main actor, whenever its consumer task is scheduled. On a machine
+    /// with a core to spare that is well inside 20 ms — and on a loaded CI
+    /// runner it is not, so the tail of the cascade was handled *after*
+    /// `settleRoute()` returned and `routePreparationInFlight` had been
+    /// cleared. SF-3 then did what SF-3 does to a signal outside preparation:
+    /// dropped the hold and scheduled a repair, producing the second key-down
+    /// this file exists to assert the absence of. The test failed with `BU-15`'s
+    /// own symptom, on `main`, intermittently, having found nothing.
+    ///
+    /// Waiting on the session's own counter instead of on a clock makes the
+    /// delivery a fact rather than a hope, and turns the interesting case —
+    /// a signal that never lands during preparation at all — into a named
+    /// failure instead of a confusing one.
     private func cascade(
-        _ count: Int, on harness: SessionHarness
+        _ count: Int, on harness: SessionHarness,
+        file: StaticString = #filePath, line: UInt = #line
     ) -> @Sendable () async -> Void {
         let audio = harness.audio
+        let session = harness.session!
         return {
-            for _ in 0..<count {
+            for signal in 1...count {
                 audio.emit(.routeChanged)
-                try? await Task.sleep(nanoseconds: 20_000_000)
+                await Self.waitUntilHandled(signal, by: session, file: file, line: line)
             }
         }
+    }
+
+    /// Waits until the session has counted the `n`th signal of a cascade as
+    /// having arrived during preparation.
+    ///
+    /// Off the main actor by necessity — this runs inside `settleRoute()`,
+    /// which the session is awaiting, so the main actor is free and hopping to
+    /// it is what lets the consumer task run at all.
+    private static func waitUntilHandled(
+        _ n: Int, by session: RadioSession, file: StaticString, line: UInt
+    ) async {
+        // The same twenty seconds `waitUntil` allows, and for the same
+        // reason: the budget has to cover a CI runner that stops scheduling
+        // work, not just one that is busy. See the note there.
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if await MainActor.run(body: { session.routeSignalsDuringPreparation }) >= n {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail(
+            "the session never handled signal \(n) of the cascade as a preparation signal",
+            file: file, line: line)
     }
 
     /// The fault itself. One press, a five-signal cascade landing while the
@@ -145,15 +187,32 @@ final class BU15FirstOverTests: XCTestCase {
         // Nothing is preparing now, so this one is somebody pulling a plug.
         harness.audio.emit(.routeChanged)
 
-        await waitUntil("SF-3 drops transmit") { !harness.client.isTransmitting }
+        // **Waited for on the client's call log, not on `isTransmitting`.**
+        // The drop and the repair are 300 ms apart, and `!isTransmitting` is
+        // true only in that gap: a poll that does not land inside it sees a
+        // transmitting client before and after, waits out the whole five-second
+        // timeout and reports that SF-3 never fired. `calls` only ever grows,
+        // so this cannot be missed by looking a moment too late.
+        await waitUntil("SF-3 drops transmit") {
+            harness.client.calls.contains(.stopTransmit)
+        }
         XCTAssertEqual(harness.session.lastStopReason, .routeChanged)
 
         // And the instrument counts it, which is what makes it an instrument:
         // the operator never let go, so SF-3's repair keys back down, and *that*
         // is the second key-down `BU-15` was about. Here it is a real route
         // change earning one, rather than the app's own escalation.
-        await waitUntil("the hold is repaired") { harness.client.isTransmitting }
-        XCTAssertEqual(harness.session.keyDownsInCurrentHold, 2)
+        //
+        // The wait is on the counter this line is about to assert, because the
+        // client is keyed *before* the session counts it: `startTransmit()` is
+        // awaited, and `keyDownsInCurrentHold += 1` happens when that call
+        // resumes. Waiting on the client and then reading the counter is a race
+        // across that resumption, and it lost — 1 instead of 2, reproduced
+        // locally on an idle machine.
+        await waitUntil("the hold is repaired") {
+            harness.session.keyDownsInCurrentHold == 2
+        }
+        XCTAssertTrue(harness.client.isTransmitting)
     }
 
     /// **The un-cancelled resume.** Each signal of a cascade used to leave its
@@ -168,7 +227,18 @@ final class BU15FirstOverTests: XCTestCase {
         await harness.keyDown()
 
         harness.audio.emit(.routeChanged)
-        await waitUntil("SF-3 drops transmit") { !harness.client.isTransmitting }
+
+        // **Waited for on the instrument, not on the gap.** The signal is
+        // counted, the hold dropped and the repair scheduled in one synchronous
+        // region, so `routeSignalsWhileTransmitting` reaching 1 says all three
+        // have happened — and it only ever grows. Waiting on `!isTransmitting`
+        // instead was waiting on the 300 ms *gap* between the drop and the
+        // repair, which a poll arriving late misses entirely: this test then
+        // spent its whole timeout waiting for a drop that had already happened
+        // and been repaired, which is the five-second failure seen on `main`.
+        await waitUntil("SF-3 drops transmit and schedules a repair") {
+            harness.session.routeSignalsWhileTransmitting == 1
+        }
 
         // Inside the 300 ms settle, so the resume is scheduled and pending.
         harness.session.endTransmit(reason: .watchdogExpired)
