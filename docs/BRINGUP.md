@@ -135,6 +135,7 @@ keep treating the app as unproven on air.
 | BU-17 | **The audio session is never released, so the accessory is held in an HFP call whenever the app is foregrounded** — LED lit with nothing connected, receive audio 16 kHz throughout | **Diagnosed 2026-08-22.** `.playAndRecord` + `.allowBluetooth` keeps *returning* to HFP because the category demands an input route. **Promoted the same evening from "blocks BU-14" to *being* BU-14**: the accessory mutes its own BLE notifications for as long as the call is up, so holding the session is what kills the button. **Third attempt implemented and ✅ VERIFIED ON AIR the same evening** — radio only while capturing, listening otherwise, hand-back on a 3 s linger so SF-3's drop-and-resume converges instead of looping (the first attempt's fault). Two more on-air rounds found and fixed: received audio restarting an input-bearing engine re-raised HFP (the hand-back now discards the engine a capture was attempted on), and the redundant `setActive(true)` was refused with `'!pri'` (the downgrade is category-only, and retries). Ten-plus consecutive overs then cycled cleanly: every press delivered, every hand-back completed, LED red only while keyed. Residual: the escalation dance costs ~1 s of the first over's audio after each hand-back — that is `BU-15`/`BU-16` territory and the RC-13 causes are the tool |
 | BU-18 | **On macOS the route stays on HFP for the rest of the session after the first over, and the Q2L's red LED never lights at all** — so receive audio is 16 kHz from the first transmit onwards, and the operator has no TX indicator on the handset | **Measured 2026-08-23** while confirming `BU-15`, by polling CoreAudio through an over (`kAudioDevicePropertyNominalSampleRate` and `…IsRunningSomewhere` on the default devices, 50 ms). SCO **does** come up: the default output swaps 44100 → 16000 Hz **1.065 s after the press**, matching the app's own `sigPrep@957`/`carrier@1229`, and the input starts running 63 ms later. So the LED is **not** tracking SCO on this accessory, and `BLUETOOTH-AUDIO.md`'s claim that it therefore makes a usable TX indicator on macOS is wrong — the operator reported the LED dark while transmitting, and the mic demonstrably working (tapped it, saw signal). ⚠️ **The second finding is the bigger one:** the output stayed at 16000 Hz for **69 s** — across the release, across a second over, and through the idle between them — returning to 44100 only at teardown. macOS is *not* holding SCO only while transmitting, which is the premise the whole iOS-versus-macOS asymmetry rests on (`BLUETOOTH-AUDIO.md`: "a feature, not an inconsistency to be fixed"). Likely cause: `discardsEngineOnHandback` is false on macOS, so the engine keeps its instantiated input unit and CoreAudio keeps the HFP route — i.e. macOS has `BU-17`'s fault too, just without the muted button that made it urgent on iOS. Not investigated further; found while confirming something else. Data: `experiment-data/bu15-2026-08-23/13-macos-coreaudio-poll.log` |
 | BU-15 | **The first transmit of an over does a visible dance** — press PTT, a pause, the UI flashes red, goes back to not-red, then red and actually transmitting (macOS with the Q2L, where the handset also beeps; and iOS with no accessory at all) | **Diagnosed 2026-08-22, ✅ fixed and confirmed on air 2026-08-23. Three triggers, one mechanism:** keying causes a route change, SF-3 correctly treats it as real, `resumeAcrossRouteChange()` drops transmit and keys back down. On macOS the trigger is the SCO bring-up swapping the A2DP device for the HFP device (44100 → 16000 Hz) and posting `AVAudioEngineConfigurationChange`; on iOS it is `escalateForCapture()`'s `listening` → `radio` category change (BU-17), which needs no Bluetooth. The machinery is working as specified; the operator should not have to watch it. **Not reproducible in the simulator, measured 2026-08-23** (`BU15SessionProbeTests`, iPhone 17 Pro / iOS 26.5, Xcode 26.6): the category change moves the route there — the built-in mic enters and leaves `currentRoute.inputs` on cue — but `AVAudioSession` posts no `routeChangeNotification` for it, nor for `overrideOutputAudioPort` or `setActive`. SF-3 is therefore never triggered, the simulator shows a clean first transmit, and it would report a **false pass on any fix**. Develop the fix against the injected `.routeChanged` signal (`harness.audio.emit`), confirm it on the device. **Traced on air 2026-08-23** (melchior, iPhone 13 Pro / iOS 26.5, M17-CBR module A, **no accessory** — so this is the iOS category-change trigger on its own, as the row above says it should be). One 6.4 s hold, `scripts/bu15-measure.sh`, times relative to the press: `escalateForCapture` at **+0.63 s**, first `key-down on air` at **+0.82 s**, then five `routeChanged` signals in 440 ms, `key-up` at **+1.09 s**, and the second `key-down on air` at **+1.47 s**, steady from there to the release. So: **two key-downs in one hold, one interruption, 385 ms of dead air, and 1.47 s before transmit is stable** — which is the operator-visible dance exactly as described, and the ~1 s BU-17 charged to this row. ⚠️ **`resumes=N` counts scheduled resume *attempts*, not re-keys** — an earlier note here read `resumes=3` as three re-key cycles, which is wrong. Each route change in the cascade schedules its own resume and increments the counter, but `resumeWork` is reassigned without cancelling the previous task, so all three ran and only the first got past `beginTransmit`'s `guard !transmitDesired`; the rest were no-ops. **The cap makes it worse, not safer:** `maximumAutomaticResumes` is 3, the last two signals of the cascade were therefore not resumable, and those take `explain: true` — so the operator gets the "press and hold to transmit again" safety notice **and then the app re-keys itself 115 ms later** off a resume scheduled before the cap was hit. ⚠️ **And the diagnosis was a trigger short.** Opening the microphone instantiates the engine's input audio unit, which posts a route change of its own ~63 ms later — measured 2026-08-23, after a first fix caught the category cascade and the dance survived it. **Fixed by ordering, not by suppression:** escalate, open the microphone, wait for what they disturbed to go quiet, *then* key the far end — nothing is on air for any of it, so SF-3 has nothing to drop and is narrowed nowhere. This reverses `BU-16`'s link-first ordering and loses nothing by it; see the detail section. Data in `experiment-data/bu15-2026-08-23/` (outside the repo, sixteen runs, manifest separated from interpretation). Confirmed on air: one key-down per hold, cold and warm, no notice — on the bare phone (`route=MicrophoneBuiltIn`, 1.03–1.09 s press → carrier cold, 23–31 ms warm) **and with the Q2L as the audio route** (`route=BluetoothHFP`, 0.81 s cold, 23 ms warm), so BU-16's fast path is intact on both. `lastKeyDownRoute` exists because the first Q2L run carried no route field and so could not be checked; see the detail section for what that did and did not establish, and for what was **not** tested — which includes ordinary Bluetooth headphones and the accessory's own button as the PTT source. Residual: the cold over's ~440–500 ms microphone open, which route-conditional policy should remove rather than a shorter wait. ✅ **macOS with the Q2L confirmed 2026-08-23 too**, and it needed one more change: the wait was switched off there by a platform flag, but `startCapture` blocked **798 ms** raising SCO and the configuration change landed **1 ms after the carrier**. The flag is gone — how long the microphone took to open is the evidence that something was raised (cold 421–798 ms, warm 1–35 ms across both platforms), which covers macOS without pretending its policy bookkeeping means anything and stops a Mac on its built-in microphone waiting for a notification nobody will send |
+| BU-19 | **On an iPad, connecting takes the top of the status panel off the screen, and an M17 link lands the operator on the reflector directory** — the detail column's fixed 620-point floor is taller than an iPad mini in landscape has once the transmit controls arrive, and APP-18's fallback picked the first pane left rather than the radio | ✅ **Fixed 2026-08-26.** Two faults, one report. (1) `.frame(minHeight: 620)` on the detail column: a demand larger than the window is neither scrolled nor clipped at the bottom — the parent **centres** it, which is `BU-12`'s mechanism, and the edge the status panel is on is the top. The floor is gone; the column takes what it is given and what compresses is the pane *under* the session pane, which is a directory or a settings list and scrolls. (2) A `session` pane, complementing `connect` the way `SessionPaneLayout`'s two halves already do: connected, the radio has the column to itself and Reflectors is a tap away rather than the default. The pane set moved out of `RootView` into `DetailPaneSet`, which is where the landing is now decided and tested |
 
 ---
 
@@ -2043,3 +2044,94 @@ something else. Before fixing: confirm with a second session, and check whether
 a Mac on its built-in microphone shows the same hold (it should not — nothing to
 hold). The obvious experiment is flipping `discardsEngineOnHandback` on for
 macOS and re-running the poller.
+
+### BU-19 — the iPad column: a clipped status panel and the wrong landing pane ✅ FIXED 2026-08-26
+
+**What an operator sees**, on an iPad mini: connect, and the top of the status
+panel — the LCD — goes off the top of the screen. On M17 the same press also
+leaves them looking at the *reflector directory*, with the radio squeezed into
+the top of the detail column, having just linked to a reflector.
+
+Two faults in one report, and they compound: the second is what makes the column
+tall enough for the first to bite.
+
+**The clipping is `BU-12`'s mechanism on a smaller display.** A view that demands
+more height than its parent has is not clipped at the bottom and does not
+scroll — the parent centres it, and the overflow is split between both edges. The
+demand was `.frame(minHeight: 620)` on the detail column. That number was
+*examined* during BU-12 and cleared on the arithmetic of the display it was found
+on:
+
+> **`.frame(minHeight: 620)`** on the detail column: 620 is less than 866, so it
+> cannot be the demand. It stays as documentation of what the fixed region needs.
+
+Which was true there and is false on an iPad mini in landscape, where 744 points
+of screen become something in the mid-600s once the status bar, the home
+indicator, the transmit strip and the detail column's navigation bar are out —
+and where connecting adds the level meters, the PTT button (a 190-point floor on
+iOS against 120 on macOS) and the link button at once. The overrun is small, a
+couple of dozen points, which is why it reads as the panel having *scrolled* a
+little rather than as a layout fault.
+
+A number cannot be right for both a Mac window and an iPad mini, so there is no
+new number. The column takes what it is given, top-aligned; the session pane is
+rigid and keeps its height; what compresses is whichever pane is below it, and
+those are directories and settings lists, which scroll. Nothing load-bearing is
+in the part that gives.
+
+**The landing pane is APP-18 finishing half a thought.** APP-18 takes the connect
+form out of the picker once there is a link — correctly: connected it is a
+read-only wall of fields. But it gave the connected state no pane of its own, so
+the selection fell to `visibleDetailPanes.first`, which is whatever the mode's
+first *optional* pane happens to be — the reflector directory in M17, the station
+directory in EchoLink, the keypad in AllStarLink.
+
+The fix is the complement APP-18 already had one half of: `connect` is the
+disconnected state's pane, `session` is the connected state's, exactly one of the
+two is ever offered, and `session` sorts ahead of every optional pane so it is
+also what a connect falls back *to*. Selecting it draws the session pane with the
+whole column and nothing under it — which is the iPhone's Session tab, arrived at
+from the other direction.
+
+**Where it lives now.** `RootView`'s three inline computed properties
+(`visibleDetailPanes`, `effectiveDetailPane`, `showsConnectForm`) are one value
+type, `DetailPaneSet`, next to `SessionPaneLayout` and for the same reason: the
+part worth testing is not which panes exist but which one the operator lands on
+when the set changes underneath them, and that was not visible from any one of
+the three. `DetailPaneSetTests` covers the landing in every mode and every
+connection state.
+
+**The regression test, and its limit.** `DetailColumnSizingTests` hosts the real
+`RootView` at 1024×560 — shorter than any iPad, deliberately, because
+reproducing the device would mean guessing at a navigation bar and two safe-area
+insets and the real overrun was small enough to pass by accident. It asserts the
+*demand*: 660 points against a 560-point window with the floor in place, 416.5
+connected and 220.5 disconnected without it.
+
+**It is macOS-only, and the fault was on an iPad.** That is not an oversight:
+`UIHostingController.sizeThatFits(in:)`, for a controller attached to the test
+host's window scene, answers with the scene's geometry rather than the view's. On
+an iPad Pro simulator every case returned the identical 716.5 — every mode, both
+connection states, and both sides of a fix that moves the number by 240 points
+under AppKit. A test that cannot tell the fault from its fix is worse than none,
+so the number is measured where it means something. What it measures — a
+`minHeight` in points — is platform-independent, and iOS is the tighter budget of
+the two by the PTT button's 70 points, so a column that fits on macOS has less
+margin on the device, not more.
+
+**One hazard found while fixing it, before it shipped.** The natural way to
+write "the radio gets the whole column" is a branch around the session pane —
+`if .session { pane } else { pane; Divider(); content }` — and that puts
+`SessionPane` in two arms of a conditional, which is two view identities.
+Changing pane would tear the pane down and rebuild it, `PushToTalkButton`'s
+`onDisappear { onRelease(.viewDisappeared) }` would fire on the way past, and
+**changing pane while keyed would unkey the radio** with the button visible
+throughout. The tab layout unkeys on a tab change for a good reason — the button
+really does leave — and this would have looked like the same rule while being a
+different thing. Written as one conditional *below* the pane instead, so the
+pane holds one position in the stack and one identity.
+
+**Not verified on the device.** There is no iPad mini simulator installed here
+and the tests above cannot see the device's chrome. What is confirmed is the
+suite green on macOS, an iPhone simulator and an iPad Pro simulator, and the
+demand measured on both sides of the change.
