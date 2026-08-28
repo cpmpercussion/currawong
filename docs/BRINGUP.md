@@ -2361,30 +2361,39 @@ all** for three seconds. Reopening a Bluetooth input immediately after closing i
 is its own hazard.
 
 **The hold — `AudioPipelineIO.warmUpHoldTicks`, 17 ticks, 1020 ms past the
-settle — is still argued rather than derived, and here is exactly what is
-unproven.** The 1.6 s warm-up measured above *outlasted* the 1574 ms of silence,
-so it does not separate "opening the device wakes it" from "holding it open until
-audio appears wakes it". If it is the latter, 1020 ms past the settle may be
-short on a cold Bluetooth link — though in the app the settle itself spends up to
-1.2 s on a cold SCO open, so the real total is closer to 2.2 s than to 1.0 s.
+settle — was argued rather than derived, and the argument has since been
+measured.** The question was whether it is the *opening* that wakes the device or
+*holding it open until audio appears*: the 1.6 s warm-up above outlasted the
+1574 ms of silence, so it could not tell the two apart, and if it were the latter
+then 1020 ms would be too short.
 
-The argument for the shorter number: a device opened once delivers immediately on
-the next open **in a different process**, so it is the opening that wakes the
-hardware and the zeros are what that costs whoever pays first.
+It is the opening. Later the same evening, on a cold device
+(`hamvoip-cli experiment input-warm-up`, library PR #54, which exists so this can
+be re-run):
 
-**The measurement that would settle it, for whoever picks this up.** Make the
-Bluetooth headset the default input, leave the machine alone for ~20 minutes so
-the device goes cold, and run a warm-up *shorter* than the silence followed by an
-over. A first over carrying audio in its first frame says the opening is what
-wakes the device and 1020 ms stands; one that does not says the hold has to
-outlast the silence and this number is too small. It wants a cold Bluetooth
-device and so cannot be run on demand or in CI — which is the same reason `BU-2`
-and `BU-15` ended up with on-air evidence rather than a test.
+```
+warm-up (0.8 s):               35 frames,  0 with audio, first frame 198 ms, first audio NEVER
+over, 0.8 s after the warm-up: 75 frames, 67 with audio, first frame 134 ms, first audio 233 ms
+```
 
-**If a silent first over is ever seen again, do not simply raise that number.**
-Establish first whether the warm-up ran at all — `input warmed for …` in the route
-log — and whether the device was still cold when it did. A warm-up that ran and
-did not work is a different fault from one that was too short.
+**The warm-up never saw audio itself** — 35 frames, every one of them zero,
+across its whole 800 ms — and the over that followed carried audio 98 ms in,
+against roughly 1400 ms cold. A warm-up shorter than the silence is enough, so
+1020 ms stands, and in the app it is anyway paid on top of a settle that spends
+most of a second on a cold SCO open.
+
+**One trial, on one device**, and "cold" there was ~13 minutes of idle rather
+than the ~20 used for the first measurement — the warm-up seeing zero audio
+frames across 800 ms is the evidence that it was cold enough to show the fault.
+A second trial on a different Bluetooth input is worth having before the number
+is treated as settled, and is now one command.
+
+**If a silent first over is ever seen again, still do not simply raise the
+number.** Establish first whether the warm-up ran at all — `input warmed for …`
+in the route log — and whether the device was cold when it did.
+
+A warm-up that ran and did not work is a different fault from one that was too
+short.
 
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 

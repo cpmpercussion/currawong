@@ -444,15 +444,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// **Bluetooth** one: a USB webcam is permanently powered and showed nothing
     /// at all, which is why it would not reproduce on demand during the day.
     ///
-    /// **What is unproven is exactly this number.** That 1.6 s warm-up
-    /// *outlasted* the 1574 ms, so it does not separate "opening the device
-    /// wakes it" from "holding it open until audio appears wakes it". If it is
-    /// the latter, 1020 ms would be short on a cold link — though a cold link
-    /// is also one where ``settleRoute()`` spends most of a second before this
-    /// hold begins, so the real total is nearer 2.2 s. The argument for the
-    /// shorter number is that a device opened once delivers immediately on the
-    /// next open **in a different process**, so it is the opening that wakes the
-    /// hardware and the zeros are what that costs whoever pays first.
+    /// **What that pair could not settle was this number**: the 1.6 s warm-up
+    /// *outlasted* the 1574 ms, so it did not separate "opening the device wakes
+    /// it" from "holding it open until audio appears wakes it" — and if it were
+    /// the latter, 1020 ms would be short. A second measurement settled it. On a
+    /// cold device, a **0.8 s warm-up that never saw audio itself** (35 frames,
+    /// every one of them zero) still left the next open carrying audio 98 ms in,
+    /// against roughly 1400 ms cold. It is the opening that wakes the hardware,
+    /// so a hold shorter than the silence is enough — and in this class the hold
+    /// is paid on top of a ``settleRoute()`` that spends most of a second on a
+    /// cold SCO open anyway.
+    ///
+    /// One trial on one device. `hamvoip-cli experiment input-warm-up` exists so
+    /// that a second one is a single command rather than a scratch tool.
     ///
     /// If a silent first over is ever seen again after this, **do not simply
     /// raise this number**: the thing to establish first is whether the
