@@ -2254,3 +2254,127 @@ finish or abandon, then act on it once. That is a design decision about SF-3's
 behaviour and wants the maintainer's call, on evidence, rather than a patch
 attached to a test fix. Never observed on air; `holdTrace` would show it as
 `sigIdle` between `prepped` and `carrier`.
+
+### BU-22 — the first over after the input spins up is silent 🔧 OPEN 2026-08-28
+
+**Watched on air, twice, on macOS.** Connect, key down, speak: no transmit
+meter and nothing at the far end. Release, key down again: normal audio,
+normal meter, and every subsequent over is fine. Observed 2026-08-28 against
+M17-CBR module A, and again in the session that produced `BU-23`.
+
+**The log says which over is different, and why.** The silent one is always
+the one preceded by these two lines; overs 2..n have neither:
+
+```
+audio session escalated to radio for capture
+audio route settled before key-down: 0 route changes in 12 x 60ms
+```
+
+Overs 2..n land inside the 3 s hand-back linger, so `BU-16`'s fast path skips
+escalation and reuses an input that is already running. **The silent over is
+exactly the one where the input device had just been spun up** — and about a
+second elapsed between the escalation and the key-down, so this is not a race
+the existing wait is losing. `settleRoute()` waits for the *route* to stop
+changing, which it had; it does not wait for the device to produce signal.
+
+**Corroborated off the app entirely.** A 30-line scratch tool driving
+`RadioCore.AudioPipeline.startCapture` directly returned 4 full seconds of
+**exact zeros** on its first run, and normal room noise on the next run moments
+later, in a *different process*. So the warm-up is the device's, not the app's
+state, and no amount of app-side bookkeeping will see it as anything but
+silence.
+
+**This is `BU-2`'s shape, one layer down.** That one was the macOS permission
+prompt: nothing had asked, so the first capture attempt raised the dialog and
+that press put no audio on air; the fix moved the ask to connect time, "where
+the operator is already waiting and no over is at stake". The same sentence
+applies here with *device warm-up* in place of *permission*, and the same fix
+applies — this is a second cause of one symptom, and the 2026-08-20 fix could
+not have covered it.
+
+**Fix: warm the input on connect** (the maintainer's call, 2026-08-28). Open
+capture briefly when the session connects, so the device is awake before the
+first key-down, and let the existing linger keep it awake between overs.
+
+Rejected alternative: hold `OnAirGate` closed until the tap delivers a
+non-silent buffer. It fixes the symptom and breaks something real — a
+legitimately quiet start to an over would be swallowed, and an operator whose
+first word is soft would key up into nothing. Silence is not the same thing as
+a dead device, and the gate must not be taught to confuse them.
+
+**Where it goes.** `RadioSession`'s connect path, beside the
+`requestRecordPermission()` call that `BU-2` put there; `AudioIO`
+`prepareForCapture()` is the piece to reuse. Note that `AudioPipeline` reports
+nothing about signal presence, so if the warm-up needs to *verify* rather than
+merely wait, that is a library-side addition (see `RC-14` in the library's
+plan, which touches the same code for a different reason).
+
+### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
+
+**One crash, not reproduced.** `Currawong-2026-08-28-191119.ips`, macOS 26.5.1,
+Debug build against library v0.6.0. `EXC_BAD_ACCESS (SIGSEGV)` at
+`0xffffd3f627b90040`, flagged *possible pointer authentication failure*.
+
+**No frame of ours is in the fault path.** Thread 0, top to bottom:
+
+```
+SerialExecutor._isSameExecutor<A>(_:)          ← crash
+SerialExecutor.isMainExecutor.getter
+swift_task_isCurrentExecutorWithFlagsImpl
+DesignLibrary
+HStack.init(alignment:spacing:content:)
+... SystemSegmentedControl._overrideSizeThatFits ...
+```
+
+A SwiftUI layout pass over a segmented control, asking Swift concurrency
+whether it is on the main executor, dereferencing a pointer with garbage high
+bits. `Currawong.debug.dylib` appears only as the app entry point at the
+bottom. Codec2 and Weebill are nowhere near it.
+
+**What makes it worth a task rather than a shrug** is the 1.5 s before it:
+
+```
+19:11:12.667  key-down on air                                    (third over)
+19:11:13.940  signal routeChanged(engineConfigurationChange) isTransmitting=true
+19:11:13.947  endTransmit reason=routeChanged
+19:11:14.44   SIGSEGV
+```
+
+An `AVAudioEngineConfigurationChange` arrived **mid-transmit** — the operator
+had just changed the default input device, which is what produces one — and the
+process died 400 ms later. `RC-14` in the library's plan records the defect that
+window exposes: the capture chain is never rebuilt on that notification, so for
+the ~7 ms until `endTransmit` removed the tap, a live tap was running against a
+reconfigured engine with a converter and a `channelStride` snapshotted from the
+old format. The stale-stride path is an out-of-bounds *read*.
+
+**Stated honestly: that does not explain this crash.** An out-of-bounds read
+explains a segfault at the read; it does not obviously explain a corrupted
+executor pointer 400 ms later in an unrelated subsystem. And
+`swift_task_isCurrentExecutor` crashes are a known pattern on recent macOS
+SwiftUI. Two candidates, no evidence separating them:
+
+1. Heap corruption originating in the capture path (`RC-14`), surfacing wherever
+   the allocator next handed out the damaged memory.
+2. An OS/toolchain bug in SwiftUI's segmented-control layout, and the timing is
+   a coincidence.
+
+**One more thing in the report, unexplained and possibly unrelated:** thread 12,
+on the `com.apple.root.user-initiated-qos.cooperative` pool, was parked in
+`_pthread_mutex_firstfit_lock_wait` inside `AudioPipeline.enqueuePlayback`
+(`AudioPipeline.swift:1230`), called from `startReceivePump`. Blocking a
+cooperative-pool thread on a mutex is its own hazard, and this repository has
+paid for that class of mistake before — but starvation causes hangs, not
+segfaults, so it is recorded here as an observation rather than a cause.
+
+**How to settle it: an AddressSanitizer build.** `-enableAddressSanitizer YES`,
+then reproduce by switching the default input device mid-over. ASan traps an
+out-of-bounds access at the instant it happens, naming the line, instead of
+leaving us to infer it from a crash in someone else's framework 400 ms later.
+If ASan is silent through several device swaps, candidate 1 is dead and this
+becomes a bug report for Apple.
+
+**Do not fix `RC-14` and close this.** `RC-14` is worth fixing on its own merits
+and should be; whether it caused this crash is a separate question that only the
+ASan run answers. Closing this on the strength of the fix would be assuming the
+thing to be proven.
