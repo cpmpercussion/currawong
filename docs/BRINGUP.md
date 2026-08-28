@@ -2426,4 +2426,49 @@ becomes a bug report for Apple.
 and should be; whether it caused this crash is a separate question that only the
 ASan run answers. Closing this on the strength of the fix would be assuming the
 thing to be proven.
+---
+
+**2026-08-28 — `RC-14` is fixed, this is still open, and candidate 1 is now the
+weaker of the two.** Three things came out of doing that work, none of which is
+the ASan run this entry asks for, and none of which closes it.
+
+**1. The out-of-bounds read is not reachable on this Mac.** The library gained
+`hamvoip-cli experiment capture-swap`, which changes the default input device
+under a live capture — the same action that produced this crash — and reports
+what the pipeline saw. Eight swaps, twice, both under AddressSanitizer, both
+silent: 550 frames and 0 rebuilds as shipped, 530 frames and 8 rebuilds with the
+staleness check forced on (`experiment-data/rc14-capture-swap.txt`, and
+`swift-hamvoip/docs/CLI.md` §12). Zero rebuilds is not the probe failing to fire.
+It is the finding: **the input node reports 44100 Hz de-interleaved for every
+input device on this machine**, including one whose hardware is running at
+48 kHz, and the only thing that moves across a swap is the channel count
+(2 ↔ 1). De-interleaved buffers stride by 1 whatever the channel count, so the
+stale stride — the only unbounded read in that path — **cannot have occurred
+here**. Candidate 1 needs an interleaved input format, and macOS did not hand
+one to an `AVAudioEngine` tap in any configuration tried.
+
+That is evidence, not proof. It does not cover the app's own build, which is
+where the crash happened, and it does not rule out heap corruption from
+somewhere else in that path. But candidate 1's stated mechanism is gone, so the
+weight has shifted to candidate 2.
+
+**2. A crash of exactly this shape came out of an ordinary use-after-free.**
+While writing the probe, `AVAudioEngine().inputNode.outputFormat(forBus: 0)` —
+as one expression, so the engine is released before the format is read —
+segfaulted inside `AVAudioIONodeImpl::GetOutputFormat` with a **bad pointer
+dereference at garbage high bits, reported as a possible pointer authentication
+failure**. That is this crash's signature, from nothing more exotic than an
+object outliving its owner. It says the signature is not diagnostic of anything
+in particular; it is what a dangling Objective-C pointer looks like on arm64e.
+Worth keeping in mind for candidate 2, where the dangling thing would be
+SwiftUI's, not ours.
+
+**3. The ASan run is now one command:** `make asan-macos` builds the sanitized
+macOS app and launches it, with the reproduction (change the default input
+device mid-over) still manual, because it has to be. Below the app, and needing
+nobody on air, is the `capture-swap` probe above — try that first.
+
+**Still open, and still on the same question.** If ASan is silent through
+several device swaps *in the app*, candidate 1 is dead and this becomes a bug
+report for Apple.
 
