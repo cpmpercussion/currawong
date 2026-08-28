@@ -211,7 +211,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
 
         await waitUntil("the route change drops transmit") {
             !harness.client.isTransmitting
@@ -228,7 +228,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
 
         // **The stop is waited for first, and that is not belt and braces.**
         // Waiting straight for `isTransmitting` waits for a condition that is
@@ -259,7 +259,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         harness.session.endTransmit(reason: .released)
         await harness.session.settle()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         try? await Task.sleep(nanoseconds: 500_000_000)
 
         XCTAssertFalse(harness.client.isTransmitting)
@@ -275,7 +275,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         await harness.keyDown()
 
         for _ in 0..<5 {
-            harness.audio.emit(.routeChanged)
+            harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
             await waitUntil("transmit stops") { !harness.client.isTransmitting }
             // Let any resume land before provoking the next change.
             try? await Task.sleep(nanoseconds: 400_000_000)
@@ -297,7 +297,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         harness.session.endTransmit(reason: .watchdogExpired)
         await harness.session.settle()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         try? await Task.sleep(nanoseconds: 500_000_000)
 
         XCTAssertFalse(harness.client.isTransmitting)
