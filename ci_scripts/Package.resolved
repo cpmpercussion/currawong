@@ -15,8 +15,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/cpmpercussion/swift-hamvoip",
       "state" : {
-        "revision" : "e25744568a60c8dbb269b511a58eabe931a27b55",
-        "version" : "0.5.4"
+        "revision" : "e16eec9f06f43285a11dc071fc9ec5c811a1653f",
+        "version" : "0.6.0"
+      }
+    },
+    {
+      "identity" : "weebill",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cpmpercussion/weebill",
+      "state" : {
+        "revision" : "cf5eea79852d732a53b8b195d0aacc6bebce27f8",
+        "version" : "0.1.0"
       }
     }
   ],
