@@ -428,27 +428,31 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// How long the warm-up capture stays open once the route has settled
     /// (`BU-22`), on top of whatever ``settleRoute()`` spends getting there.
     ///
-    /// **This one number is not measured, and says so.** Every other constant
-    /// here came off a hold recorded on melchior; this one could not, because
-    /// the fault will not reproduce on demand — the device that showed it is
-    /// warm again within minutes, and a cold probe on 2026-08-28 delivered room
-    /// noise 283 ms after the first buffer rather than the four seconds of
-    /// zeros `BU-22` recorded. So it is chosen, not derived, and the reasoning
-    /// is the part to check rather than the value:
+    /// **This one number is argued rather than derived, and says so.** Every
+    /// other constant here came off a recorded hold. What was measured for this
+    /// one (melchior, 2026-08-28, `experiment-data/bu22-input-warmup.txt`) is
+    /// the fault and the fix, not the duration:
     ///
-    /// - The observation to beat is **four seconds of exact zeros**, which is
-    ///   far too long to hold a connect on.
-    /// - But the warm-up does not have to *outlast* the silence, only to start
-    ///   it. What the scratch tool showed is that a device which has been
-    ///   opened once delivers immediately on the next open, **in a different
-    ///   process** — so it is the opening that wakes the hardware, and the
-    ///   zeros are what that costs whoever pays it first. This makes the app
-    ///   pay it while the operator is watching a connection progress, rather
-    ///   than into their first over.
-    /// - A second of it is enough to be sure the device really was opened and
-    ///   not merely asked for, and short enough to disappear inside a connect
-    ///   that has a node to dial anyway — which is why the warm-up runs
-    ///   *alongside* that dial rather than in front of it.
+    /// | cold Bluetooth input, this code path | |
+    /// |---|---|
+    /// | warm-up capture | frames from 178 ms, **audio only from 1574 ms** |
+    /// | the next open, 1.5 s later | **audio in the first frame, 151 ms** |
+    ///
+    /// Nearly a second and a half of zeros *with frames arriving the whole
+    /// time* — which is why nothing above the device can tell it from silence —
+    /// and then, after the warm-up, audio immediately. Note that the fault is a
+    /// **Bluetooth** one: a USB webcam is permanently powered and showed nothing
+    /// at all, which is why it would not reproduce on demand during the day.
+    ///
+    /// **What is unproven is exactly this number.** That 1.6 s warm-up
+    /// *outlasted* the 1574 ms, so it does not separate "opening the device
+    /// wakes it" from "holding it open until audio appears wakes it". If it is
+    /// the latter, 1020 ms would be short on a cold link — though a cold link
+    /// is also one where ``settleRoute()`` spends most of a second before this
+    /// hold begins, so the real total is nearer 2.2 s. The argument for the
+    /// shorter number is that a device opened once delivers immediately on the
+    /// next open **in a different process**, so it is the opening that wakes the
+    /// hardware and the zeros are what that costs whoever pays first.
     ///
     /// If a silent first over is ever seen again after this, **do not simply
     /// raise this number**: the thing to establish first is whether the
