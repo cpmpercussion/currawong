@@ -266,7 +266,7 @@ final class RadioSessionActivityTests: XCTestCase {
         // a condition that is already true — transmit has not stopped yet — and
         // asserts on a route change the session has not seen. That reads as a
         // pass and proves nothing.
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
         await harness.settleAll()
@@ -300,7 +300,7 @@ final class RadioSessionActivityTests: XCTestCase {
         // Both waits, in this order, for the reason the tests above give: the
         // recovery condition is already true before the session has seen
         // anything.
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
         await harness.settleAll()
@@ -336,7 +336,7 @@ final class RadioSessionActivityTests: XCTestCase {
 
         // The route change that unkeying itself causes — and the moment the link
         // needs rebuilding.
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the repair is requested") { repairRequests == 1 }
     }
 
@@ -350,7 +350,7 @@ final class RadioSessionActivityTests: XCTestCase {
         harness.session.start()
         await harness.connect()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the repair is requested") { repairRequests == 1 }
         await harness.settleAll()
 
@@ -371,7 +371,7 @@ final class RadioSessionActivityTests: XCTestCase {
         // a condition that is already true — transmit has not stopped yet — and
         // asserts on a route change the session has not seen. That reads as a
         // pass and proves nothing.
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
         await harness.settleAll()
@@ -391,7 +391,7 @@ final class RadioSessionActivityTests: XCTestCase {
         await harness.keyDown()
         let began = harness.activityPresenter.shownState?.holdBegan
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
         await harness.settleAll()
@@ -409,7 +409,7 @@ final class RadioSessionActivityTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         harness.session.endTransmit(reason: .released)
         await harness.settleAll()
@@ -434,7 +434,7 @@ final class RadioSessionActivityTests: XCTestCase {
         await harness.keyDown()
 
         for _ in 0..<5 {
-            harness.audio.emit(.routeChanged)
+            harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
             await waitUntil("transmit stops") { !harness.client.isTransmitting }
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
@@ -453,7 +453,7 @@ final class RadioSessionActivityTests: XCTestCase {
         harness.session.start()
         await harness.connect()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         try? await Task.sleep(nanoseconds: 500_000_000)
         await harness.settleAll()
 
@@ -472,7 +472,7 @@ final class RadioSessionActivityTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
         await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
         harness.session.endTransmit(reason: .watchdogExpired)
         await harness.settleAll()

@@ -60,7 +60,7 @@ final class BU15FirstOverTests: XCTestCase {
         let session = harness.session!
         return {
             for signal in 1...count {
-                audio.emit(.routeChanged)
+                audio.emit(.routeChanged(.oldDeviceUnavailable))
                 await Self.waitUntilHandled(signal, by: session, file: file, line: line)
             }
         }
@@ -185,7 +185,7 @@ final class BU15FirstOverTests: XCTestCase {
         XCTAssertTrue(harness.client.isTransmitting)
 
         // Nothing is preparing now, so this one is somebody pulling a plug.
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
 
         // **Waited for on the client's call log, not on `isTransmitting`.**
         // The drop and the repair are 300 ms apart, and `!isTransmitting` is
@@ -226,7 +226,7 @@ final class BU15FirstOverTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.audio.emit(.routeChanged)
+        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
 
         // **Waited for on the instrument, not on the gap.** The signal is
         // counted, the hold dropped and the repair scheduled in one synchronous

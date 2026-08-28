@@ -682,7 +682,7 @@ final class AudioPipelineIOSettleTests: XCTestCase {
         let clock = ScriptedClock { tick in
             guard cascadeTicks.contains(tick), let io = box.io else { return }
             let target = io.routeChangesObserved + 1
-            pipeline.emit(.routeChanged)
+            pipeline.emit(.routeChanged(.oldDeviceUnavailable))
             // Wait for the forwarder — a detached task — to have counted it.
             // Without this the script would race the thing it is scripting.
             while io.routeChangesObserved < target {
@@ -818,7 +818,7 @@ final class AudioPipelineIOSettleTests: XCTestCase {
         try io.configureSession()
         // A cascade that lands during the escalation, before the wait begins.
         await io.prepareForCapture()
-        pipeline.emit(.routeChanged)
+        pipeline.emit(.routeChanged(.oldDeviceUnavailable))
         while io.routeChangesObserved == 0 { await Task.yield() }
         try? io.startCapture { _ in }
 

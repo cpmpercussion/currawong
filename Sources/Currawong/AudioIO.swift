@@ -488,7 +488,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         // observation for the rest of the process.
         forwarder = Task.detached { [weak self] in
             for await event in events {
-                if event == .routeChanged { self?.noteRouteChange() }
+                if case .routeChanged = event { self?.noteRouteChange() }
                 continuation.yield(event)
             }
         }
