@@ -1043,10 +1043,55 @@ playing" receives commands at all**, so anything else that starts audio takes
 the button away with no error anywhere. "Works for a while and then stops" is
 that trap's exact signature, so rule it in or out before looking for a bug.
 
-### BU-13 — a Bluetooth speaker-mic stops carrying audio, and keying is what stops it 🔧 OPEN 2026-08-21
+### BU-13 — a Bluetooth speaker-mic stops carrying audio, and keying is what stops it 🔬 REPRODUCED 2026-08-29
 
 **What the operator sees.** Audio works through the Q2L "a bit", then stops, and
 keying is what precedes the stop.
+
+**Reproduced under instrumentation 2026-08-29, on macOS, without going on air,
+and it is deterministic.** What follows below this block is the original
+where-to-look list, kept because the first bullet called the mechanism correctly.
+
+`hamvoip-cli experiment capture-swap` (library v0.6.2, all runs under ASan) with
+the Q2L, a Logitech StreamCam and the built-in microphone all present.
+Transcript: `experiment-data/bu13-bluetooth-rate-starve.txt`.
+
+| Engine instantiated on | Swapped to | Frames per 3 s window |
+|---|---|---|
+| Q2L, 16 kHz | StreamCam | **0** — nothing at all, and still nothing over a 6 s window |
+| Q2L, 16 kHz | built-in | 15, against 115–130 on later swaps |
+| StreamCam, 44.1 kHz | Q2L | **5**, against 125 on the way back. Every time |
+| StreamCam, 44.1 kHz | built-in | 105–110 throughout. No fault |
+
+**The rule: capture starves whenever the engine's fixed input rate and the
+Bluetooth device's native rate disagree.** `AVAudioEngine` fixes its input rate
+when the input audio unit is instantiated and never revisits it (the per-engine
+rule `RC-14` established). CoreAudio is supposed to resample into that rate, and
+between two wired devices it does — the control row is flawless. Across the
+Bluetooth boundary it does not: 16 kHz HFP into a 44.1 kHz engine delivers 5
+frames where 125 are due, which is a microphone that is on, produces no error,
+and carries nothing.
+
+**This is what the operator was describing.** "Works a bit, then stops" is this,
+with the engine's rate decided by whichever device happened to be default when
+the engine was built — which is why it looked intermittent and keying-related:
+`stopCapture()` on unkey tears the engine down, and the next one is instantiated
+against whatever the route is *then*. The first bullet below predicted exactly
+this and should be read as confirmed.
+
+**`RC-14` does not help here, and is not supposed to.** Rebuild count is **0**
+in every run above, correctly: the *engine's* rate never changes, so nothing the
+chain snapshots has gone stale. `RC-14` fixed the out-of-bounds read; this is a
+different fault reached by the same operator action, and the repair is the one
+the first bullet names — rebuild the engine on a route change — not a stride
+correction.
+
+**The probe's own verdict is too lenient, and that is a finding about the
+probe.** Case B above prints `PASSED` on 5 frames against an expected 125,
+because the check is only that frames are non-zero. A frames-per-second floor
+would have caught this on the night `RC-14` was written. Worth raising in the
+library as a follow-up; noted here so the `PASSED` in the transcript is not
+misread later.
 
 **Not reproduced under instrumentation yet.** What follows is where to look, in
 the order the code makes likely — not findings.
@@ -2520,3 +2565,74 @@ nobody on air, is the `capture-swap` probe above — try that first.
 several device swaps *in the app*, candidate 1 is dead and this becomes a bug
 report for Apple.
 
+---
+
+**2026-08-29 — the exit condition above expired when the app took v0.6.2, and
+the question asked here has changed.**
+
+`APP-29` moved the pin to v0.6.2, the release carrying `RC-14`. **The code that
+sentence was written about is no longer the code under test.** It was written
+when the app was on v0.6.0, where the stale-format path still existed; against
+v0.6.2 a silent ASan run cannot separate *"candidate 1 was never real"* from
+*"candidate 1 was real and `RC-14` fixed it"*. Run `make asan-macos` on `main`
+today and the silence is not evidence for anything — which is a trap worth
+naming, because the command still exists and still runs.
+
+Two different questions now, and they need different builds:
+
+| Question | Build | What a silent run means |
+|---|---|---|
+| **Is the app safe now?** | `main`, as pinned | The fixed chain holds under device swaps. A regression check |
+| What caused the crash on 2026-08-28? | the library at `v0.6.1`, via the path-dependency swap | Candidate 1 is dead on the original code |
+
+**The question being asked as of 2026-08-29 is the first one.** This entry stays
+open on the second, which is not being pursued today: settling it needs a build
+against a pre-fix library, and that is a deliberate act, not something to fall
+into by running the target on `main`.
+
+**What ASan cannot answer either way.** It does not instrument Apple's
+frameworks, so if the dangling pointer is SwiftUI's — candidate 2, and now the
+stronger of the two — ASan is silent and that silence is not about our code at
+all. The signature is not diagnostic either, per observation 2 above. And a
+sanitized build runs several times slower, which moves the 7 ms window this
+crash lived in: a null result is *"N swaps, silent"*, never *"cannot happen"*.
+
+**Instrumentation coverage, checked rather than assumed** (2026-08-29). The
+library now arrives as a versioned SPM dependency, not a path, so whether it is
+sanitized at all is a fair question. It is: `AudioPipeline` is statically linked
+into `Currawong.debug.dylib` — 856 symbols — alongside the ASan runtime, and
+Weebill with it. **`Codec2.xcframework` is not instrumented**, having been built
+elsewhere as a binary; anything inside it is invisible to this run. That is not
+a gap worth closing here — the crash path is nowhere near the codec — but it
+should not be discovered mid-investigation.
+
+**The safety question, answered as far as unattended work reaches (2026-08-29).**
+Everything below is the app pinned at v0.6.2, under AddressSanitizer, local, no
+transmission.
+
+- **The app's own macOS suite under ASan: 722 tests, 1 skipped, 0 failures, and
+  no sanitizer report of any kind.** This is the in-process check — the library
+  is compiled into `Currawong.debug.dylib`, so the capture path runs sanitized
+  inside the app's build, not the CLI's.
+- **`capture-swap` under ASan, five runs, ~20 device changes, three real
+  devices: silent throughout.** No out-of-bounds read, no invalid free, nothing.
+- **All three input devices are de-interleaved** — StreamCam 44100/2, built-in
+  44100/1, Q2L 16000/1 — so the stride is 1 on every one of them. **Candidate 1
+  needs an interleaved format, and macOS did not hand one to an `AVAudioEngine`
+  tap on any of the three.** The earlier survey had two devices; this makes
+  three, including the Bluetooth one that was missing.
+
+**So: no memory-safety fault is reachable in the capture path on this machine,
+and the fixed chain holds across device changes.** That is the regression check
+passing. It is not an answer to what caused the 2026-08-28 crash, which needs
+the pre-fix build and is still not being pursued.
+
+**What the runs did find is a different fault, and a worse one operationally.**
+The same probe showed capture starving to 0–5 frames per 3 s window whenever the
+engine's fixed rate and the Bluetooth Q2L's native rate disagree — a microphone
+that is on, reports no error, and carries nothing. That is **`BU-13`**, now
+reproduced under instrumentation, and it has nothing to do with memory safety.
+Recorded there rather than here.
+
+**Still unrun, and still needing a person:** `make asan-macos` with a real
+connection and a device change mid-over. Nothing above involves transmitting.
