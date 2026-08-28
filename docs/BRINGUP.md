@@ -2438,14 +2438,24 @@ under a live capture — the same action that produced this crash — and report
 what the pipeline saw. Eight swaps, twice, both under AddressSanitizer, both
 silent: 550 frames and 0 rebuilds as shipped, 530 frames and 8 rebuilds with the
 staleness check forced on (`experiment-data/rc14-capture-swap.txt`, and
-`swift-hamvoip/docs/CLI.md` §12). Zero rebuilds is not the probe failing to fire.
-It is the finding: **the input node reports 44100 Hz de-interleaved for every
-input device on this machine**, including one whose hardware is running at
-48 kHz, and the only thing that moves across a swap is the channel count
-(2 ↔ 1). De-interleaved buffers stride by 1 whatever the channel count, so the
-stale stride — the only unbounded read in that path — **cannot have occurred
-here**. Candidate 1 needs an interleaved input format, and macOS did not hand
-one to an `AVAudioEngine` tap in any configuration tried.
+`swift-hamvoip/docs/CLI.md` §12). Zero rebuilds is not the probe failing to fire;
+it is the finding. A third run, after a Bluetooth headset joined the machine,
+established why — and corrected a wrong reading of the first two, which had
+suggested the input node simply reports 44100 Hz for everything:
+
+> `AVAudioEngine` fixes its input rate when the input audio unit is
+> instantiated, and a device change afterwards does not move it — CoreAudio
+> resamples into the rate the engine already chose. Only the **channel count**
+> follows the device.
+
+A *fresh* engine on the AirPods reports 24000 Hz mono, against 44100 Hz stereo
+for the StreamCam; swapping to those same AirPods *under a running capture*
+reports 44100 Hz mono. So under a live capture on macOS the rate cannot go
+stale, and neither can the stride — every device here is de-interleaved, and
+de-interleaved buffers stride by 1 whatever the channel count. **The stale
+stride, the only unbounded read in that path, cannot have occurred here.**
+Candidate 1 needs an interleaved input format, and macOS did not hand one to an
+`AVAudioEngine` tap in any configuration tried.
 
 That is evidence, not proof. It does not cover the app's own build, which is
 where the crash happened, and it does not rule out heap corruption from
