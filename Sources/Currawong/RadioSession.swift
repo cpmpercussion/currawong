@@ -1532,6 +1532,26 @@ final class RadioSession: ObservableObject {
             return
         }
 
+        // **`BU-22`: wake the input device now, not into the operator's first
+        // over.** The first over after the device spins up was silent — the
+        // device delivers exact zeros for its first seconds, which no amount of
+        // waiting for the *route* to settle can see. See `AudioIO.warmUpInput()`
+        // for the evidence.
+        //
+        // Started here and awaited below, rather than awaited here, because
+        // everything between is a node being dialled: a DNS lookup, a link
+        // built, a call placed and answered. The warm-up costs the connect
+        // nothing at all unless it outlasts all of that.
+        //
+        // **Awaited before `connection` becomes `.connected`**, which is what
+        // keeps it from racing a key-down: `beginTransmit` refuses a press that
+        // is not connected, so the operator cannot key into a running warm-up,
+        // and the microphone is free by the time they can.
+        // Every exit below awaits it, including the failures: a connect that
+        // could not be made must not leave the microphone open behind an alert
+        // nobody has read yet.
+        let warmUp = Task { @MainActor [audio] in await audio.warmUpInput() }
+
         // The directory server may be a host name, and the library takes four
         // octets. Resolved here rather than in the link factory because that is
         // synchronous and a DNS lookup is not — and resolved into a *copy*, so
@@ -1542,6 +1562,7 @@ final class RadioSession: ObservableObject {
         do {
             resolved = try await resolveDirectoryServer(in: validated)
         } catch {
+            await warmUp.value
             connection = .disconnected
             present(title: "Could not reach the directory server", message: "\(error)")
             return
@@ -1556,6 +1577,7 @@ final class RadioSession: ObservableObject {
                     webTransceiverToken: trimmedToken),
                 transmitTimeout, proxy)
         } catch {
+            await warmUp.value
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
             return
@@ -1568,11 +1590,16 @@ final class RadioSession: ObservableObject {
         do {
             try await newLink.connect()
         } catch {
+            await warmUp.value
             tearDownLink()
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
             return
         }
+
+        // `BU-22`, the other half. Cheap by then — the dial above is normally
+        // the longer of the two — and it must finish before a press is possible.
+        await warmUp.value
 
         connection = .connected
         transmitState = newLink.transmitState()

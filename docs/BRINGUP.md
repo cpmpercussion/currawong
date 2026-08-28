@@ -2255,7 +2255,7 @@ behaviour and wants the maintainer's call, on evidence, rather than a patch
 attached to a test fix. Never observed on air; `holdTrace` would show it as
 `sigIdle` between `prepped` and `carrier`.
 
-### BU-22 — the first over after the input spins up is silent 🔧 OPEN 2026-08-28
+### BU-22 — the first over after the input spins up is silent ✅ FIXED 2026-08-28
 
 **Watched on air, twice, on macOS.** Connect, key down, speak: no transmit
 meter and nothing at the far end. Release, key down again: normal audio,
@@ -2308,6 +2308,54 @@ a dead device, and the gate must not be taught to confuse them.
 nothing about signal presence, so if the warm-up needs to *verify* rather than
 merely wait, that is a library-side addition (see `RC-14` in the library's
 plan, which touches the same code for a different reason).
+
+**Fixed 2026-08-28.** `AudioIO.warmUpInput()` is new: it makes the transmit
+path's own three calls — escalate, open the microphone, wait out what that
+disturbed — and then *holds the input open*, which is the part a key-down does
+not do and the whole reason the first over was silent. Frames are dropped on the
+floor; nothing is keyed, so there is nowhere for them to go, and the transmit
+meter goes on reporting only what left. Closing through `stopCapture()` puts it
+on the ordinary hand-back path, so an operator who keys up straight afterwards
+still takes `BU-16`'s fast path into a device that is now awake.
+
+`connect()` **starts it before the node is dialled and awaits it before
+`connection` becomes `.connected`.** Both halves are load-bearing. Starting
+early means the warm-up runs alongside the DNS lookup, the link, the call and
+the answer, so it normally costs the connect nothing at all. Awaiting before
+`.connected` is what keeps it from becoming the fault it fixes: `beginTransmit`
+refuses a press that is not connected, so the operator cannot key into a running
+warm-up and find the microphone already taken. Every failure exit awaits it too
+— a connect that could not be made must not leave the microphone open behind an
+alert nobody has read yet.
+
+The verification question above did **not** need answering, and no library
+change was needed: the maintainer's fix was to warm the device, not to prove the
+warming worked. `RC-14` landed separately, for its own reasons.
+
+**The one number here is chosen rather than measured, and the entry says so.**
+`AudioPipelineIO.warmUpHoldTicks` is 17 ticks — 1020 ms — held past the settle.
+Every other constant in that file came off a recorded hold; this one could not,
+because **the fault would not reproduce on demand**. A cold probe on melchior on
+2026-08-28, driving `AVAudioEngine` directly after the machine had been left
+alone, delivered its first buffer at 283 ms and *room noise in that same
+buffer* — not the four seconds of zeros this entry records. So the device that
+showed the fault was warm again by the time anyone went looking, which is
+consistent with the original observation (the second run, moments later, was
+normal) and is exactly why the number had to be argued rather than read off.
+
+The argument, which is the part to check if this comes back: the warm-up does
+not have to *outlast* the silence, only to start it. What the scratch tool
+showed is that a device opened once delivers immediately on the next open **in
+a different process** — so it is the opening that wakes the hardware, and the
+zeros are what that costs whoever pays first. This makes the app pay it while
+the operator watches a connection progress. A second is enough to be sure the
+device was really opened and not merely asked for, and short enough to vanish
+inside a dial that is happening anyway.
+
+**If a silent first over is ever seen again, do not simply raise that number.**
+Establish first whether the warm-up ran at all — `input warmed for …` in the
+route log — and whether the device was still cold when it did. A warm-up that
+ran and did not work is a different fault from one that was too short.
 
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 
@@ -2378,3 +2426,4 @@ becomes a bug report for Apple.
 and should be; whether it caused this crash is a separate question that only the
 ASan run answers. Closing this on the strength of the fix would be assuming the
 thing to be proven.
+

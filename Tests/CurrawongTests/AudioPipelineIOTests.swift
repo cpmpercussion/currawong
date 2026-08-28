@@ -779,6 +779,68 @@ final class AudioPipelineIOSettleTests: XCTestCase {
         XCTAssertEqual(recorder.applied, [], "and no category change to wait on")
     }
 
+    // MARK: The warm-up (BU-22)
+
+    /// **`BU-22`.** The warm-up is the transmit path's own three calls —
+    /// escalate, open the microphone, wait out what that disturbed — plus the
+    /// thing a key-down does not do and the reason the first over was silent:
+    /// it *holds the input open* for a while afterwards, so the device is
+    /// producing signal rather than zeros by the time anybody keys up.
+    func testWarmingUpOpensTheInputAndHoldsItPastTheSettle() async throws {
+        let (io, recorder, clock, pipeline) = makeIO(cascadeOn: [5, 6, 7, 8, 9])
+        try io.configureSession()
+        recorder.clear()
+
+        await io.warmUpInput()
+
+        XCTAssertEqual(pipeline.startCount, 1, "the warm-up has to actually open the device")
+        XCTAssertEqual(
+            recorder.applied, [.radio],
+            "escalate once, exactly as a key-down does — a warm-up must not invent a policy")
+        XCTAssertEqual(
+            clock.elapsed,
+            9 + AudioPipelineIO.settleQuietTicks + AudioPipelineIO.warmUpHoldTicks,
+            "the hold is on top of the settle, not instead of it")
+    }
+
+    /// It closes what it opened. A warm-up that left the microphone running
+    /// would be a recording indicator lit for the whole call, which is
+    /// precisely the impression this app must never give — and the close is
+    /// also what starts the hand-back linger, so an operator who keys up
+    /// straight afterwards still takes `BU-16`'s fast path.
+    func testWarmingUpClosesTheInputAgain() async throws {
+        let (io, _, _, pipeline) = makeIO(cascadeOn: [])
+        try io.configureSession()
+
+        await io.warmUpInput()
+
+        XCTAssertEqual(pipeline.stopCount, 1)
+    }
+
+    /// Opportunistic, and deliberately silent about failing: the connection is
+    /// not failed over a microphone nobody has asked for yet, and the key-down
+    /// path asks again with the error handling that matters. What it must not
+    /// do is hold the route it escalated — a failed `startCapture` hands that
+    /// back on its own, and the wait must not be paid for a device that never
+    /// opened.
+    func testAWarmUpThatCannotOpenTheDeviceReturnsWithoutWaiting() async throws {
+        let pipeline = FakeCapturePipeline(
+            startCaptureError: StubError(description: "no input device"))
+        let recorder = PolicyRecorder()
+        let clock = ScriptedClock { _ in }
+        let io = AudioPipelineIO(
+            makePipeline: { pipeline },
+            applyPolicy: recorder.apply,
+            listeningLinger: LingerGate().wait,
+            settleTick: clock.tick,
+            monotonicNanoseconds: { 0 })
+        try io.configureSession()
+
+        await io.warmUpInput()
+
+        XCTAssertEqual(clock.elapsed, 0, "nothing opened, so there is nothing to hold open")
+    }
+
     /// A route that will not stop changing is not something to wait on. The cap
     /// is what hands the operator back their key-down — and SF-3, untouched by
     /// any of this, is what protects them once it is keyed.

@@ -88,6 +88,40 @@ protocol AudioIO: AnyObject, Sendable {
     /// 160 samples each.
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws
 
+    /// Opens the input briefly, discards what it captures, and closes it, so
+    /// that the device is awake before the first key-down (`BU-22`).
+    ///
+    /// **The fault it fixes.** The first over after the input device spins up
+    /// is silent: no transmit meter, and nothing at the far end. Overs 2..n are
+    /// normal. The silent one is always the one preceded by an escalation —
+    /// i.e. the one where the device had just been opened — and about a second
+    /// elapsed between the two, so it is not a race ``settleRoute()`` is
+    /// losing: that waits for the *route* to stop changing, which it had, and
+    /// it does not wait for the device to produce signal. Corroborated off the
+    /// app entirely, in a different process: a scratch tool driving the library
+    /// directly got four seconds of exact zeros on its first run and normal
+    /// room noise moments later. The warm-up is the device's, and no amount of
+    /// app-side bookkeeping can see it as anything but silence.
+    ///
+    /// **This is `BU-2`'s shape one layer down**, and takes `BU-2`'s fix: that
+    /// one was the macOS permission prompt, and moving the ask to connect time
+    /// put it "where the operator is already waiting and no over is at stake".
+    /// The same sentence holds with *device warm-up* in place of *permission*.
+    ///
+    /// Deliberately not throwing, and not reporting whether it worked. A
+    /// warm-up is opportunistic: a connection must not fail because the
+    /// microphone could not be opened a few seconds before anybody asked to
+    /// transmit, and ``startCapture(onFrame:)`` owns the failure path for when
+    /// somebody does.
+    ///
+    /// Rejected alternative, recorded because it is the obvious one: hold
+    /// `OnAirGate` closed until the tap delivers a non-silent buffer. It fixes
+    /// the symptom and breaks something real — a legitimately quiet start to an
+    /// over would be swallowed, and an operator whose first word is soft would
+    /// key up into nothing. Silence is not the same thing as a dead device, and
+    /// the gate must not be taught to confuse them.
+    func warmUpInput() async
+
     /// Closes the microphone. Must be safe to call at any time, including
     /// before any capture has started and twice in a row — every one of the
     /// PTT release paths calls it without knowing what state it is in.
@@ -390,6 +424,38 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// below the cold ones. **The 111 ms case is the one to watch**: it is 11 ms
     /// over, and it bought a full onset budget — see ``settleOnsetTicks``.
     static let captureSlowThresholdNanoseconds: UInt64 = 100_000_000
+
+    /// How long the warm-up capture stays open once the route has settled
+    /// (`BU-22`), on top of whatever ``settleRoute()`` spends getting there.
+    ///
+    /// **This one number is not measured, and says so.** Every other constant
+    /// here came off a hold recorded on melchior; this one could not, because
+    /// the fault will not reproduce on demand — the device that showed it is
+    /// warm again within minutes, and a cold probe on 2026-08-28 delivered room
+    /// noise 283 ms after the first buffer rather than the four seconds of
+    /// zeros `BU-22` recorded. So it is chosen, not derived, and the reasoning
+    /// is the part to check rather than the value:
+    ///
+    /// - The observation to beat is **four seconds of exact zeros**, which is
+    ///   far too long to hold a connect on.
+    /// - But the warm-up does not have to *outlast* the silence, only to start
+    ///   it. What the scratch tool showed is that a device which has been
+    ///   opened once delivers immediately on the next open, **in a different
+    ///   process** — so it is the opening that wakes the hardware, and the
+    ///   zeros are what that costs whoever pays it first. This makes the app
+    ///   pay it while the operator is watching a connection progress, rather
+    ///   than into their first over.
+    /// - A second of it is enough to be sure the device really was opened and
+    ///   not merely asked for, and short enough to disappear inside a connect
+    ///   that has a node to dial anyway — which is why the warm-up runs
+    ///   *alongside* that dial rather than in front of it.
+    ///
+    /// If a silent first over is ever seen again after this, **do not simply
+    /// raise this number**: the thing to establish first is whether the
+    /// warm-up ran at all (`input warmed` in the route log) and whether the
+    /// device was still cold when it did. A warm-up that ran and did not work
+    /// is a different fault from one that was too short.
+    static let warmUpHoldTicks = 17
 
     /// The hard ceiling: 1.2 s, or half a second past the whole measured
     /// cascade. A route that will not stop changing is not something to wait
@@ -946,6 +1012,45 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     ///
     /// Exactly one retry. A loop here would be a loop on the transmit path, and
     /// the second failure is more useful reported than retried.
+    /// `BU-22`. See the protocol requirement for the fault and why it is fixed
+    /// here rather than at the gate.
+    ///
+    /// Everything it does, the first over would otherwise do at key-down:
+    /// escalate, open the microphone, wait out the cascade. The point is only
+    /// *when* — with no over at stake — plus the hold at the end, which is the
+    /// part a key-down does not do and the reason the first over was silent.
+    ///
+    /// The captured frames are dropped on the floor. Nothing is keyed, so there
+    /// is nowhere for them to go; `RadioSession` does not even see them, which
+    /// keeps the transmit meter honest about having shown only what left.
+    ///
+    /// Closing through ``stopCapture()`` puts this on the ordinary hand-back
+    /// path: the route goes back to listening after the usual linger, so an
+    /// operator who keys up straight away still takes `BU-16`'s fast path into
+    /// a device that is now awake. On iOS the hand-back also discards the
+    /// engine the capture was attempted on, which is a cost this pays once per
+    /// connect and is worth it — the warm-up is the *device's*, and survives
+    /// the engine that woke it.
+    func warmUpInput() async {
+        await prepareForCapture()
+        do {
+            try startCapture { _ in }
+        } catch {
+            // Opportunistic: the connection is not failed over this, and the
+            // key-down path asks again with the failure handling that matters.
+            Diagnostics.route("input warm-up could not open the microphone: \(error)")
+            return
+        }
+        await settleRoute()
+        for _ in 0..<Self.warmUpHoldTicks {
+            await settleTick()
+        }
+        stopCapture()
+        Diagnostics.route(
+            "input warmed for \(Self.warmUpHoldTicks * Int(Self.settleTickNanoseconds / 1_000_000))ms "
+                + "past settle: \(Self.audioStateDescription())")
+    }
+
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
         do {
             // The route is on listening between overs (BU-17), which has no
