@@ -2440,6 +2440,43 @@ in the route log — and whether the device was cold when it did.
 A warm-up that ran and did not work is a different fault from one that was too
 short.
 
+**2026-08-29 — the second device is in, and it does not have the fault.** The
+TIDRADIO Q2L, the speaker-mic this app is actually operated with, delivered
+audio in its **first frame** from every starting state tried:
+
+| Starting state | First frame | First audio |
+|---|---|---|
+| ~20 min idle, still the default input | 278 ms | 279 ms |
+| 10 min idle, default moved away so macOS released the audio profile | 268 ms | 268 ms |
+| **Power cycle** — off at 09:18:23, back at 09:19:02, measured within a second | 265 ms | 265 ms |
+
+The third is the real cold trial: the operator switched the device off, and a
+watcher polling CoreAudio every 2 s made it the default input and ran the probe
+before anything else could open it, with `runningSomewhere` 0 on both of its
+device objects immediately beforehand. Transcript:
+`experiment-data/bu22-input-warmup-q2l.txt`.
+
+**So the fault is not "Bluetooth".** It is inputs that power their microphone
+down between uses; a speaker-mic built for PTT keeps its ready, and this one sits
+with the USB webcam rather than the AirPods. Worth knowing, because the obvious
+inference from the 2026-08-28 pair — *Bluetooth is the risk* — is wrong, and the
+next person debugging a silent first over on the Q2L should look elsewhere
+entirely.
+
+**What this does and does not do to the hold constant.** It does not confirm it.
+A device with no fault cannot exercise a number chosen to fix one, so
+`warmUpHoldTicks` remains settled by the single AirPods measurement and untested
+by this one. **Only an AirPods-class input tests it.** It also does not argue for
+removing the warm-up: on a device like the Q2L the hold costs nothing that was
+not already being paid, since it sits on top of a `settleRoute()` the cold SCO
+open dominates.
+
+Incidental, and a useful handle for `BU-13`: the Q2L presents as **two**
+CoreAudio device objects — a 16 kHz input (HFP) and a 44.1 kHz output (A2DP) —
+and its nominal rate stays 16 kHz even when idle, so the rate says nothing about
+whether the device is awake. `kAudioDevicePropertyDeviceIsRunningSomewhere` is
+the property that does.
+
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 
 **One crash, not reproduced.** `Currawong-2026-08-28-191119.ips`, macOS 26.5.1,

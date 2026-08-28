@@ -455,8 +455,21 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// is paid on top of a ``settleRoute()`` that spends most of a second on a
     /// cold SCO open anyway.
     ///
-    /// One trial on one device. `hamvoip-cli experiment input-warm-up` exists so
-    /// that a second one is a single command rather than a scratch tool.
+    /// **The second device, 2026-08-29: a TIDRADIO Q2L, and it does not have the
+    /// fault at all.** Three trials — 20 minutes idle as the default input, 10
+    /// minutes idle with the default moved away so macOS released the audio
+    /// profile, and a genuine power cycle measured within a second of the device
+    /// reappearing — all delivered audio in the *first frame*: 265–279 ms to
+    /// that frame, 0–1 ms from it to audio. Against cold AirPods' 1574 ms of
+    /// exact zeros, this device sits with the USB webcam.
+    ///
+    /// So the fault is not "Bluetooth"; it is inputs that power their microphone
+    /// down, and a speaker-mic built for PTT keeps its ready. **That does not
+    /// argue for removing this warm-up** — it costs a device like the Q2L
+    /// nothing it was not already paying, since the hold sits on top of a
+    /// ``settleRoute()`` the cold SCO open dominates — but it does mean a second
+    /// device failing to reproduce a silent first over says nothing about
+    /// whether the number is right. Only an AirPods-class input tests it.
     ///
     /// If a silent first over is ever seen again after this, **do not simply
     /// raise this number**: the thing to establish first is whether the
