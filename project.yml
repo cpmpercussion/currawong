@@ -35,9 +35,14 @@ packages:
   # token fetch (IAX-13), v0.5.3 adds the static
   # `AudioPipeline.activateSession()` (RC-11) that let this app delete its own
   # copy of the audio-session policy (`BU-3`), and v0.5.4 adds the listening
-  # policy (RC-12) that holds HFP only while transmitting. `from:` accepts any
-  # 0.5.x — the library is 0.x, so its own changelog warns the API may change
-  # in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
+  # policy (RC-12) that holds HFP only while transmitting. **v0.6.0 is the
+  # floor**, for two things at once: `M17Kit.WeebillVoiceCodec` (M17-7), the
+  # pure-Swift Codec 2 this app's M17 path now uses instead of its own
+  # `Codec2Codec` (APP-27), and RC-13, which gave
+  # `AudioPipeline.Signal.routeChanged` an `AudioRouteChangeCause` payload —
+  # the app adopted that here because 0.6.0 forces it, not because it wanted
+  # to. `from:` accepts any 0.x above it — the library is 0.x, so its own
+  # changelog warns the API may change in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
   # pins the build, and it is generated, so a fresh `make generate` resolves
   # forward. Pin exactly here if that ever bites.
   #
@@ -55,7 +60,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.5.4
+    from: 0.6.0
 
 settings:
   base:
