@@ -1043,13 +1043,14 @@ playing" receives commands at all**, so anything else that starts audio takes
 the button away with no error anywhere. "Works for a while and then stops" is
 that trap's exact signature, so rule it in or out before looking for a bug.
 
-### BU-13 — a Bluetooth speaker-mic stops carrying audio, and keying is what stops it 🔬 REPRODUCED 2026-08-29
+### BU-13 — a Bluetooth speaker-mic stops carrying audio, and keying is what stops it 🔧 OPEN — the starve is real below the app, and the app does not have it 2026-08-29
 
 **What the operator sees.** Audio works through the Q2L "a bit", then stops, and
 keying is what precedes the stop.
 
-**Reproduced under instrumentation 2026-08-29, on macOS, without going on air,
-and it is deterministic.** What follows below this block is the original
+**A fault in the capture path reproduced under instrumentation 2026-08-29, on
+macOS, deterministically — but see the on-air result below: the app does not
+exhibit it.** What follows below this block is the original
 where-to-look list, kept because the first bullet called the mechanism correctly.
 
 `hamvoip-cli experiment capture-swap` (library v0.6.2, all runs under ASan) with
@@ -1072,12 +1073,33 @@ Bluetooth boundary it does not: 16 kHz HFP into a 44.1 kHz engine delivers 5
 frames where 125 are due, which is a microphone that is on, produces no error,
 and carries nothing.
 
-**This is what the operator was describing.** "Works a bit, then stops" is this,
-with the engine's rate decided by whichever device happened to be default when
-the engine was built — which is why it looked intermittent and keying-related:
-`stopCapture()` on unkey tears the engine down, and the next one is instantiated
-against whatever the route is *then*. The first bullet below predicted exactly
-this and should be read as confirmed.
+**An earlier version of this entry said "this is what the operator was
+describing". That was wrong, and the same afternoon's on-air session disproved
+it.** The starve above is real, but it is reached by holding *one* capture across
+a device change — which is what the probe does and what the app never does.
+
+**On air, 2026-08-29, M17-CBR module A, sanitized build, two patterns tried:**
+
+| Pattern | What the app did | Far end |
+|---|---|---|
+| Device swapped **mid-over**, twice | `routeChanged` → `endTransmit reason=routeChanged` → re-key 350–600 ms later, both times | Cut out twice, came back, "pretty smooth" |
+| Device swapped **between overs** (on key-up) | `routeChanged isTransmitting=false`, no interruption; next key-down clean | **Both overs heard**, no fault |
+
+Neither reproduced the starve. The mid-over case is SF-3 working as designed —
+a route change ends transmit — and the audible cost is two brief gaps, not a
+dead microphone. Log in `experiment-data/bu13-onair-swap-20260829.txt`.
+
+**Why the app escapes it is an inference, not a measurement:** `stopCapture()`
+tears the whole engine down on every unkey, so each over gets an engine
+instantiated against whatever device is current, and the fixed rate matches by
+construction. That is consistent with the design note in the first bullet below
+and with the logs, but it was not measured directly. **The instrument that would
+settle it** is to log the engine's input format at key-down on macOS —
+`audioStateDescription()` prints only `macOS, no AVAudioSession` there, so the
+one number that would prove it is the one not being logged.
+
+**So the operator's symptom remains unexplained.** What has been gained is a
+real fault found below the app and an explanation ruled *out*, not in.
 
 **`RC-14` does not help here, and is not supposed to.** Rebuild count is **0**
 in every run above, correctly: the *engine's* rate never changes, so nothing the
@@ -2456,12 +2478,19 @@ before anything else could open it, with `runningSomewhere` 0 on both of its
 device objects immediately beforehand. Transcript:
 `experiment-data/bu22-input-warmup-q2l.txt`.
 
-**So the fault is not "Bluetooth".** It is inputs that power their microphone
-down between uses; a speaker-mic built for PTT keeps its ready, and this one sits
-with the USB webcam rather than the AirPods. Worth knowing, because the obvious
-inference from the 2026-08-28 pair — *Bluetooth is the risk* — is wrong, and the
-next person debugging a silent first over on the Q2L should look elsewhere
-entirely.
+**So the fault is not simply "Bluetooth"** — the obvious inference from the
+2026-08-28 pair, *Bluetooth is the risk*, is wrong, and someone debugging a
+silent first over on the Q2L should look elsewhere.
+
+**What distinguishes the two devices is not established, and an earlier version
+of this entry overstated it.** What was measured is behaviour, not mechanism:
+one input delivered frames of exact zeros for 1574 ms after the open, another
+delivered audio in its first frame. A power-management explanation ("the device
+powers its microphone down between uses") was written here as though it followed
+from that. It does not. Candidates this measurement cannot separate include SCO
+setup timing, profile switching, the device's own DSP or AGC start-up, noise
+gating, and the link being kept active by other traffic. Establishing which
+would need instrumentation on the device side that we do not have.
 
 **What this does and does not do to the hold constant.** It does not confirm it.
 A device with no fault cannot exercise a number chosen to fix one, so
@@ -2667,9 +2696,11 @@ the pre-fix build and is still not being pursued.
 **What the runs did find is a different fault, and a worse one operationally.**
 The same probe showed capture starving to 0–5 frames per 3 s window whenever the
 engine's fixed rate and the Bluetooth Q2L's native rate disagree — a microphone
-that is on, reports no error, and carries nothing. That is **`BU-13`**, now
-reproduced under instrumentation, and it has nothing to do with memory safety.
-Recorded there rather than here.
+that is on, reports no error, and carries nothing. It has nothing to do with
+memory safety, and is recorded under **`BU-13`** rather than here. Note that the
+same day's on-air session showed the *app* does not exhibit it, in either of the
+two patterns tried; the starve needs one capture held across a device change,
+which the app never does.
 
 **Still unrun, and still needing a person:** `make asan-macos` with a real
 connection and a device change mid-over. Nothing above involves transmitting.

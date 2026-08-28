@@ -463,9 +463,15 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// that frame, 0–1 ms from it to audio. Against cold AirPods' 1574 ms of
     /// exact zeros, this device sits with the USB webcam.
     ///
-    /// So the fault is not "Bluetooth"; it is inputs that power their microphone
-    /// down, and a speaker-mic built for PTT keeps its ready. **That does not
-    /// argue for removing this warm-up** — it costs a device like the Q2L
+    /// So the fault is not simply "Bluetooth" — but **what distinguishes the two
+    /// devices is not established.** What was measured is behaviour: one input
+    /// delivered frames of exact zeros for 1574 ms after the open, another
+    /// delivered audio in its first frame. Why is unknown, and there are several
+    /// candidates that no measurement here separates — SCO setup timing, profile
+    /// switching, the device's own DSP or AGC start-up, noise gating, or the
+    /// link simply being kept active. Do not repeat a power-management story as
+    /// though it were the finding. **That does not argue for removing this
+    /// warm-up** — it costs a device like the Q2L
     /// nothing it was not already paying, since the hold sits on top of a
     /// ``settleRoute()`` the cold SCO open dominates — but it does mean a second
     /// device failing to reproduce a silent first over says nothing about
