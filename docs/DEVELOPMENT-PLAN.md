@@ -1381,6 +1381,93 @@ by *selecting* the right one. The start condition is a tag change matching
 `BU-18` are all open, and a beta build with known open faults is fine so long as
 the tester is told which.
 
+### APP-26 — a Mac download, and the licences that let it exist ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-24: a
+non-App-Store macOS build is fine from an LGPL perspective — so build it in CI,
+attach it to the release, and say in the app what the licences require.
+
+The other half of `PD-5`. `APP-25` routes iOS through Xcode Cloud, which
+distributes only to TestFlight and the App Store; the Mac build needs Developer
+ID plus notarisation and so lives in `.github/workflows/release-macos.yml`,
+triggered by the same published release.
+
+**What shipped:**
+
+- `scripts/package-macos-release.sh` — builds, signs, notarises and packages.
+  The workflow is the trigger, the secrets and the upload; the work is in a
+  script because everything must run from a terminal (`CLAUDE.md`) and a release
+  you cannot reproduce on your own machine is one you cannot debug. `make
+  release-macos`.
+- The release carries the app, `LICENSES/`, a `README-FIRST.txt`, `SHA256SUMS.txt`
+  and **`codec2-<commit>-source.tar.gz`** — the corresponding source, which
+  LGPL-2.1 §6 wants offered from the same place as the binary.
+- `Settings → About` (`AboutPane`, `Acknowledgements`) — every component, its
+  licence, how it is linked, and its notice. §6 asks for a *prominent* notice,
+  and a line in a README is not one given to the person running the app.
+- `Sources/Currawong/Currawong-macOS.entitlements`, applied for `sdk=macosx*`
+  only, carrying `com.apple.security.cs.disable-library-validation`.
+- `scripts/check-licence-notices.sh`, run by CI on every push and by the
+  packaging script before it packages anything. Two of these obligations are
+  conditions on the right to distribute, so the moment to fail is before an
+  artefact exists to attach.
+- `AcknowledgementsTests` — 11 tests, each asserting something a licence asks
+  for by name rather than testing prose.
+
+**Two things this task learned, both written up in `docs/LICENSING.md`:**
+
+1. **`keychain-access-groups` is a restricted entitlement and needs an embedded
+   provisioning profile.** Without one, `codesign --verify --deep --strict` says
+   *valid on disk* and *satisfies its Designated Requirement*, and the kernel
+   then SIGKILLs the app on launch with no message. An earlier version of the
+   script signed the bundle directly with `codesign` to avoid profiles
+   altogether and produced exactly that: an app that passed every check and died
+   on launch. It now archives and exports (`method: developer-id`), which embeds
+   the profile, and asserts the profile is present so it cannot be silent again.
+2. **The LGPL substitution works, and the re-signing step is not optional.**
+   Replace the framework and re-sign the whole application: verifies and
+   launches, using the replacement. Replace the framework and keep our
+   signature: killed, because a signature seals nested code. Both measured
+   2026-08-24, which is why `README-FIRST.txt` gives the procedure rather than
+   an assurance.
+
+`OQ-6` is **narrowed, not closed.** For the direct download §6 is satisfied
+rather than argued about. Nothing here helps an App Store build, whose bundle
+cannot be modified at all, so the iOS question stands exactly where it did.
+
+**Not in scope:** whether the app is *ready*. `BU-7`, `BU-10` and `BU-18` are
+open, and the read-me the download carries says what it is.
+
+**Unverified at hand-off: notarisation, and only that.** Both signing routes
+have now been run end to end and the resulting apps launch — Developer ID chain
+to the Apple Root CA, secure timestamp, hardened runtime, profile sealed in the
+bundle, universal. Which is the check that counts, because the failure above
+produced something `codesign` called *valid on disk* and the kernel killed.
+
+**Two ways to sign, because CI and a laptop want different things.** The default
+archives and exports, which fetches the profile and wants a signed-in Xcode or an
+App Store Connect API key. `MACOS_PROVISIONING_PROFILE` instead takes a profile
+as a file and signs directly. The second is what CI wants when the credentials to
+hand are a certificate and an app-specific password: neither the private key nor
+a profile can be *fetched* with those, so both are files regardless, and once the
+profile is a file there is nothing left for an API key to do. A Developer ID
+profile is long-lived — the one this was built against expires 2044 — so it is
+not a yearly chore. `LICENSING.md` has the table of which credential answers
+which question.
+
+Comparing the two routes is also what turned up the missing strip settings:
+`archive` strips the installed product and a plain `build` does not, worth about
+2 MB of symbols on a 4 MB download.
+
+**On credentials**, since the two legs want different ones: an app-specific
+password covers notarisation and nothing else. `xcodebuild
+-allowProvisioningUpdates` takes only a signed-in Xcode account or an App Store
+Connect API key — its own help says so — so the profile fetch cannot use one.
+The upshot is that *locally* an app-specific password is all that is missing:
+fix the Xcode account and the whole release runs with no API key involved. In CI
+the key is still wanted, for the profile rather than the notary. The script takes
+the password three ways, preferring `NOTARY_KEYCHAIN_PROFILE` so it lives in the
+Keychain rather than in shell history.
+
 ## Phase 5 — BLE PTT (after APP-2)
 
 ✅ **DELIVERED — but in the app, under APP-5, not as BLE-1 … BLE-3.** The three

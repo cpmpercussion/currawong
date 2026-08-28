@@ -1,0 +1,275 @@
+# Licensing the macOS download
+
+**APP-26.** What Currawong ships that is not Currawong, what each licence
+requires of us, and how the Mac build distributed outside the App Store
+satisfies the one licence that constrains anything.
+
+Short version: **it is fine, and it was the App Store that was ever the
+problem.** Codec2's LGPL-2.1 wants the recipient to be able to replace the
+library. On a download that is true and was measured to be true. Inside a signed
+App Store bundle it is not, which is what `OQ-6` is about — and `OQ-6` stays open
+for iOS regardless of anything here.
+
+## What the app ships
+
+| Component | Version | Licence | How it is linked | Obligation |
+|---|---|---|---|---|
+| Currawong | 0.1.0 | Apache-2.0 | ours | notice, licence text |
+| `swift-hamvoip` | 0.5.4 | Apache-2.0 | compiled in | notice, licence text |
+| Codec2 | 1.2.0 (`06d4c11e`) | **LGPL-2.1** | dynamic framework | notice, licence text, source, **substitution** |
+| libgsm (GSM 06.10) | 1.0.22 | TU-Berlin permissive | compiled in (vendored in `CGSM`) | notice, verbatim, not removed |
+
+`swift-argument-parser` is deliberately absent: it is a dependency of the
+library's `hamvoip-cli` executable target, and the app links `RadioCore`,
+`IAX2Kit`, `M17Kit` and `EchoLinkKit`. Acknowledging code we do not ship would
+be its own small dishonesty. `AcknowledgementsTests` asserts it stays absent.
+
+The list lives in `Sources/Currawong/Acknowledgements.swift` as data rather than
+prose, because two of these four obligations are conditions on the right to
+distribute rather than courtesies. `scripts/check-licence-notices.sh` checks the
+claims against the artefacts, and CI runs it on every push.
+
+## Where the user is told
+
+`Settings → About` (`AboutPane`), which lists every component, its licence, how
+it is linked, and its notice. LGPL-2.1 §6 asks for a *prominent* notice that the
+library is used and is covered by that licence; a line in a README is not a
+notice given to the person running the application. The Codec2 entry is expanded
+by default for that reason.
+
+The download carries the same thing again as files: `LICENSES/` at the top level
+of the zip, and `README-FIRST.txt` with the substitution procedure. The licence
+text also travels inside the app bundle — `COPYING` is inside
+`Codec2.framework` — but "inside a framework inside a bundle" is not where
+anybody looks.
+
+## Codec2 and LGPL-2.1 §6
+
+§6 lets us distribute a work that uses the library, provided the recipient may
+modify the library and relink. Four things discharge it:
+
+1. **Dynamic linking only** (`LP-4`). Codec2 is its own framework inside the
+   bundle and is never statically linked into the app binary. This is §6(b)'s
+   own suggested route. `project.yml` declares it Embed & Sign; adding
+   `-force_load` or `-all_load` would undo it, and the check script fails if
+   either appears.
+2. **The licence text accompanies the executable.** `COPYING` inside every
+   framework slice, and again in `LICENSES/` in the download.
+3. **The notice.** In the About screen and in `README-FIRST.txt`, naming the
+   licence and its version, and saying plainly that Currawong itself is not
+   covered by it.
+4. **The corresponding source.** Every release carries
+   `codec2-<commit>-source.tar.gz`, fetched by commit rather than by tag —
+   §6 wants the source that corresponds to the binary, and a tag is a name that
+   can be moved. Offered from the same place as the binary, which is §6's own
+   "equivalent access from the same place".
+
+### The substitution works, and that was measured
+
+Documented procedure, in `README-FIRST.txt`: replace
+`Currawong.app/Contents/Frameworks/Codec2.framework`, re-sign the application
+(`codesign --force --deep --sign -`), launch.
+
+Run end to end on 2026-08-24 against a Developer ID-signed, hardened build:
+
+| What was done | Result |
+|---|---|
+| Replace the framework, re-sign the whole application | **Verifies and launches**, using the replacement |
+| Replace the framework, keep our signature | Killed on launch |
+
+The second row is not a licensing problem, it is what a code signature is: an
+application's signature seals the files nested inside it. Which is exactly why
+the instructions say to re-sign, rather than stopping at "replace the
+framework" and leaving the user to discover a SIGKILL.
+
+### What `disable-library-validation` does and does not do
+
+The macOS build carries `com.apple.security.cs.disable-library-validation`
+(`Sources/Currawong/Currawong-macOS.entitlements`, applied for `sdk=macosx*`
+only). Under the hardened runtime that notarisation requires, macOS refuses to
+load nested code signed by another team; this turns that off for this app.
+
+Being accurate about how much that matters: **the documented procedure does not
+need it.** Re-signing the application ad-hoc makes the app and the framework the
+same signer and drops the hardened runtime with it, so library validation never
+applies. What the entitlement adds is the case where the two signers differ — a
+Codec2.framework signed by somebody else, inside an application re-signed
+without it. That is a real way to relink and would otherwise fail.
+
+So dynamic linking is the basis on which this build is distributable, and the
+entitlement is one more route left open at the cost of this app's own library
+validation. Taken deliberately, and it does not close `OQ-6`: no entitlement
+helps inside an App Store bundle, which cannot be modified at all.
+
+## Signing: the trap, written down
+
+The app carries `keychain-access-groups` — see `Currawong.entitlements`, it is
+what makes the secret store work on macOS. It is a **restricted** entitlement
+and must be authorised by a provisioning profile embedded in the bundle. Sign
+without one and nothing complains: `codesign --verify --deep --strict` reports
+*valid on disk* and *satisfies its Designated Requirement*, and then the kernel
+kills the process on launch with SIGKILL and no message anywhere.
+
+Measured the same day, signing one bundle four ways:
+
+| Entitlements | Embedded profile | Result |
+|---|---|---|
+| none | no | launches |
+| `disable-library-validation` only | no | launches |
+| `keychain-access-groups` | no | **killed (SIGKILL)** |
+| `keychain-access-groups` | yes | launches |
+
+`com.apple.security.cs.*` needs no profile; the keychain group does. An earlier
+version of `package-macos-release.sh` signed the bundle directly with `codesign`
+to avoid provisioning profiles altogether, and produced an app that passed every
+check and died on launch. It now uses `xcodebuild archive` plus `-exportArchive`
+with `method: developer-id`, which fetches or creates the profile and embeds it,
+and then **asserts the profile is there** so this cannot be silent again.
+
+The ad-hoc fallback build therefore ships with *no* entitlements at all: an
+ad-hoc signature has no team, so the keychain group would name a group the app
+cannot be in, and per the table that is not a degraded keychain but a bundle the
+kernel refuses to start. It launches, and the secret store does not work. That
+is why it is labelled as a build to test the packaging rather than one to operate
+a station with — in the packaged read-me and in the job summary.
+
+## Releasing
+
+```sh
+make release-macos                      # your Developer ID, or ad-hoc
+make release-macos NOTARISE=--notarise  # ...and notarise
+```
+
+`.github/workflows/release-macos.yml` runs the same script when a release is
+published and attaches `dist/*` to it. `PD-5` wants Developer ID plus
+notarisation for macOS and Xcode Cloud distributes only to TestFlight and the
+App Store, so this is the other half of `PD-5` — `APP-25` is the iOS half. Both
+are triggered by the same release.
+
+### Secrets
+
+Signing on a runner needs three things, and it is worth being clear about which
+of them a credential can *fetch* and which have to be handed over as files:
+
+| Thing | Can an Apple ID + app-specific password get it? |
+|---|---|
+| The Developer ID certificate **and its private key** | **No.** The private key exists only where it was generated — this Mac. Apple never re-issues it. |
+| A provisioning profile | **No.** `xcodebuild -allowProvisioningUpdates` takes a signed-in Xcode account or an App Store Connect API key, and nothing else. |
+| A notarisation ticket | **Yes.** This is the one an app-specific password covers. |
+
+So the certificate is a secret either way. And once you accept that, the profile
+may as well be one too — which removes the last thing the API key was for. Two
+routes, both supported:
+
+**Route A — certificate and profile as files.** Four secrets, no API key.
+
+The two that need care are set by `scripts/set-release-secrets.sh`. Export the
+certificate from Keychain Access first — `login` → *My Certificates*, select
+**Developer ID Application** (not Installer), File → Export Items… as `.p12`:
+
+```sh
+scripts/set-release-secrets.sh --certificate ~/Desktop/devid.p12
+```
+
+It checks the file opens with the password you give and that it really holds a
+Developer ID Application identity — a wrong password or an Installer export
+otherwise becomes a secret that fails in CI complaining about neither — then
+prompts for the Apple ID and app-specific password without echoing, and pipes
+everything into `gh secret set` so none of it reaches a shell history or a
+process list. Delete the `.p12` afterwards; it is a private key.
+
+**The export step is deliberately not scripted.** `security export -t
+identities` has no way to select one identity, so it tries to export every
+private key in the keychain — three here, Apple Development and both Developer
+ID ones — raising a separate authorisation dialog for each and re-asking until
+you pick "Always Allow". It presents as an endless prompt loop, and what it
+would upload is two private keys the release has no use for. Keychain Access
+exports exactly what you select and asks once.
+
+The other two are not sensitive and were set directly:
+
+```sh
+base64 -i ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/<uuid>.provisionprofile \
+  | gh secret set MACOS_PROVISIONING_PROFILE
+printf EDH387FRHA | gh secret set NOTARY_TEAM_ID
+```
+
+For reference, what each one is:
+
+| Secret | How to produce it |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | Keychain Access → your *Developer ID Application* identity → Export as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password you exported the `.p12` with |
+| `MACOS_PROVISIONING_PROFILE` | `base64 -i <profile> \| pbcopy` — see below for where the profile is |
+| `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD` | your Apple ID, `EDH387FRHA`, and the app-specific password |
+
+The profile is the one a successful local release already created:
+
+```sh
+ls ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile
+# the Developer ID one is named "Mac Team Direct Provisioning Profile: au.charlesmartin.currawong"
+```
+
+or, equivalently, lift it out of an app you exported —
+`Currawong.app/Contents/embedded.provisionprofile`. It is long-lived: the one
+this was developed against expires **2044-08-19**, so it outlasts the
+certificate, which is the thing that will actually need renewing (Developer ID
+certificates run five years).
+
+**Route B — an App Store Connect API key.** Replaces
+`MACOS_PROVISIONING_PROFILE` with `ASC_KEY_P8`, `ASC_KEY_ID` and
+`ASC_ISSUER_ID`, and the key notarises as well, so the three `NOTARY_*` secrets
+can go. The profile is then fetched or created per build rather than stored.
+Fewer files to keep, one more credential to mint and rotate.
+
+Route A is the recommendation when you already have a Developer ID and an
+app-specific password, which is the usual case: it adds one file you already
+have on disk instead of a new credential. The script prefers a supplied profile
+when both are present, and the workflow fails early — before the build — if a
+certificate is set with neither, because the alternative is an app that signs
+cleanly and gets killed on launch.
+
+With no secrets at all the workflow still runs and attaches an ad-hoc build,
+with the warning above. That exercises the pipeline; it does not produce
+something to give anybody.
+
+### Local export failing with "No Accounts"
+
+The identity is in the keychain but nothing can fetch a profile. Open Xcode →
+Settings → Accounts and sign in again — a stale Apple ID token reports exactly
+this (`Invalid credentials in keychain … missing Xcode-Token`), which is how it
+presented here on 2026-08-24. Or pass `MACOS_PROVISIONING_PROFILE` and skip the
+fetch entirely, which is route A above.
+
+### What was actually run
+
+Both signing routes produce a Developer ID-signed, hardened, launching app; that
+was checked rather than inferred, because "valid on disk" is precisely the
+reassuring signal that does not mean it will start.
+
+| Route | Signature | Download | Launches |
+|---|---|---|---|
+| A — supplied profile, direct `codesign` | Developer ID Application → Developer ID CA → Apple Root CA, secure timestamp, `flags=0x10000(runtime)`, profile sealed in the bundle, universal (`x86_64 arm64`) | 4.3 MB | ✅ |
+| B — `archive` + `-exportArchive` | same | 3.8 MB | ✅ |
+| ad-hoc fallback | `adhoc`, no entitlements | 5.7 MB | ✅, without a working secret store |
+
+Both signed routes were run on 2026-08-24 and the resulting app launched. That
+matters more than it sounds: the failure this task spent its time on produced a
+bundle `codesign` called *valid on disk* and the kernel then killed, so the only
+check that distinguishes a good build from that one is starting it.
+
+Comparing the two routes is also how the strip settings in `build_unsigned` were
+found: `archive` strips the installed product and a plain `build` does not, which
+was about 2 MB of symbols on a 4 MB download until route A was told to do the
+same.
+
+**Notarisation is the one step never run to completion here**, and it is the
+last one. Everything either side of it is exercised.
+
+## Redistributing the framework at all
+
+`.gitignore` excludes `*.xcframework` with the note that redistributing a
+third-party LGPL binary *from this repository* is a decision nobody had taken.
+Attaching it to a release is redistribution too, and that decision has now been
+taken: it is what a downloadable Mac build is. The obligations that come with it
+are the four above, and they are why they are checked rather than remembered.

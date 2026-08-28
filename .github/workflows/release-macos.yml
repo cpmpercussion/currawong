@@ -1,0 +1,245 @@
+name: Release (macOS)
+
+# **APP-26.** Builds the Mac app when a release is published and attaches it,
+# with everything the LGPL requires travel alongside it.
+#
+# Why this is here and not in Xcode Cloud: PD-5 wants Developer ID plus
+# notarisation for the Mac build, and Xcode Cloud distributes to TestFlight and
+# the App Store only. Xcode Cloud is the iOS half of PD-5 (APP-25); this is the
+# other half. The two are triggered by the same event — a release creates a tag,
+# which starts the cloud build, and publishes, which starts this one.
+#
+# The work is in `scripts/package-macos-release.sh`, deliberately: everything
+# must run from a terminal (CLAUDE.md), and a release you cannot reproduce on
+# your own machine is one you cannot debug when it breaks at midnight before a
+# hamfest. This file is the trigger, the secrets and the upload.
+on:
+  release:
+    types: [published]
+  # For proving the pipeline without cutting a release. Produces the same
+  # artefacts, uploads them to the run instead of to a release, and does not
+  # notarise unless asked.
+  workflow_dispatch:
+    inputs:
+      notarise:
+        description: 'Notarise (needs the notary secrets)'
+        type: boolean
+        default: false
+
+# `gh release upload` writes to the release.
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build, sign and attach
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # Same key as ci.yml, so a release usually finds the framework CI already
+      # built. Four minutes when it does not. See docs/CODEC2.md.
+      - name: Cache Codec2.xcframework
+        id: codec2-cache
+        uses: actions/cache@v4
+        with:
+          path: Codec2.xcframework
+          key: codec2-${{ runner.os }}-${{ hashFiles('scripts/build-codec2-xcframework.sh') }}
+
+      - name: Build Codec2.xcframework
+        if: steps.codec2-cache.outputs.cache-hit != 'true'
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          scripts/build-codec2-xcframework.sh
+
+      # ------------------------------------------------------------- signing
+      #
+      # A Developer ID identity has to be in a keychain for codesign to find it.
+      # The keychain is created for this run and thrown away with the runner; the
+      # password is a nonce because nothing outside this job ever opens it.
+      #
+      # Absent the secrets the whole step is skipped and the build is ad-hoc
+      # signed. That still exercises the pipeline end to end — which is what a
+      # first run wants — but it is not a build to hand anybody, and both the
+      # packaged read-me and the summary at the end of this job say so.
+      - name: Check for signing secrets
+        id: secrets
+        # Secrets cannot be read from a step-level `if`, so the presence of each
+        # one becomes an output here and the later steps branch on that.
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          if [ -n "$CERT" ]; then
+            echo "signing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No MACOS_CERTIFICATE_P12 secret — building ad-hoc signed. See docs/LICENSING.md for the secrets this needs."
+          fi
+          if [ -n "$ASC_KEY_P8" ]; then
+            echo "asckey=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "asckey=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$PROFILE" ]; then
+            echo "profile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Signing needs a provisioning profile, and a runner has no Apple ID to
+          # fetch one with, so one of the two has to be here.
+          if [ -n "$CERT" ] && [ -z "$ASC_KEY_P8" ] && [ -z "$PROFILE" ]; then
+            echo "::error::A certificate but no way to get a provisioning profile. Set MACOS_PROVISIONING_PROFILE (simplest) or ASC_KEY_P8. Without one the app is signed and then killed on launch — see docs/LICENSING.md."
+            exit 1
+          fi
+
+      - name: Import the Developer ID certificate
+        if: steps.secrets.outputs.signing == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(uuidgen)"
+
+          echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$keychain" -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Without this, codesign blocks on a UI prompt that no one is there to
+          # answer and the job hangs until the timeout.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" >/dev/null
+          # Prepend rather than replace: the system keychains hold the Apple
+          # intermediate certificates the identity chains to.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      # -------------------------------------------------------------- package
+
+      # The provisioning profile is the other half of signing, and it is not
+      # optional: the app carries the restricted `keychain-access-groups`
+      # entitlement, and macOS SIGKILLs a bundle claiming it without an embedded
+      # profile — after codesign has called the signature valid. A runner has no
+      # Apple ID, so the App Store Connect API key is how `-allowProvisioningUpdates`
+      # authenticates. The same key notarises, which is why there is no
+      # app-specific password here. See docs/LICENSING.md.
+      - name: Install the App Store Connect API key
+        if: steps.secrets.outputs.signing == 'true' && steps.secrets.outputs.asckey == 'true'
+        id: asckey
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          path="$RUNNER_TEMP/asc.p8"
+          echo "$ASC_KEY_P8" | base64 --decode > "$path"
+          chmod 600 "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      # The other half of signing, and the cheaper half to supply: a Developer ID
+      # profile is a file, it is long-lived (the one this was developed against
+      # expires in 2044), and unlike the API key it does one job you can see. It
+      # is embedded in the bundle before signing so the signature seals it.
+      - name: Install the provisioning profile
+        if: steps.secrets.outputs.signing == 'true' && steps.secrets.outputs.profile == 'true'
+        id: profile
+        env:
+          PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          path="$RUNNER_TEMP/currawong.provisionprofile"
+          echo "$PROFILE" | base64 --decode > "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package
+        env:
+          MACOS_PROVISIONING_PROFILE: ${{ steps.profile.outputs.path }}
+          ASC_KEY_PATH: ${{ steps.asckey.outputs.path }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          # A published release names the version; a manual run reads it out of
+          # project.yml. The tag is `v0.1.0` and CFBundleShortVersionString is
+          # `0.1.0`, so the leading v comes off.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          args=()
+
+          if [ "${{ steps.secrets.outputs.signing }}" = "true" ]; then
+            args+=(--identity auto)
+            # Notarisation on a release always; on a manual run only if asked,
+            # because it is the slow step and a pipeline check does not need it.
+            if [ "${{ github.event_name }}" = "release" ] || [ "${{ inputs.notarise }}" = "true" ]; then
+              if [ -n "${ASC_KEY_PATH:-}" ] || [ -n "${NOTARY_APPLE_ID:-}" ]; then
+                args+=(--notarise)
+              else
+                echo "::warning::Signing but not notarising — no notary credentials. The download will need a right-click to open."
+              fi
+            fi
+          fi
+
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            args+=(--version "${RELEASE_TAG#v}")
+          fi
+
+          scripts/package-macos-release.sh "${args[@]}"
+
+      # The tests do not run here: `ci.yml` gates the commit this release points
+      # at, on both platforms. Re-running them would add ten minutes to a
+      # release for a result already known. The licence checks *are* re-run, by
+      # the packaging script, because those are conditions on distribution and
+      # this is the step that distributes.
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/* --clobber
+
+      - name: Upload as a run artefact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: currawong-macos
+          path: dist/
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Currawong macOS build"
+            echo
+            if [ "${{ steps.secrets.outputs.signing }}" = "true" ]; then
+              echo "Signed with a Developer ID."
+            else
+              echo "⚠️ **Ad-hoc signed — not distributable.** macOS will refuse to open it, and it"
+              echo "ships without the Keychain access group, so saved passwords will not work. Add"
+              echo "\`MACOS_CERTIFICATE_P12\`, \`MACOS_CERTIFICATE_PASSWORD\` and the App Store Connect"
+              echo "API key secrets; see \`docs/LICENSING.md\`."
+            fi
+            echo
+            if [ -f dist/SHA256SUMS.txt ]; then
+              echo '```'
+              cat dist/SHA256SUMS.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

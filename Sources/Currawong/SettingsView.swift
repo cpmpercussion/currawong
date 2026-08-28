@@ -89,6 +89,8 @@ struct SettingsView: View {
                 proxySection
                 Divider()
                 accessorySection
+                Divider()
+                aboutSection
             }
             .padding(20)
             .frame(maxWidth: 520)
@@ -514,6 +516,24 @@ struct SettingsView: View {
                 accessory: accessory,
                 remoteCommand: remoteCommand,
                 isEmbedded: true)
+        }
+    }
+
+    // MARK: - About
+
+    /// **APP-26.** The version, and what the app ships that is not ours.
+    ///
+    /// Last, because it is the only section nothing is configured in — and on
+    /// the settings screen rather than anywhere else because two of the four
+    /// licences require a notice be shown to whoever runs the application, and
+    /// this is the one screen an operator opens to read about the app rather
+    /// than to talk to somebody. See ``AboutPane``.
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("About")
+                .font(.title3.weight(.semibold))
+
+            AboutPane()
         }
     }
 }

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	**APP-26.** The macOS entitlements: the iOS set, plus the one thing that
+	makes the LGPL promise in `AboutPane` true rather than aspirational.
+
+	`project.yml` selects this file for `sdk=macosx*` only, the same way it
+	conditions LD_RUNPATH_SEARCH_PATHS, and `Currawong.entitlements` stays the
+	iOS set. Two files rather than one with a macOS-only key in it, because
+	`com.apple.security.cs.*` keys are meaningless on iOS and an entitlement the
+	platform does not know is a provisioning mismatch waiting to happen on the
+	one platform whose signing is not ours to debug.
+
+	Keep the keychain group here identical to the iOS file's. It is the same
+	app; a divergence would present as the secret store working on one platform.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)au.charlesmartin.currawong</string>
+	</array>
+
+	<!--
+	**Why this key is here, and what it does not do.**
+
+	LGPL-2.1 §6 permits distributing a work that uses the library only if the
+	recipient may modify the library and relink. LP-4 answers the linking half
+	by shipping Codec2 as its own dynamic framework. This key answers a
+	narrower question: under the hardened runtime that notarisation requires,
+	macOS enforces *library validation* and refuses to load nested code signed
+	by another team. This turns that check off for this app.
+
+	Be accurate about the size of that. The substitution procedure the app
+	documents — replace the framework, re-sign the application, launch — was
+	measured working on 2026-08-24, and it does not need this key: re-signing
+	the application ad-hoc makes the app and the framework the same signer, and
+	drops the hardened runtime with it, so library validation never applies.
+	What this key adds is the case where the two signers differ: a
+	Codec2.framework signed by somebody else inside an application re-signed
+	without it. That is a real way to relink and it would otherwise fail.
+
+	So: not the basis on which the Mac build is distributable — dynamic linking
+	is that — but one more route to substitution left open, at the cost of this
+	app's own library validation. Taken deliberately. It does not close OQ-6
+	for the App Store build, where the bundle cannot be modified at all and no
+	entitlement helps.
+
+	Related and separate: `keychain-access-groups` above is a *restricted*
+	entitlement and needs a provisioning profile embedded in the bundle.
+	Without one the kernel kills the app on launch with no message, after
+	codesign has called the signature valid. The `com.apple.security.cs.*`
+	keys need no profile. See docs/LICENSING.md for the measurements.
+
+	The hardened runtime is turned on by the release script as a signing option
+	rather than here, because that is what it is and not an entitlement.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
