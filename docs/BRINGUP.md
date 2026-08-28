@@ -2370,9 +2370,16 @@ short on a cold Bluetooth link — though in the app the settle itself spends up
 
 The argument for the shorter number: a device opened once delivers immediately on
 the next open **in a different process**, so it is the opening that wakes the
-hardware and the zeros are what that costs whoever pays first. A trial with a
-deliberately short (1.0 s) warm-up on a cold device is the measurement that would
-settle it.
+hardware and the zeros are what that costs whoever pays first.
+
+**The measurement that would settle it, for whoever picks this up.** Make the
+Bluetooth headset the default input, leave the machine alone for ~20 minutes so
+the device goes cold, and run a warm-up *shorter* than the silence followed by an
+over. A first over carrying audio in its first frame says the opening is what
+wakes the device and 1020 ms stands; one that does not says the hold has to
+outlast the silence and this number is too small. It wants a cold Bluetooth
+device and so cannot be run on demand or in CI — which is the same reason `BU-2`
+and `BU-15` ended up with on-air evidence rather than a test.
 
 **If a silent first over is ever seen again, do not simply raise that number.**
 Establish first whether the warm-up ran at all — `input warmed for …` in the route
