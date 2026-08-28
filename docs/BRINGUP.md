@@ -2332,30 +2332,52 @@ The verification question above did **not** need answering, and no library
 change was needed: the maintainer's fix was to warm the device, not to prove the
 warming worked. `RC-14` landed separately, for its own reasons.
 
-**The one number here is chosen rather than measured, and the entry says so.**
-`AudioPipelineIO.warmUpHoldTicks` is 17 ticks — 1020 ms — held past the settle.
-Every other constant in that file came off a recorded hold; this one could not,
-because **the fault would not reproduce on demand**. A cold probe on melchior on
-2026-08-28, driving `AVAudioEngine` directly after the machine had been left
-alone, delivered its first buffer at 283 ms and *room noise in that same
-buffer* — not the four seconds of zeros this entry records. So the device that
-showed the fault was warm again by the time anyone went looking, which is
-consistent with the original observation (the second run, moments later, was
-normal) and is exactly why the number had to be argued rather than read off.
+**It reproduces on Bluetooth, and not on a USB webcam — which is why it would
+not reproduce on demand.** Measurements in `experiment-data/bu22-input-warmup.txt`,
+melchior, 2026-08-28. A cold probe at 20:39 on the Logitech StreamCam, after the
+machine had been left alone, delivered its first buffer at 283 ms with room noise
+already in it: no fault at all. A webcam is permanently powered. When a pair of
+AirPods became the default input three hours later, the fault was immediate and
+repeatable.
 
-The argument, which is the part to check if this comes back: the warm-up does
-not have to *outlast* the silence, only to start it. What the scratch tool
-showed is that a device opened once delivers immediately on the next open **in
-a different process** — so it is the opening that wakes the hardware, and the
-zeros are what that costs whoever pays first. This makes the app pay it while
-the operator watches a connection progress. A second is enough to be sure the
-device was really opened and not merely asked for, and short enough to vanish
-inside a dial that is happening anyway.
+**The fault, reproduced on the app's own code path** — `RadioCore.AudioPipeline`,
+cold AirPods, the exact sequence the fix creates:
+
+```
+warm-up (1.6 s):              80 frames, 7 with audio, first frame 178 ms, first audio 1574 ms
+first over after a 1.5 s gap: 80 frames, 78 with audio, first frame 151 ms, first audio 151 ms
+```
+
+Read that pair carefully, because it is the whole case for the fix. Cold, the
+device delivered frames from 178 ms and **audio only from 1574 ms** — nearly a
+second and a half of zeros, *with frames arriving the whole time*, which is
+exactly why nothing above the device can tell it from silence. After the warm-up,
+the next open carried audio in its **first frame**. Not sooner: immediately.
+
+A second finding from the same evening, not the one being fixed and recorded
+because it is a trap for anything built on a short close/reopen: a fresh engine
+opened **one second after** the previous one closed delivered **no buffers at
+all** for three seconds. Reopening a Bluetooth input immediately after closing it
+is its own hazard.
+
+**The hold — `AudioPipelineIO.warmUpHoldTicks`, 17 ticks, 1020 ms past the
+settle — is still argued rather than derived, and here is exactly what is
+unproven.** The 1.6 s warm-up measured above *outlasted* the 1574 ms of silence,
+so it does not separate "opening the device wakes it" from "holding it open until
+audio appears wakes it". If it is the latter, 1020 ms past the settle may be
+short on a cold Bluetooth link — though in the app the settle itself spends up to
+1.2 s on a cold SCO open, so the real total is closer to 2.2 s than to 1.0 s.
+
+The argument for the shorter number: a device opened once delivers immediately on
+the next open **in a different process**, so it is the opening that wakes the
+hardware and the zeros are what that costs whoever pays first. A trial with a
+deliberately short (1.0 s) warm-up on a cold device is the measurement that would
+settle it.
 
 **If a silent first over is ever seen again, do not simply raise that number.**
-Establish first whether the warm-up ran at all — `input warmed for …` in the
-route log — and whether the device was still cold when it did. A warm-up that
-ran and did not work is a different fault from one that was too short.
+Establish first whether the warm-up ran at all — `input warmed for …` in the route
+log — and whether the device was still cold when it did. A warm-up that ran and
+did not work is a different fault from one that was too short.
 
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 
