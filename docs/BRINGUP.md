@@ -2506,6 +2506,59 @@ and its nominal rate stays 16 kHz even when idle, so the rate says nothing about
 whether the device is awake. `kAudioDevicePropertyDeviceIsRunningSomewhere` is
 the property that does.
 
+### BU-24 — the app terminates at connect when the input device changes 🔬 DIAGNOSED 2026-08-29
+
+**A real crash, caught during the on-air session of 2026-08-29**, in the
+AddressSanitizer build, on a live M17-CBR module A connection. Not a sanitizer
+report — an uncaught Objective-C exception. Full log in
+`experiment-data/bu24-installtap-format-mismatch-20260829.txt`.
+
+```
+*** Terminating app due to uncaught exception 'com.apple.coreaudio.avfaudio',
+    reason: 'Failed to create tap due to format mismatch,
+             <AVAudioFormat 1 ch, 16000 Hz, Float32>'
+
+  AVAudioNode.installTapOnBus
+  RadioCore.AudioPipeline.installCaptureLocked
+  RadioCore.AudioPipeline.startCapture
+  Currawong.AudioPipelineIO.startCapture
+  Currawong.AudioPipelineIO.warmUpInput          <- BU-22's warm-up
+  Currawong.RadioSession.connect
+```
+
+**What happened.** `installCaptureLocked` snapshots
+`inputNode.outputFormat(forBus: 0)`, builds its chain from that, tears the old
+tap down, and only then calls `installTap(format:)` with the snapshot. The input
+device changed inside that window — 16000 Hz mono is the Q2L, which was current
+when the format was read and was not when the tap went in — so AVFAudio rejected
+it. The library fault is `RC-15`; this entry is the app-side record and the
+reason it is fatal here rather than merely unfortunate.
+
+**Why our own `catch` did not save us.** `warmUpInput()` wraps `startCapture` in
+`do/catch` deliberately, and says so: *"Opportunistic: the connection is not
+failed over this."* That intent is correct and it does not work, because the
+throw is an **Objective-C `NSException`, which no Swift `catch` can intercept**.
+The warm-up added for `BU-22` therefore turns a recoverable condition into
+process termination, on the connect path.
+
+**Do not fix this by removing the warm-up.** The warm-up is doing real work
+(`BU-22`, measured), and the same install is reached from `startCapture` on
+key-down and from `RC-14`'s rebuild — removing one caller narrows the window
+without closing it. The fix belongs in the library, where the exception is
+raised: `RC-15`.
+
+**What the app should still do, once RC-15 lands:** decide what a warm-up that
+could not open the input means for the connect sequence. Today the `catch`
+exists and logs; if the library starts reporting this as a Swift error rather
+than an exception, that path becomes reachable for the first time and wants a
+deliberate answer rather than the current "log and carry on".
+
+**Reproduction.** Not deterministic — it needs the device to change inside the
+window between the format read and the tap install. It was produced here by
+changing the system default input while the app was connected, which is an
+ordinary operator action (plugging in a headset, or a Bluetooth device
+connecting). One occurrence, on one machine.
+
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 
 **One crash, not reproduced.** `Currawong-2026-08-28-191119.ips`, macOS 26.5.1,
