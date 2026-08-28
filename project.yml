@@ -35,17 +35,28 @@ packages:
   # token fetch (IAX-13), v0.5.3 adds the static
   # `AudioPipeline.activateSession()` (RC-11) that let this app delete its own
   # copy of the audio-session policy (`BU-3`), and v0.5.4 adds the listening
-  # policy (RC-12) that holds HFP only while transmitting. **v0.6.1 is the
-  # floor.** v0.6.0 carried the same code but its tag is not reachable from the
-  # library's `main` — that repo allows only rebase merges, which rewrite SHAs,
-  # so the tag was left where it was and v0.6.1 cut from `main` instead. Pinning
-  # the reachable one keeps `Package.resolved` pointing at a commit the library's
-  # history actually contains. What the release carries: `M17Kit.WeebillVoiceCodec` (M17-7), the
-  # pure-Swift Codec 2 this app's M17 path now uses instead of its own
-  # `Codec2Codec` (APP-27), and RC-13, which gave
-  # `AudioPipeline.Signal.routeChanged` an `AudioRouteChangeCause` payload —
-  # the app adopted that here because 0.6.0 forces it, not because it wanted
-  # to. `from:` accepts any 0.x above it — the library is 0.x, so its own
+  # policy (RC-12) that holds HFP only while transmitting. v0.6.0/v0.6.1 carry
+  # `M17Kit.WeebillVoiceCodec` (M17-7), the pure-Swift Codec 2 this app's M17
+  # path uses instead of its own `Codec2Codec` (APP-27), and RC-13, which gave
+  # `AudioPipeline.Signal.routeChanged` an `AudioRouteChangeCause` payload — the
+  # app adopted that because 0.6.0 forced it, not because it wanted to. The two
+  # tags carry identical code; v0.6.0's is not reachable from the library's
+  # `main` (that repo allows only rebase merges, which rewrite SHAs), so v0.6.1
+  # was cut from `main` and is the one to name.
+  #
+  # **v0.6.2 is the floor** (APP-29), for RC-14: `AudioPipeline` now rebuilds
+  # the capture chain on `.AVAudioEngineConfigurationChange` instead of only
+  # announcing it. Before, a live tap kept resampling from the old rate and
+  # striding by the old channel count — `source[index * channelStride]` reading
+  # past channel 0's allocation on the real-time audio thread. This app produces
+  # exactly that notification mid-over whenever the operator changes the default
+  # input device, which is the 1.5 s window `BU-23` is about. **Taking this
+  # release does not close `BU-23`** — that task says so itself, and only the
+  # ASan run settles it; the app takes the fix on its own merits. Also adds two
+  # rebuild counters on `AudioPipeline`, which nothing here reads yet, and the
+  # `experiment input-warm-up` probe behind `BU-22`'s hold constant. Nothing the
+  # app calls changed signature, so this is a floor bump and no code with it.
+  # `from:` accepts any 0.x above it — the library is 0.x, so its own
   # changelog warns the API may change in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
   # pins the build, and it is generated, so a fresh `make generate` resolves
   # forward. Pin exactly here if that ever bites.
@@ -64,7 +75,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.6.1
+    from: 0.6.2
 
 settings:
   base:
