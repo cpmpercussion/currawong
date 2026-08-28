@@ -279,6 +279,8 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     private var storedPermissionRequestCount = 0
     private var storedPrepareCount = 0
     private var storedSettleCount = 0
+    private var storedWarmUpCount = 0
+    private var storedWarmUpsCompleted = 0
 
     /// Called from inside ``settleRoute()``.
     ///
@@ -289,6 +291,11 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     /// reentrancy discipline the workspace `CLAUDE.md` asks for — deliver the
     /// event from inside the awaited call, not before or after it.
     var onSettleRoute: (@Sendable () async -> Void)?
+
+    /// Called from inside ``warmUpInput()`` (`BU-22`), and used the same way:
+    /// it runs while the connect believes the warm-up is still going, which is
+    /// the window a press must not get through.
+    var onWarmUpInput: (@Sendable () async -> Void)?
 
     var configureSessionError: Error?
     var startCaptureError: Error?
@@ -342,6 +349,21 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
         await hook?()
     }
 
+    /// **`BU-22`.** Counts the call and records how far the connect had got
+    /// when it arrived, which is what the ordering assertions are made of.
+    /// Runs whatever the test installed in ``onWarmUpInput`` — the hook a test
+    /// uses to make the warm-up slow, or to observe what it is racing.
+    func warmUpInput() async {
+        lock.lock()
+        storedWarmUpCount += 1
+        let hook = onWarmUpInput
+        lock.unlock()
+        await hook?()
+        lock.lock()
+        storedWarmUpsCompleted += 1
+        lock.unlock()
+    }
+
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
         if let startCaptureError { throw startCaptureError }
         lock.lock()
@@ -384,6 +406,22 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storedIsCapturing
+    }
+
+    /// How many times ``warmUpInput()`` was *entered* (`BU-22`).
+    var warmUpInputCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWarmUpCount
+    }
+
+    /// How many times it *returned*. The pair is what tells a warm-up still
+    /// running apart from one that finished — the connect must not report
+    /// itself connected between the two.
+    var warmUpInputsCompleted: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWarmUpsCompleted
     }
 
     var prepareForCaptureCount: Int {

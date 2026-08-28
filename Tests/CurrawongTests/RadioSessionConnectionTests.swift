@@ -60,6 +60,109 @@ final class RadioSessionConnectionTests: XCTestCase {
             ])
     }
 
+    // MARK: Warming the input at connect (BU-22)
+
+    /// **`BU-22` — the first over after the input spins up is silent.** Watched
+    /// on air twice on 2026-08-28: connect, key down, speak, and nothing goes
+    /// out; release, key down again, and every over after that is normal. The
+    /// silent one is always the one where the input device had just been opened,
+    /// and about a second had passed since — so it is not a race `settleRoute()`
+    /// is losing. The device delivers exact zeros for its first seconds, which
+    /// waiting for the *route* to stop moving cannot see.
+    ///
+    /// The fix is `BU-2`'s: do it at connect, where the operator is already
+    /// waiting and no over is at stake.
+    func testConnectingWarmsTheInputDevice() async {
+        let harness = SessionHarness()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .connected)
+        XCTAssertEqual(
+            harness.audio.warmUpInputCount, 1,
+            "connecting must wake the input, or the first over is the one that pays for it")
+    }
+
+    /// The half that keeps the warm-up from becoming the fault it fixes: a
+    /// press must never land on a running warm-up, which holds the microphone
+    /// the key-down is about to want. `connect()` only reports `.connected`
+    /// once the warm-up has *returned*, and `beginTransmit` refuses a press
+    /// that is not connected — so the window does not exist.
+    func testTheSessionIsNotConnectedUntilTheWarmUpHasFinished() async {
+        let harness = SessionHarness()
+        let observed = SessionHarness.Counter()
+        harness.audio.onWarmUpInput = { @Sendable in
+            await MainActor.run {
+                if harness.session.connection == .connected { observed.bump() }
+            }
+        }
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.audio.warmUpInputsCompleted, 1)
+        XCTAssertEqual(
+            observed.value, 0,
+            "the session reported itself connected while the warm-up still held the microphone")
+        XCTAssertEqual(harness.session.connection, .connected)
+    }
+
+    /// A warm-up is opportunistic — see `AudioIO.warmUpInput()`. A microphone
+    /// that will not open a few seconds before anybody has asked to transmit is
+    /// not a reason to refuse the call; `startCapture` asks again at key-down
+    /// and owns the failure the operator actually needs to hear about.
+    func testAWarmUpThatCannotOpenTheMicrophoneStillConnects() async {
+        let harness = SessionHarness()
+        harness.audio.startCaptureError = SessionHarness.AudioFailed()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .connected)
+        XCTAssertNil(
+            harness.session.alert,
+            "a failed warm-up must not put an alert in front of a connection that worked")
+    }
+
+    /// A connect that fails must not walk away from its own warm-up: the
+    /// microphone would stay open behind an alert nobody has read yet, which is
+    /// exactly the impression this app must never give.
+    func testAFailedConnectStillWaitsForTheWarmUpToRelease() async {
+        let harness = SessionHarness()
+        harness.client.connectError = SessionHarness.ConnectFailed()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.audio.warmUpInputCount, 1)
+        XCTAssertEqual(
+            harness.audio.warmUpInputsCompleted, 1,
+            "the alert went up while the warm-up still had the microphone open")
+    }
+
+    /// The warm-up is not asked for before the microphone is, and not before
+    /// the session is configured: it opens the input, so it has to come after
+    /// the permission `BU-2` moved here and after the category is right.
+    func testTheWarmUpComesAfterPermissionAndConfiguration() async {
+        let harness = SessionHarness()
+        harness.audio.recordPermissionGranted = false
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(
+            harness.audio.warmUpInputCount, 0,
+            "a refused microphone must not be warmed up anyway")
+    }
+
+    func testTheWarmUpIsSkippedWhenTheSessionCannotBeConfigured() async {
+        let harness = SessionHarness()
+        harness.audio.configureSessionError = SessionHarness.AudioFailed()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.audio.warmUpInputCount, 0)
+    }
+
     func testConnectFailurePresentsTheErrorAndStaysDisconnected() async {
         let harness = SessionHarness()
         harness.client.connectError = SessionHarness.ConnectFailed()
