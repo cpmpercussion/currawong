@@ -722,17 +722,22 @@ final class CompositionRoot {
             })
     }
 
-    /// The Codec2 conformance, or an error the operator can act on.
+    /// The Codec 2 3200 conformance, or an error the operator can act on.
     ///
-    /// Separate so the failure has somewhere to be explained: ``Codec2Codec``
-    /// only exists when `Codec2.xcframework` was linked, and a build without
-    /// it should say so plainly rather than fail to find a symbol.
+    /// **APP-27: this is `M17Kit.WeebillVoiceCodec`, not ``Codec2Codec``.**
+    /// Weebill is the library's pure-Swift Codec 2 (M17-7), so unlike the
+    /// XCFramework binding it survives being consumed over SPM and the app no
+    /// longer has to carry its own conformance to have a codec at all. The
+    /// `#if` is gone with it: there is no longer a build of this app in which
+    /// M17 has no codec, which is why `M17LinkError.codecUnavailable` is now
+    /// unreachable from here.
+    ///
+    /// ``Codec2Codec`` is still in the tree and still compiles, deliberately —
+    /// swapping this one line back is how the two are compared on the air, and
+    /// removing the framework is a separate decision that has not been taken.
+    /// See docs/CODEC2.md.
     private static func makeVoiceCodec() throws -> any VoiceCodec {
-        #if canImport(Codec2)
-        return try Codec2Codec()
-        #else
-        throw M17LinkError.codecUnavailable
-        #endif
+        return try WeebillVoiceCodec()
     }
 
     /// The GSM 06.10 conformance EchoLink audio needs.
