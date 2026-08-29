@@ -153,7 +153,7 @@ targets:
       path: Sources/Currawong/Info.plist
       properties:
         CFBundleDisplayName: Currawong
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "0.2.0"
         CFBundleVersion: "1"
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "Copyright 2026 Currawong contributors. Apache-2.0."
@@ -268,7 +268,7 @@ targets:
       path: Sources/CurrawongLiveActivity/Info.plist
       properties:
         CFBundleDisplayName: Currawong Transmit
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "0.2.0"
         CFBundleVersion: "1"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
