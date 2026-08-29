@@ -2981,7 +2981,10 @@ worsens this.
 #### Where the fix goes
 
 **The library, and it needs its own `RC-*` task and PR in `swift-hamvoip`** —
-not here, and not on `APP-32`'s branch. Two separable defects:
+not here, and not on `APP-32`'s branch. **Filed as
+[`swift-hamvoip#60`](https://github.com/cpmpercussion/swift-hamvoip/issues/60),
+proposed there as `RC-16`**, with the fix plan and the two regression tests it
+wants. Two separable defects:
 
 1. **The lock must not be held across an AVFAudio call that can raise.** This is
    the one that turns a survivable failure into a dead app, and it is the more
