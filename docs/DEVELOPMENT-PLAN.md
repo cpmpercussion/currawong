@@ -1470,12 +1470,22 @@ shows Xcode's own test-harness temporary exceptions, which do not ship); the iOS
 build's signature is unchanged, with no sandbox key; and the sandboxed Release
 build launches, runs in a container and logs no sandbox denial.
 
-**Still owed, and it is the part a build cannot show:** the workspace note that
-raised this asked for a real-Mac check that **UDP audio, the microphone and BLE
-PTT all still work under sandbox**, and that check is on air rather than in a
-test. Everything above is evidence that the box is the right shape, not that the
-app works inside it. Do that before the first macOS TestFlight build goes to
-anyone.
+**The on-air check is done, 2026-08-29**, which is what the workspace note
+asked for and what a build cannot show. Against node 44309 and M17-CBR, on the
+sandboxed Release build, all three capabilities were exercised by the operator:
+the connect completed to both services (`network.client`), the Q2L keyed PTT
+over BLE (`device.bluetooth`), and capture ran (`device.audio-input`). **No
+sandbox denial was logged for the app at any point.**
+
+**The session did find a fault, and it is not this one.** Switching the audio
+device mid-session and keying leaves the app permanently unresponsive: an
+Objective-C exception from `installTap` unwinds through a `defer`-released
+`NSLock` in `RadioCore.AudioPipeline` and orphans it. It is **`BU-25`**, it is
+`BU-24`'s exception still reachable with RC-15 in place, and the fix is a
+library task in `swift-hamvoip`. It reproduces identically on an un-sandboxed
+build of this same commit — a control built by swapping only
+`CODE_SIGN_ENTITLEMENTS` back — so **APP-32 neither causes nor worsens it**, and
+that control is the evidence rather than the argument.
 
 **One behaviour change to expect, which is not a bug:** a sandboxed build is a
 different defaults and Keychain client from an un-sandboxed one. macOS relocates

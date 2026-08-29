@@ -2901,3 +2901,104 @@ which the app never does.
 
 **Still unrun, and still needing a person:** `make asan-macos` with a real
 connection and a device change mid-over. Nothing above involves transmitting.
+
+### BU-25 — an orphaned lock deadlocks the app when the input device changes mid-session 🔧 OPEN 2026-08-29
+
+**Found on the macOS sandbox check for `APP-32`**, 2026-08-29, against node
+44309 and M17-CBR, on a **sandboxed macOS Release build**. It reproduces
+identically on an **un-sandboxed** build of the same commit, so it has nothing
+to do with App Sandbox — see the control run below.
+
+**The sequence, twice:** connect, PTT (fine), switch the audio device to the
+Q2L, PTT — and the app stops responding for good. In the second run the audio
+was switched to the Q2L and then back to the MacBook Air's own microphone,
+which is the pairing that shows in the log.
+
+#### It is `BU-24`'s exception, still reachable with `RC-15` in place
+
+`installTap` raises the same Objective-C `NSException` it did on 2026-08-29's
+earlier session, on the build that pins the library at **v0.7.0 — the release
+carrying RC-15's fix**:
+
+```
+[avae] AVAudioEngineGraph.mm:504   Error, formats don't match!
+       Input HW format: <AVAudioFormat 1 ch, 44100 Hz, Float32>,
+       tap format:      <AVAudioFormat 1 ch, 16000 Hz, Float32>
+[avae] AVAudioEngineGraph.mm:2086  Failed to initialize active nodes
+       in input chain! err = -10868
+
+  objc_exception_throw
+  AVAudioEngineImpl::InstallTapOnNode
+  -[AVAudioNode installTapOnBus:bufferSize:format:block:]
+  RadioCore.EngineInputTapHost.installTap      CaptureTapInstaller.swift:74
+  RadioCore.AudioPipeline.installCaptureLocked AudioPipeline.swift:1368
+  RadioCore.AudioPipeline.startCapture         AudioPipeline.swift:1292
+  Currawong.AudioPipelineIO.startCapture
+  Currawong.RadioSession.applyTransmit         <- the PTT press
+```
+
+**RC-15's premise does not hold.** That fix installs the tap with `format: nil`
+— `CaptureTapInstaller.swift:74` does exactly that, and its comment says the
+format "cannot mismatch by construction". It can. With `format: nil` AVFAudio
+uses the *input node's own* format, and that one can be stale relative to the
+hardware: here the node still carried the Q2L's 16000 Hz while the hardware had
+already become the built-in microphone's 44100 Hz. The mismatch simply moved
+from between our snapshot and the device to inside `AVAudioEngine`, and the
+installer's read-the-format-afterwards loop never runs, because the raise
+happens on the install itself.
+
+#### The new part, and the worse one: the lock is orphaned
+
+`startCapture` takes `AudioPipeline`'s `NSLock` and releases it with
+`defer { lock.unlock() }`, then calls `installCaptureLocked` inside that region.
+**Swift's `defer` does not run when an Objective-C exception unwinds through
+it**, so the lock is never released, and it is not recursive. Every later caller
+blocks on it forever. A `sample` of the frozen process shows precisely three
+threads waiting on it and *none* holding it:
+
+| Thread | Blocked in | Why it was called |
+|---|---|---|
+| main | `AudioPipeline.stop()` :1576 | `RadioSession.endTransmit` — the PTT *release* |
+| cooperative pool | `AudioPipeline.enqueuePlayback(_:)` :1549 | received audio still arriving |
+| `engine` queue | `rebuildCaptureAfterConfigurationChange()` :1423 | the `.AVAudioEngineConfigurationChange` the device switch posted |
+
+So the same fault that killed the process in `BU-24` now hangs it instead:
+AppKit swallows the exception at the run loop, nothing terminates, and the app
+sits there with a dead audio pipeline. Launching with
+`-NSApplicationCrashOnExceptions YES` turns it back into the crash and is how
+the backtrace above was obtained.
+
+#### The control run — this is not the sandbox
+
+Same commit, same binary, built with only `CODE_SIGN_ENTITLEMENTS` swapped back
+to the un-sandboxed iOS file, run under `lldb` with a breakpoint on
+`objc_exception_throw`: **it stops at the identical exception.** Zero sandbox
+denials were logged for the app in either run, and all three of `APP-32`'s
+entitlements were exercised successfully before the fault (connect to 44309 and
+M17-CBR, Q2L BLE PTT keying, capture running). `APP-32` neither causes nor
+worsens this.
+
+#### Where the fix goes
+
+**The library, and it needs its own `RC-*` task and PR in `swift-hamvoip`** —
+not here, and not on `APP-32`'s branch. Two separable defects:
+
+1. **The lock must not be held across an AVFAudio call that can raise.** This is
+   the one that turns a survivable failure into a dead app, and it is the more
+   important of the two. `defer`-based unlocking is not exception-safe against
+   ObjC; either the AVFAudio call moves out of the locked region, or the raise
+   is caught at the boundary before it can unwind past the unlock.
+2. **The raise is still reachable**, so `AudioPipelineError.inputFormatUnstable`
+   is not the only outcome a caller must expect. Reopening this is a question
+   for `RC-15`'s author with the evidence below, not a judgement to make here.
+
+**Evidence, all in `experiment-data/`:** the two `sample` runs of the frozen
+process (`app32-sandbox-ptt-hang-2026-08-29-sample{1,2}.txt`), the crash report
+from the instrumented sandboxed run
+(`app32-sandbox-ptt-installtap-crash-2026-08-29.ips`), and the un-sandboxed
+control's full `lldb` session including the AVFAudio error lines
+(`app32-unsandboxed-control-lldb-2026-08-29.log`).
+
+**Related:** `BU-24` (same exception, fatal instead of hanging), `BU-23` (the
+mid-over device-change window), `BU-13` (the starve when engine and Q2L rates
+disagree — the same 16000 Hz that appears above).
