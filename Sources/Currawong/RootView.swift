@@ -99,6 +99,10 @@ struct RootView: View {
                     + "tx=\(session.routeSignalsWhileTransmitting) "
                     + "prepMs=\(session.lastPreparationMilliseconds) "
                     + "micMs=\(session.lastCaptureStartMilliseconds) "
+                    // `BU-24`: a warm-up that could not open the input is why a
+                    // first over is silent or a press fails, and this is the
+                    // only place a device test can see it.
+                    + (session.inputWarmUp.didWarm ? "" : "warmUp=failed ")
                     + "trace=\(session.holdTrace.joined(separator: ","))")
 
             panes

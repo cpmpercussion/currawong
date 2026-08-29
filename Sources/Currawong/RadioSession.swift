@@ -367,6 +367,31 @@ final class RadioSession: ObservableObject {
     /// no-accessory case. This is how a device test tells those apart.
     @Published private(set) var lastKeyDownRoute = ""
 
+    /// What the last connect's input warm-up managed to do (`BU-22`, `BU-24`).
+    ///
+    /// **A connect is never failed over this**, and nothing branches on it.
+    /// Warming the device is opportunistic: receiving is most of what a
+    /// connection is for, and the microphone is asked for again at key-down,
+    /// behind `AudioIO.startCapture`'s reactivate-and-rebuild repair and the
+    /// failure path that unkeys and alerts. Refusing to connect because the
+    /// microphone was busy seconds before anybody pressed PTT would trade a
+    /// working receive-only session for nothing.
+    ///
+    /// **It is published because the alternative is a failure with no trace.**
+    /// A warm-up that could not open the input means the device may still be
+    /// cold, so the operator's first over can be the silent one `BU-22` exists
+    /// to prevent — or the press fails outright. Either way the cause is here,
+    /// rather than only in a diagnostic log nobody has running at the time.
+    ///
+    /// **Reachable for the first time since RC-15.** The interesting failure
+    /// used to be an Objective-C `NSException` raised inside `installTap`,
+    /// which terminated the app rather than arriving as an error — through a
+    /// `do/catch` written to tolerate exactly it (`BU-24`, on air 2026-08-29).
+    ///
+    /// Set on every exit from ``connect()`` that started a warm-up, including
+    /// the failures; `.warmed` until a connect says otherwise.
+    @Published private(set) var inputWarmUp: InputWarmUpOutcome = .warmed
+
     /// How long opening the microphone took, from ``AudioIO``. This is the
     /// quantity `AudioPipelineIO.captureSlowThresholdNanoseconds` is compared
     /// against, so it is worth carrying out to a device test rather than
@@ -1562,7 +1587,7 @@ final class RadioSession: ObservableObject {
         do {
             resolved = try await resolveDirectoryServer(in: validated)
         } catch {
-            await warmUp.value
+            inputWarmUp = await warmUp.value
             connection = .disconnected
             present(title: "Could not reach the directory server", message: "\(error)")
             return
@@ -1577,7 +1602,7 @@ final class RadioSession: ObservableObject {
                     webTransceiverToken: trimmedToken),
                 transmitTimeout, proxy)
         } catch {
-            await warmUp.value
+            inputWarmUp = await warmUp.value
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
             return
@@ -1590,7 +1615,7 @@ final class RadioSession: ObservableObject {
         do {
             try await newLink.connect()
         } catch {
-            await warmUp.value
+            inputWarmUp = await warmUp.value
             tearDownLink()
             connection = .disconnected
             present(title: "Could not connect", message: "\(error)")
@@ -1599,7 +1624,10 @@ final class RadioSession: ObservableObject {
 
         // `BU-22`, the other half. Cheap by then — the dial above is normally
         // the longer of the two — and it must finish before a press is possible.
-        await warmUp.value
+        //
+        // **The outcome is recorded, and does not gate the connect** (`BU-24`).
+        // See ``inputWarmUp``.
+        inputWarmUp = await warmUp.value
 
         connection = .connected
         transmitState = newLink.transmitState()

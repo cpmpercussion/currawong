@@ -300,6 +300,13 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     var configureSessionError: Error?
     var startCaptureError: Error?
 
+    /// What ``warmUpInput()`` reports (`BU-24`). Warmed by default, so every
+    /// test that does not care is unaffected — and settable rather than derived
+    /// from ``startCaptureError``, because the real warm-up swallows its own
+    /// failure and a test should be able to say "the warm-up failed" without
+    /// also breaking the key-down path.
+    var warmUpOutcome: InputWarmUpOutcome = .warmed
+
     /// Diagnostic only — the key/unkey log reads this and nothing branches on
     /// it, so a fixed string is the whole of what a fake owes the protocol.
     var audioStateDescription: String { "fake audio, no session" }
@@ -353,15 +360,18 @@ final class FakeAudioIO: AudioIO, @unchecked Sendable {
     /// when it arrived, which is what the ordering assertions are made of.
     /// Runs whatever the test installed in ``onWarmUpInput`` — the hook a test
     /// uses to make the warm-up slow, or to observe what it is racing.
-    func warmUpInput() async {
+    @discardableResult
+    func warmUpInput() async -> InputWarmUpOutcome {
         lock.lock()
         storedWarmUpCount += 1
         let hook = onWarmUpInput
+        let outcome = warmUpOutcome
         lock.unlock()
         await hook?()
         lock.lock()
         storedWarmUpsCompleted += 1
         lock.unlock()
+        return outcome
     }
 
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
