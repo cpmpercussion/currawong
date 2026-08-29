@@ -1481,8 +1481,9 @@ sandbox denial was logged for the app at any point.**
 device mid-session and keying leaves the app permanently unresponsive: an
 Objective-C exception from `installTap` unwinds through a `defer`-released
 `NSLock` in `RadioCore.AudioPipeline` and orphans it. It is **`BU-25`**, it is
-`BU-24`'s exception still reachable with RC-15 in place, and the fix is a
-library task in `swift-hamvoip`. It reproduces identically on an un-sandboxed
+`BU-24`'s exception still reachable with RC-15 in place, and the fix was a
+library task in `swift-hamvoip` — **RC-16, since released as v0.8.0 and pinned
+here; `BU-25` is closed.** It reproduces identically on an un-sandboxed
 build of this same commit — a control built by swapping only
 `CODE_SIGN_ENTITLEMENTS` back — so **APP-32 neither causes nor worsens it**, and
 that control is the evidence rather than the argument.
