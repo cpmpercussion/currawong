@@ -1371,7 +1371,10 @@ by *selecting* the right one. The start condition is a tag change matching
 - **macOS.** `PD-5` wants Developer ID plus notarisation for the Mac build, and
   Xcode Cloud distributes to TestFlight and the App Store only. The Mac side
   stays separate, most likely as an extension of `.github/workflows/ci.yml`.
-  Xcode Cloud is the iOS half of `PD-5`, not both halves.
+  Xcode Cloud is the iOS half of `PD-5`, not both halves. **The macOS upload
+  blocker itself is closed by `APP-32`** — the Mac build is sandboxed now, so
+  ITMS-90296 no longer stands between an archive and TestFlight if that route is
+  ever wanted.
 - **The terminal-first rule.** Xcode Cloud workflows are configured in Xcode or
   App Store Connect and have no terminal equivalent, which is a real exception
   to the rule in `CLAUDE.md` and is taken deliberately. Everything that *can*
@@ -1409,13 +1412,78 @@ What this buys, beyond a smaller build:
 - **Every Xcode Cloud build is four minutes shorter**, which matters because
   that build was uncacheable.
 - **One fewer embedded, separately signed binary** to satisfy under App
-  Sandbox, which is the next piece of work here.
+  Sandbox, which was the next piece of work here and is now `APP-32`.
 
 `FR-2.4` is untouched: an M17 stream frame still carries Codec 2 3200, and
 `M17Kit.WeebillVoiceCodec` (M17-7) is what encodes it since APP-27.
 
 **Reversing this is a real decision, not a revert.** See `docs/CODEC2.md`,
 which is now the record of what was removed and why.
+
+### APP-32 — App Sandbox on the macOS build
+
+✅ **DONE**, 2026-08-29. The macOS archive uploaded and was rejected;
+this is the fix.
+
+**Raised by:** Xcode Cloud build 6 (macOS, 2026-08-23), whose archive and export
+were both clean and whose *upload* App Store Connect refused:
+
+> **ITMS-90296: App sandbox not enabled** — The following executables must
+> include the 'com.apple.security.app-sandbox' entitlement with a Boolean value
+> of true.
+
+That is unconditional for TestFlight and the Mac App Store. iOS passed the same
+build, which is the signature of the fault rather than a coincidence: iOS has no
+App Sandbox entitlement at all, because every iOS app is sandboxed already. One
+multiplatform target with one entitlements file cannot answer both platforms, so
+the file was split.
+
+**What changed:**
+
+- `Sources/Currawong/Currawong-macOS.entitlements` is new — App Sandbox plus the
+  three capabilities the app actually uses: `network.client` (the UDP to nodes,
+  reflectors and the EchoLink proxy, and the two outbound HTTPS fetches in
+  `M17HostFile` and `NodeLookup`), `device.audio-input`, `device.bluetooth`. The
+  Keychain access group carries over unchanged.
+- `project.yml` selects it with `CODE_SIGN_ENTITLEMENTS[sdk=macosx*]`,
+  conditioned on the SDK the same way `LD_RUNPATH_SEARCH_PATHS` above it
+  already is. `Sources/Currawong/Currawong.entitlements` keeps the iOS build and
+  its "no App Sandbox" paragraph was rewritten rather than deleted — the
+  reasoning it recorded is still true of iOS.
+
+**What was deliberately not granted:**
+
+- **No `com.apple.security.network.server`.** Nothing listens. Neither the app
+  nor the library constructs an `NWListener`, and the datagram transport
+  receives on the connection it dialled, which the client entitlement covers.
+- **No multicast entitlement.** `PD-3` is untouched and not weakened:
+  `com.apple.developer.networking.multicast` is a separate, Apple-approved
+  entitlement and is not requested. `NSLocalNetworkUsageDescription` is a usage
+  string and is unrelated to both.
+- **No file-access entitlements.** The app opens no documents — no
+  `fileImporter`, no `NSOpenPanel` — so there is nothing to grant.
+
+**Verified here:** `make test-macos` green; the Release macOS build's signature
+carries exactly `app-sandbox`, `network.client`, `device.audio-input`,
+`device.bluetooth` and the Keychain group and nothing else (Debug additionally
+shows Xcode's own test-harness temporary exceptions, which do not ship); the iOS
+build's signature is unchanged, with no sandbox key; and the sandboxed Release
+build launches, runs in a container and logs no sandbox denial.
+
+**Still owed, and it is the part a build cannot show:** the workspace note that
+raised this asked for a real-Mac check that **UDP audio, the microphone and BLE
+PTT all still work under sandbox**, and that check is on air rather than in a
+test. Everything above is evidence that the box is the right shape, not that the
+app works inside it. Do that before the first macOS TestFlight build goes to
+anyone.
+
+**One behaviour change to expect, which is not a bug:** a sandboxed build is a
+different defaults and Keychain client from an un-sandboxed one. macOS relocates
+its preferences into the app's container, so **an existing local macOS install's
+channel list and stored secret will not appear** in a sandboxed build. It
+presents as an empty channel list and a re-prompt for the secret. There is no
+migration and none is planned; the Mac build has never been distributed to
+anyone, so the only affected install is the maintainer's own.
 
 ## Phase 5 — BLE PTT (after APP-2)
 

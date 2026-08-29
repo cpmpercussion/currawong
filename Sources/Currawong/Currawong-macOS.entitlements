@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	**The macOS half of the entitlements, and the only place App Sandbox is
+	on.** iOS keeps `Currawong.entitlements`, which has no sandbox key in it
+	because iOS has no such entitlement; `project.yml` selects between the two
+	with `CODE_SIGN_ENTITLEMENTS[sdk=macosx*]`.
+
+	This file exists because TestFlight and the Mac App Store reject an
+	un-sandboxed macOS upload unconditionally — ITMS-90296, "App sandbox not
+	enabled", which is where the first macOS archive died (2026-08-23). The
+	archive and the export were both clean; only the upload refused it, and the
+	signature of the fault is iOS passing while macOS fails at the last step.
+
+	The sandbox is a deny-by-default box, so everything the app does across a
+	process boundary has to be named. What follows is that list, and it is
+	short because the app is small: it sends UDP, it records the microphone, it
+	talks to a BLE accessory, and it keeps one secret.
+	-->
+
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!--
+	Outbound network only. This covers every socket the app opens: the UDP
+	datagrams `RadioCore.NWDatagramTransport` sends to nodes, reflectors and
+	the EchoLink proxy, and the two outbound HTTPS fetches the app makes on its
+	own (`M17HostFile` and `NodeLookup`, both `URLSession`).
+
+	There is deliberately no `com.apple.security.network.server`: nothing here
+	listens. Neither the app nor the library constructs an `NWListener`, and
+	the datagram transport receives on the connection it dialled rather than on
+	a bound port, which the client entitlement already allows.
+
+	**This is not the multicast entitlement and PD-3 is not weakened.** PD-3
+	forbids `com.apple.developer.networking.multicast`, a separate,
+	Apple-approved entitlement for sending to multicast groups; it is not
+	requested here or anywhere. Nor is this the local-network *prompt*, which
+	is `NSLocalNetworkUsageDescription` in `project.yml` — a usage string, not
+	an entitlement.
+	-->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!--
+	The microphone. Without transmit the app is a receiver, so this is not
+	optional. It pairs with `NSMicrophoneUsageDescription` in `project.yml`:
+	the entitlement is what lets a sandboxed process ask, the usage string is
+	what the prompt says.
+	-->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+
+	<!--
+	Bluetooth, for the PTT accessory (PT-2, PT-3). Same pairing as above with
+	`NSBluetoothAlwaysUsageDescription`.
+	-->
+	<key>com.apple.security.device.bluetooth</key>
+	<true/>
+
+	<!--
+	Unchanged from the iOS file, and still required for the same reason:
+	`KeychainSecretStore` asks for the data protection keychain, and on macOS
+	opting into that without naming an access group fails every write with
+	errSecMissingEntitlement. See the comment in `Currawong.entitlements`.
+
+	One consequence of turning the sandbox on is worth knowing before it is
+	mistaken for a bug: a sandboxed build is a different keychain client from
+	an un-sandboxed one, so **secrets stored by an earlier local macOS build
+	may not be readable by this one.** The app reports that as no stored
+	secret and prompts again, which is the right behaviour but looks like data
+	loss. Re-entering the secret is the fix.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)au.charlesmartin.currawong</string>
+	</array>
+</dict>
+</plist>
