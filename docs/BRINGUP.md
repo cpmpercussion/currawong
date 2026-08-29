@@ -2506,7 +2506,7 @@ and its nominal rate stays 16 kHz even when idle, so the rate says nothing about
 whether the device is awake. `kAudioDevicePropertyDeviceIsRunningSomewhere` is
 the property that does.
 
-### BU-24 — the app terminates at connect when the input device changes 🔬 DIAGNOSED 2026-08-29
+### BU-24 — the app terminates at connect when the input device changes ✅ ANSWERED 2026-08-29
 
 **A real crash, caught during the on-air session of 2026-08-29**, in the
 AddressSanitizer build, on a live M17-CBR module A connection. Not a sanitizer
@@ -2526,38 +2526,76 @@ report — an uncaught Objective-C exception. Full log in
   Currawong.RadioSession.connect
 ```
 
-**What happened.** `installCaptureLocked` snapshots
-`inputNode.outputFormat(forBus: 0)`, builds its chain from that, tears the old
-tap down, and only then calls `installTap(format:)` with the snapshot. The input
+**What happened.** `installCaptureLocked` snapshotted
+`inputNode.outputFormat(forBus: 0)`, built its chain from that, tore the old tap
+down, and only then called `installTap(format:)` with the snapshot. The input
 device changed inside that window — 16000 Hz mono is the Q2L, which was current
 when the format was read and was not when the tap went in — so AVFAudio rejected
-it. The library fault is `RC-15`; this entry is the app-side record and the
-reason it is fatal here rather than merely unfortunate.
+it.
 
 **Why our own `catch` did not save us.** `warmUpInput()` wraps `startCapture` in
 `do/catch` deliberately, and says so: *"Opportunistic: the connection is not
-failed over this."* That intent is correct and it does not work, because the
+failed over this."* That intent is correct and it did not work, because the
 throw is an **Objective-C `NSException`, which no Swift `catch` can intercept**.
-The warm-up added for `BU-22` therefore turns a recoverable condition into
+The warm-up added for `BU-22` therefore turned a recoverable condition into
 process termination, on the connect path.
 
-**Do not fix this by removing the warm-up.** The warm-up is doing real work
-(`BU-22`, measured), and the same install is reached from `startCapture` on
-key-down and from `RC-14`'s rebuild — removing one caller narrows the window
-without closing it. The fix belongs in the library, where the exception is
-raised: `RC-15`.
+#### The library half: RC-15, fixed
 
-**What the app should still do, once RC-15 lands:** decide what a warm-up that
-could not open the input means for the connect sequence. Today the `catch`
-exists and logs; if the library starts reporting this as a Swift error rather
-than an exception, that path becomes reachable for the first time and wants a
-deliberate answer rather than the current "log and carry on".
+`swift-hamvoip` PR #59. The tap is installed with **no format at all** — AVFAudio
+uses whatever the bus has at that instant, which cannot mismatch by construction
+— and the chain is checked against the format the node reports *afterwards*,
+retrying if the device moved and throwing
+`AudioPipelineError.inputFormatUnstable` if it will not hold still. The
+out-of-bounds read a briefly-wrong chain could do on the audio thread is clamped
+separately, by the tap bounding its reads to the buffer it is handed.
 
-**Reproduction.** Not deterministic — it needs the device to change inside the
-window between the format read and the tap install. It was produced here by
-changing the system default input while the app was connected, which is an
-ordinary operator action (plugging in a headset, or a Bluetooth device
-connecting). One occurrence, on one machine.
+**The app picks this up automatically:** `project.yml` pins `from: 0.6.2`, so
+0.7.0 resolves without an edit. It is worth checking that it *did* — a new
+library tag can still resolve to the previous one out of the SwiftPM tag cache,
+which has cost time before. `swift package show-dependencies` after a resolve is
+the check.
+
+#### The app half: what a failed warm-up now means
+
+This entry's own question was *"decide what a warm-up that could not open the
+input means for the connect sequence"*, because the library reporting a Swift
+error makes that `catch` reachable for the first time.
+
+**The connect continues, and the outcome is recorded.** Not failing the connect
+is deliberate rather than merely the status quo: receiving is most of what a
+connection is for, the microphone is asked for again at key-down behind
+`AudioIO.startCapture`'s reactivate-and-rebuild repair, and that path already
+fails closed — unkeys, releases the hold, alerts — so the operator-facing
+failure has an owner. Refusing to connect because the microphone was busy
+seconds before anybody pressed PTT would trade a working receive-only session
+for nothing.
+
+**But "opportunistic" was doing duty for "invisible", and those are different.**
+A warm-up that could not open the input means the device may still be cold, so
+the consequence is either the silent first over `BU-22` exists to prevent or a
+press that fails — arriving with nothing in the session that says why, only a
+`Diagnostics.route` line nobody has running at the time. So `warmUpInput()`
+returns `InputWarmUpOutcome` (`.warmed` / `.couldNotOpenInput(String)`, carrying
+the library's own words), `RadioSession` publishes it as `inputWarmUp` at every
+exit from `connect()` that started one — the failures included, since the next
+attempt starts from the same cold device — and the transmit strip's route trace
+shows `warmUp=failed` when it is not `.warmed`. Nothing branches on it.
+
+Tested both ways at both levels: the outcome is right in `AudioPipelineIO`, and
+the session records it while still connecting, including on a connect that
+failed for its own reasons.
+
+#### What is not settled
+
+**Nothing here was reproduced on a device.** The library fix is settled by unit
+tests that move the format under a fake input node, and the hardware probe
+(`hamvoip-cli experiment capture-swap --at-start`) deliberately does not claim to
+reproduce the fault — the window is microseconds wide. The app-side change is a
+decision about a failure path plus its tests; the crash it descends from was one
+occurrence, on one machine, and is not deterministic. **What would close this
+beyond doubt is an ordinary connect on the Q2L with the library at 0.7.0**, which
+is a device test rather than an on-air one.
 
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 

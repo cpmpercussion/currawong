@@ -817,12 +817,15 @@ final class AudioPipelineIOSettleTests: XCTestCase {
         XCTAssertEqual(pipeline.stopCount, 1)
     }
 
-    /// Opportunistic, and deliberately silent about failing: the connection is
-    /// not failed over a microphone nobody has asked for yet, and the key-down
+    /// Opportunistic, and it does not fail the connect: the connection is not
+    /// refused over a microphone nobody has asked for yet, and the key-down
     /// path asks again with the error handling that matters. What it must not
     /// do is hold the route it escalated — a failed `startCapture` hands that
     /// back on its own, and the wait must not be paid for a device that never
     /// opened.
+    ///
+    /// **It is not silent about it either, which is `BU-24`.** The outcome goes
+    /// back to the caller, carrying the library's own description.
     func testAWarmUpThatCannotOpenTheDeviceReturnsWithoutWaiting() async throws {
         let pipeline = FakeCapturePipeline(
             startCaptureError: StubError(description: "no input device"))
@@ -836,9 +839,28 @@ final class AudioPipelineIOSettleTests: XCTestCase {
             monotonicNanoseconds: { 0 })
         try io.configureSession()
 
-        await io.warmUpInput()
+        let outcome = await io.warmUpInput()
 
         XCTAssertEqual(clock.elapsed, 0, "nothing opened, so there is nothing to hold open")
+        XCTAssertFalse(outcome.didWarm)
+        if case .couldNotOpenInput(let description) = outcome {
+            XCTAssertTrue(
+                description.contains("no input device"),
+                "the library's own words, so a report says which failure it was: \(description)")
+        } else {
+            XCTFail("a warm-up that could not open the input must say so, not report .warmed")
+        }
+    }
+
+    /// The other half of `BU-24`: a warm-up that did everything it set out to
+    /// do reports that, so `.couldNotOpenInput` means something.
+    func testAWarmUpThatOpenedTheDeviceReportsWarmed() async throws {
+        let (io, _, _, _) = makeIO(cascadeOn: [])
+        try io.configureSession()
+
+        let outcome = await io.warmUpInput()
+
+        XCTAssertEqual(outcome, .warmed)
     }
 
     /// A route that will not stop changing is not something to wait on. The cap

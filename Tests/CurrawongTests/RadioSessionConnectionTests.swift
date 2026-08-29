@@ -122,6 +122,50 @@ final class RadioSessionConnectionTests: XCTestCase {
             "a failed warm-up must not put an alert in front of a connection that worked")
     }
 
+    /// **`BU-24`.** Opportunistic is not the same as invisible. A warm-up that
+    /// could not open the input means the device may still be cold — so the
+    /// first over is the silent one `BU-22` exists to prevent, or the press
+    /// fails — and the session has to carry the reason, or that arrives with
+    /// nothing anywhere saying why.
+    ///
+    /// Reachable for the first time since RC-15: this failure used to be an
+    /// Objective-C `NSException` that terminated the app rather than an error
+    /// anything could catch.
+    func testAFailedWarmUpIsRecordedOnTheSession() async {
+        let harness = SessionHarness()
+        harness.audio.warmUpOutcome = .couldNotOpenInput("the input device kept changing")
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .connected, "still not a reason to refuse a call")
+        XCTAssertEqual(
+            harness.session.inputWarmUp, .couldNotOpenInput("the input device kept changing"))
+        XCTAssertFalse(harness.session.inputWarmUp.didWarm)
+    }
+
+    func testASuccessfulWarmUpLeavesTheSessionSayingSo() async {
+        let harness = SessionHarness()
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.inputWarmUp, .warmed)
+    }
+
+    /// The failures record it too. A connect that could not be made still ran a
+    /// warm-up, and if that could not open the input the operator's *next*
+    /// attempt starts from the same cold device — so the answer must not be
+    /// thrown away with the attempt.
+    func testAFailedConnectStillRecordsWhatTheWarmUpDid() async {
+        let harness = SessionHarness()
+        harness.client.connectError = SessionHarness.ConnectFailed()
+        harness.audio.warmUpOutcome = .couldNotOpenInput("no input device")
+
+        await harness.connect()
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.session.inputWarmUp, .couldNotOpenInput("no input device"))
+    }
+
     /// A connect that fails must not walk away from its own warm-up: the
     /// microphone would stay open behind an alert nobody has read yet, which is
     /// exactly the impression this app must never give.

@@ -11,6 +11,30 @@ import AVFAudio
 import AVFoundation
 #endif
 
+/// What the connect-time input warm-up managed to do (`BU-22`, `BU-24`).
+///
+/// The warm-up is opportunistic and never fails a connect, so this is not an
+/// error type and nothing branches on it to decide whether to carry on. It
+/// exists so that a warm-up that could not open the microphone leaves a mark
+/// somewhere an operator or a device test can find, instead of only in a
+/// diagnostic log: without one, its consequence — a silent first over, or a PTT
+/// that fails — arrives with nothing in the session that says why.
+///
+/// See ``AudioIO/warmUpInput()``.
+enum InputWarmUpOutcome: Equatable, Sendable {
+    /// The input opened, was held past the route settling, and was closed
+    /// again. The device is awake.
+    case warmed
+
+    /// The microphone could not be opened, described as the library described
+    /// it. **Reachable for the first time since RC-15**: the interesting
+    /// failure used to be an Objective-C `NSException` that terminated the
+    /// process rather than an error anything could catch (`BU-24`).
+    case couldNotOpenInput(String)
+
+    var didWarm: Bool { self == .warmed }
+}
+
 /// The app's view of the audio hardware.
 ///
 /// `RadioCore.AudioPipeline` is a concrete class that opens `AVAudioEngine` in
@@ -108,11 +132,30 @@ protocol AudioIO: AnyObject, Sendable {
     /// put it "where the operator is already waiting and no over is at stake".
     /// The same sentence holds with *device warm-up* in place of *permission*.
     ///
-    /// Deliberately not throwing, and not reporting whether it worked. A
-    /// warm-up is opportunistic: a connection must not fail because the
-    /// microphone could not be opened a few seconds before anybody asked to
-    /// transmit, and ``startCapture(onFrame:)`` owns the failure path for when
-    /// somebody does.
+    /// **Deliberately not throwing. It does report whether it worked, and that
+    /// is `BU-24`.** A warm-up is opportunistic — a connection must not fail
+    /// because the microphone could not be opened a few seconds before anybody
+    /// asked to transmit, and ``startCapture(onFrame:)`` owns the failure path
+    /// for when somebody does — but "opportunistic" is not the same as
+    /// "invisible", and it used to be both.
+    ///
+    /// Reporting it costs nothing and settles a real question. Until RC-15 the
+    /// interesting failure here could not be caught at all: `installTap`
+    /// rejected a format the input device had moved on from by raising an
+    /// Objective-C `NSException`, which took the process with it — through this
+    /// `do/catch`, which exists precisely to tolerate it. The library reports
+    /// that as a Swift error now, so this path is reachable for the first time
+    /// and wants a deliberate answer rather than a `return`.
+    ///
+    /// **The answer is: the connect continues, and the failure is recorded.**
+    /// Failing the connect would be wrong — receiving is most of what a
+    /// connection is for, and the microphone is asked for again at key-down,
+    /// behind ``startCapture(onFrame:)``'s reactivate-and-rebuild repair. But a
+    /// silent failure here is a first over that is silent (`BU-22`'s fault,
+    /// returning) or a PTT that fails, with nothing in the session that says
+    /// why. So the outcome goes back to ``RadioSession``, which publishes it;
+    /// the operator-facing failure stays where it belongs, on the key-down path
+    /// that fails closed and alerts.
     ///
     /// Rejected alternative, recorded because it is the obvious one: hold
     /// `OnAirGate` closed until the tap delivers a non-silent buffer. It fixes
@@ -120,7 +163,8 @@ protocol AudioIO: AnyObject, Sendable {
     /// over would be swallowed, and an operator whose first word is soft would
     /// key up into nothing. Silence is not the same thing as a dead device, and
     /// the gate must not be taught to confuse them.
-    func warmUpInput() async
+    @discardableResult
+    func warmUpInput() async -> InputWarmUpOutcome
 
     /// Closes the microphone. Must be safe to call at any time, including
     /// before any capture has started and twice in a row — every one of the
@@ -1058,15 +1102,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// engine the capture was attempted on, which is a cost this pays once per
     /// connect and is worth it — the warm-up is the *device's*, and survives
     /// the engine that woke it.
-    func warmUpInput() async {
+    @discardableResult
+    func warmUpInput() async -> InputWarmUpOutcome {
         await prepareForCapture()
         do {
             try startCapture { _ in }
         } catch {
             // Opportunistic: the connection is not failed over this, and the
             // key-down path asks again with the failure handling that matters.
+            // Reported rather than swallowed, though — see the protocol
+            // requirement, and `BU-24` for what used to happen instead of an
+            // error arriving here at all.
             Diagnostics.route("input warm-up could not open the microphone: \(error)")
-            return
+            return .couldNotOpenInput("\(error)")
         }
         await settleRoute()
         for _ in 0..<Self.warmUpHoldTicks {
@@ -1076,6 +1124,7 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         Diagnostics.route(
             "input warmed for \(Self.warmUpHoldTicks * Int(Self.settleTickNanoseconds / 1_000_000))ms "
                 + "past settle: \(Self.audioStateDescription())")
+        return .warmed
     }
 
     func startCapture(onFrame: @escaping @Sendable ([Int16]) -> Void) throws {
