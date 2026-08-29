@@ -135,7 +135,9 @@ targets:
         excludes:
           - Info.plist
           # Consumed by the signing phase, not copied into the bundle.
+          # Two of them since APP-32 — see CODE_SIGN_ENTITLEMENTS below.
           - Currawong.entitlements
+          - Currawong-macOS.entitlements
       # Compiled into the app *and* into the widget extension, which are two
       # processes that have to agree on the archived shape of the Live Activity's
       # state. A shared source directory rather than a framework target: it is
@@ -261,10 +263,25 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
         "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
 
-        # The Keychain access group. Required on macOS for the data protection
-        # keychain `KeychainSecretStore` asks for, and a no-op restatement of
-        # the implicit group on iOS — see the comment in the file itself.
+        # **One entitlements file per platform, since APP-32.** They were one
+        # file until the first macOS archive was rejected at upload with
+        # ITMS-90296, "App sandbox not enabled": TestFlight and the Mac App
+        # Store refuse an un-sandboxed macOS build unconditionally, while iOS —
+        # which has no App Sandbox entitlement at all, every app being
+        # sandboxed already — sailed through. One multiplatform target cannot
+        # answer both with one file, so the macOS SDK gets its own, the same
+        # way LD_RUNPATH_SEARCH_PATHS above is conditioned.
+        #
+        # Both files carry the Keychain access group, which is required on
+        # macOS for the data protection keychain `KeychainSecretStore` asks for
+        # and is a no-op restatement of the implicit group on iOS. The macOS
+        # file adds `com.apple.security.app-sandbox` and the three capabilities
+        # the app actually uses — network client, audio input, Bluetooth. It
+        # does *not* add a network *server* entitlement (nothing listens) or
+        # the multicast entitlement (PD-3). The reasoning is written out in the
+        # two files; read those before changing either.
         CODE_SIGN_ENTITLEMENTS: Sources/Currawong/Currawong.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Sources/Currawong/Currawong-macOS.entitlements
     scheme:
       testTargets:
         - CurrawongTests
