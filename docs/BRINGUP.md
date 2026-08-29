@@ -2544,8 +2544,9 @@ process termination, on the connect path.
 
 `swift-hamvoip` PR #59. The tap is installed with **no format at all** — AVFAudio
 uses whatever the bus has at that instant, which cannot mismatch by construction
-— and the chain is checked against the format the node reports *afterwards*,
-retrying if the device moved and throwing
+(**wrong — `BU-25` is what that claim cost**) — and the chain is checked against
+the format the node reports *afterwards*, retrying if the device moved and
+throwing
 `AudioPipelineError.inputFormatUnstable` if it will not hold still. The
 out-of-bounds read a briefly-wrong chain could do on the audio thread is clamped
 separately, by the tap bounding its reads to the buffer it is handed.
@@ -2596,6 +2597,111 @@ decision about a failure path plus its tests; the crash it descends from was one
 occurrence, on one machine, and is not deterministic. **What would close this
 beyond doubt is an ordinary connect on the Q2L with the library at 0.7.0**, which
 is a device test rather than an on-air one.
+
+> **Partly answered by `BU-25`'s run (2026-08-29).** Ordinary connects, and PTT
+> either side of three input device changes including the Bluetooth handset,
+> against the library at **0.8.0** — no termination, and no failed warm-up. That
+> is a later library than the one this entry asks about, so it does not settle
+> 0.7.0 on its own. What it does settle is that the connect path this fault
+> lived on now survives the device change that provoked it.
+
+### BU-25 — the app stops responding after an input device change ✅ FIXED 2026-08-29
+
+**Found during the on-air verification of `APP-32`**, the macOS App Sandbox
+change, on a build pinning **v0.7.0 — the release cut for `BU-24` earlier the
+same day.** Ruled out as a sandbox effect straight away: an un-sandboxed control
+build of the same commit stopped at the identical exception.
+
+**The app does not crash. It dies and stays on screen.** Connect, key PTT
+(fine), change the audio input device, key PTT again → permanently
+unresponsive, window intact, with **three threads waiting on `AudioPipeline`'s
+`NSLock` and none holding it**: the PTT release in `stop()`, received audio in
+`enqueuePlayback`, and the `RC-14` rebuild on the engine queue. Two `sample`
+runs six minutes apart were identical.
+
+**On a transmit path that is worse than `BU-24`'s crash.** A crash is at least
+legible — the app is gone, and the operator knows. This one keeps the window,
+keeps the connection's last drawn state, and never transmits again. Nothing
+tells the operator the radio has stopped working.
+
+#### Why the fix for `BU-24` did not prevent it
+
+RC-15 installed the tap with **no format at all**, and both the library's
+write-up and this repo's `project.yml` said that made the mismatch *unreachable*.
+That was wrong, and it is the whole story of this fault: a `nil` format makes
+AVFAudio use the input **node's** format, not the **hardware's**, and the two are
+allowed to disagree. The node still carried the Bluetooth handset's 16 kHz after
+the hardware had moved back to the built-in microphone at 44.1 kHz. The mismatch
+did not disappear — it moved *inside* `AVAudioEngine`, surfacing as *"formats
+don't match"* / `-10868` from graph initialisation instead of RC-15's
+tap-creation message.
+
+**The second defect is the one that turned a survivable failure into a dead
+app.** The lock was released by `defer`, and **a Swift `defer` does not run when
+an Objective-C exception unwinds through it.** So the lock was not released late;
+it was orphaned for the life of the process. AppKit swallows the exception at the
+run loop, which is why the app hung rather than terminating.
+
+#### The library half: RC-16, fixed and released
+
+`swift-hamvoip` PR #61, released as **v0.8.0**. State and graph are two locks
+with a rule each: one guards state and is never held across a call into AVFAudio,
+the other guards the graph, is held across those calls, and is only ever taken
+with a deadline. A raise can still orphan the second — every caller then reports
+`.audioEngineBusy` or drops a frame instead of blocking. **An orphaned engine
+lock costs the audio path; it cannot cost this app's thread.** The installer also
+compares the node's rate and channel count against the hardware's before
+installing at all, which narrows the raise without claiming to close it.
+
+**The app takes this as a pin bump and no code change.** `project.yml` moves the
+floor from 0.7.0 to **0.8.0**, with `make resolved` in the same commit because
+Xcode Cloud builds the committed `ci_scripts/Package.resolved` rather than
+resolving for itself. The three new `AudioPipelineError` cases —
+`.captureInstallInProgress`, `.captureInstallSuperseded`, `.audioEngineBusy` —
+are additive and nothing here switches over the enum. Currawong's own macOS
+suite is green against the new library, unchanged: **726 tests, 1 skipped**.
+
+#### The on-air confirmation, and what it does not show
+
+**2026-08-29**, on a build carrying RC-16. The sequence above **did not
+reproduce** across three input devices, the Bluetooth PTT handset among them,
+and PTT transmitted normally after every switch with no error reaching the
+operator. Log in
+`experiment-data/app33-rc16-device-switch-2026-08-29-log.txt`: the three device
+changes are there, `iounit configuration changed > stopping the engine` and a
+restart are there, and from 16:07:28 a **different `AVAudioEngine` instance** —
+the graph was rebuilt on the new hardware format rather than carried over. What
+is *not* there is the failure's whole signature: no *"formats don't match"*, no
+`-10868`, no `NSException`. A `sample` of the still-running process afterwards
+found the main thread in the ordinary run-loop wait, with no lock-wait frame and
+no `AVAudioEngine` frame on any of its twelve threads.
+
+**PTT reporting no error is the pre-check's result, not the containment's.** The
+node and the hardware were reconciled before the install, so nothing raised —
+which means the half of RC-16 that actually protects this app, the deadline that
+keeps an orphaned lock off our threads, **went unexercised on air** and is pinned
+only by the library's `AudioPipelineLockTests`. One clean run also cannot
+separate *"the pre-check prevented the raise"* from *"this run would not have
+raised anyway"*. What makes it worth more than one sample is that the fault was
+reproducible by this exact sequence on this hardware, and that the log carries
+positive evidence of the rebuild rather than only the absence of a crash.
+
+#### What is not settled
+
+**That the raise is now unreachable.** It is narrower; nothing here shows it is
+gone, and the library's own entry says so.
+
+**What the app would do if it ever does see it**, which is worth knowing before
+it happens at a radio rather than after. The hang becomes a reported error —
+`.captureInstallInProgress` or `.audioEngineBusy` out of `startCapture` — and
+because `BU-24` made `warmUpInput()` carry the library's own words into
+`InputWarmUpOutcome`, a warm-up that hits one arrives as `warmUp=failed` in the
+transmit strip's route trace rather than as silence. **The documented recovery is
+stop, then start again**, since `stop()` clears the in-flight claim a raise
+deliberately leaves behind. Nothing in the app branches on the new cases, and
+whether it should say more than `warmUp=failed` is left open rather than decided
+here.
+
 
 ### BU-23 — a segfault 400 ms after an engine reconfiguration mid-over 🔬 UNEXPLAINED 2026-08-28
 
