@@ -44,7 +44,7 @@ packages:
   # `main` (that repo allows only rebase merges, which rewrite SHAs), so v0.6.1
   # was cut from `main` and is the one to name.
   #
-  # **v0.6.2 is the floor** (APP-29), for RC-14: `AudioPipeline` now rebuilds
+  # v0.6.2 (APP-29) took RC-14: `AudioPipeline` now rebuilds
   # the capture chain on `.AVAudioEngineConfigurationChange` instead of only
   # announcing it. Before, a live tap kept resampling from the old rate and
   # striding by the old channel count — `source[index * channelStride]` reading
@@ -56,6 +56,21 @@ packages:
   # rebuild counters on `AudioPipeline`, which nothing here reads yet, and the
   # `experiment input-warm-up` probe behind `BU-22`'s hold constant. Nothing the
   # app calls changed signature, so this is a floor bump and no code with it.
+  #
+  # **v0.7.0 is the floor** (APP-30), for RC-15 — and this one is not optional.
+  # `startCapture` handed `installTap` a format it had snapshotted moments
+  # earlier, and when the input device changed inside that window AVFAudio
+  # rejected the install by raising an Objective-C `NSException`. No Swift
+  # `catch` can intercept one, so the process was terminated instead. **This app
+  # is where that happened:** Currawong died on air on 2026-08-29 from inside a
+  # `do/catch` written to tolerate exactly that failure, which is `BU-24`. The
+  # library now installs the tap with no format at all and verifies the chain
+  # against what the node reports afterwards, so the mismatch is unreachable
+  # rather than handled. A build resolving 0.6.2 is a build that can still kill
+  # itself at connect, which is why the pinned resolve below matters more than
+  # usual here. Additive API only — `AudioPipelineError` gains
+  # `.inputFormatUnstable`, which nothing here switches over — so again no code
+  # beside the bump.
   # `from:` accepts any 0.x above it — the library is 0.x, so its own
   # changelog warns the API may change in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
   # pins the build, and it is generated, so a fresh `make generate` resolves
@@ -75,7 +90,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.6.2
+    from: 0.7.0
 
 settings:
   base:
