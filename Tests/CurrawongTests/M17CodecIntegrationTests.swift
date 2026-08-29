@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#if canImport(Codec2)
-
 import Foundation
 import M17Kit
 import RadioCore
@@ -9,20 +7,27 @@ import XCTest
 
 @testable import Currawong
 
-/// The claim this whole arrangement exists to support: **the app's own codec
+/// The claim this arrangement exists to support: **the codec the app injects
 /// can drive the library's M17 stream path.**
 ///
-/// `Codec2CodecTests` proves the codec encodes and decodes. That is necessary
-/// and not sufficient — the reason the app carries a codec at all is that
-/// `M17Client` needs one injected, because the library's own conformance is
-/// compiled out for SPM consumers. If the geometry the app produces did not
-/// match what an `M17StreamPacket` expects, everything would still compile and
-/// every test in that other file would still pass.
+/// The codec is `M17Kit.WeebillVoiceCodec` since APP-27, and is the library's
+/// own pure-Swift Codec 2 rather than anything the app builds — so its encode
+/// and decode behaviour is the library's to test, and this file does not
+/// duplicate that. What is still the app's to prove is the *fit*: if the
+/// geometry ``CompositionRoot/makeVoiceCodec()`` returns did not match what an
+/// `M17StreamPacket` expects, everything would still compile and the library's
+/// own tests would still pass, while every over went out misaligned.
 ///
-/// So this runs an over through `M17StreamTransmitter` and back through
-/// `M17StreamReceiver` using `Codec2Codec`, and requires recognisable audio to
-/// come out the far end. No socket is opened (AU-5) and no reflector is
-/// involved: this is the wiring, not the protocol.
+/// So these go through ``CompositionRoot/makeVoiceCodec()`` — the actual
+/// injection point, not a named type — run an over through
+/// `M17StreamTransmitter` and back through `M17StreamReceiver`, and require
+/// recognisable audio out the far end. No socket is opened (AU-5) and no
+/// reflector is involved: this is the wiring, not the protocol.
+///
+/// `@MainActor` because ``CompositionRoot`` is: reaching the real injection
+/// point rather than a named type means adopting its isolation, which is the
+/// small price of testing what the app actually does.
+@MainActor
 final class M17CodecIntegrationTests: XCTestCase {
 
     private func tone(samples: Int, hertz: Double = 700) -> [Int16] {
@@ -37,11 +42,12 @@ final class M17CodecIntegrationTests: XCTestCase {
             .squareRoot()
     }
 
-    /// The arithmetic the M17 stream layout rests on, checked against the app's
-    /// codec rather than the library's. Two of our frames must be exactly one
-    /// datagram's payload, or every over would be misaligned on the wire.
-    func testTheAppCodecFitsAnM17StreamPayloadExactly() throws {
-        let codec = try Codec2Codec()
+    /// The arithmetic the M17 stream layout rests on, checked against the codec
+    /// the composition root hands `M17Client`. Two of its frames must be
+    /// exactly one datagram's payload, or every over would be misaligned on the
+    /// wire.
+    func testTheInjectedCodecFitsAnM17StreamPayloadExactly() throws {
+        let codec = try CompositionRoot.makeVoiceCodec()
 
         XCTAssertEqual(
             codec.bytesPerFrame * M17StreamPayload.framesPerPacket,
@@ -54,9 +60,9 @@ final class M17CodecIntegrationTests: XCTestCase {
     }
 
     /// An over goes out through the transmitter and comes back through the
-    /// receiver as audio, carried by the app's codec throughout.
-    func testAnOverRoundTripsThroughTheLibraryUsingTheAppsCodec() throws {
-        let codec = try Codec2Codec()
+    /// receiver as audio, carried by the injected codec throughout.
+    func testAnOverRoundTripsThroughTheLibraryUsingTheInjectedCodec() throws {
+        let codec = try CompositionRoot.makeVoiceCodec()
         var transmitter = M17StreamTransmitter(
             streamID: 0x4242,
             destination: .broadcast,
@@ -90,13 +96,15 @@ final class M17CodecIntegrationTests: XCTestCase {
             "the decoded over must carry signal, not silence")
     }
 
-    /// `M17Client` accepts the app's codec — the actual injection point, and
-    /// the one `CompositionRoot` will use when M17 becomes selectable.
+    /// `M17Client` accepts the injected codec — the actual injection point
+    /// ``CompositionRoot/makeM17Link(settings:identity:transmitTimeout:configuration:)``
+    /// uses.
     ///
     /// Constructs and tears down without connecting: no transport is built
     /// until `connect(to:)`, so nothing here opens a socket.
-    func testM17ClientAcceptsTheAppsCodec() async throws {
-        let client = M17Client(codec: try Codec2Codec(), clock: ContinuousClock())
+    func testM17ClientAcceptsTheInjectedCodec() async throws {
+        let client = M17Client(
+            codec: try CompositionRoot.makeVoiceCodec(), clock: ContinuousClock())
 
         XCTAssertEqual(client.state, .idle)
         let connected = await client.isConnected
@@ -105,5 +113,3 @@ final class M17CodecIntegrationTests: XCTestCase {
         await client.disconnect()
     }
 }
-
-#endif

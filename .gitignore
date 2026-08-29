@@ -11,9 +11,11 @@ Sources/CurrawongLiveActivity/Info.plist
 DerivedData/
 build/
 
-# Codec2.xcframework is built by scripts/build-codec2-xcframework.sh and never
-# committed: 7.6 MB of LGPL-2.1 binary, and redistributing a third-party binary
-# from this repository is a decision nobody has taken. See docs/CODEC2.md.
+# The app builds and embeds no XCFramework since APP-31 removed
+# Codec2.xcframework. The rule stays as a guard: redistributing a third-party
+# binary from this repository is a decision nobody has taken, and a stray
+# Codec2.xcframework left over from a pre-APP-31 checkout should not be
+# committable by accident. See docs/CODEC2.md.
 *.xcframework
 
 # Per-user Xcode state

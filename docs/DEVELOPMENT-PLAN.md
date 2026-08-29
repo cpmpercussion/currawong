@@ -369,6 +369,13 @@ reflector module, or a proxy plus a node address and an account password — and
 targets build it on first use. FR-2.4 and LP-4 are satisfied by dynamic
 linking, which is also what keeps OQ-6 open rather than decided.
 
+✅ **No longer true, twice over.** APP-27 switched the M17 path to the
+library's pure-Swift `M17Kit.WeebillVoiceCodec`, and **APP-31 removed the
+XCFramework, the app's `Codec2Codec` conformance and the whole build path** —
+so the app now ships no LGPL code, LP-4 has nothing here to constrain, and OQ-6
+is avoidable rather than open. FR-2.4 is unchanged: an M17 stream frame still
+carries Codec 2 3200. See `CODEC2.md`, which is now the record of the removal.
+
 **A caution on screen for M17 only, and that asymmetry was deliberate.** When
 this shipped, M17 had never carried audio anywhere, so the mode picker said so;
 EchoLink carried no warning even though it had not yet run from the *app*,
@@ -1330,17 +1337,13 @@ the `xcrun altool` path this task first assumed, so that signing is Apple's
 problem rather than a set of certificates in CI secrets.
 
 The obstacle is that Xcode Cloud clones the repository and expects to open a
-project, and there is none — `*.xcodeproj` and `Codec2.xcframework` are both
-generated and gitignored. `ci_scripts/ci_post_clone.sh` covers it: Apple runs
-that hook after the clone and before dependency resolution, which is early
-enough to install xcodegen, build the framework and generate the project. Two
-consequences of that ordering are written into the script and are easy to
-forget:
+project, and there is none — `*.xcodeproj` is generated and gitignored.
+`ci_scripts/ci_post_clone.sh` covers it: Apple runs that hook after the clone
+and before dependency resolution, which is early enough to install xcodegen and
+generate the project. One consequence of that ordering is written into the
+script and is easy to forget:
 
-- **No SPM checkout exists yet**, so `build-codec2-xcframework.sh` takes its
-  clone fallback and builds the tag pinned *in that script*, not the one in
-  `project.yml`'s `from:`. Keep the two in step.
-- **No `Package.resolved` exists yet either, and Xcode Cloud will not compute
+- **No `Package.resolved` exists yet, and Xcode Cloud will not compute
   one.** It resolves with automatic resolution disabled, so a clone with no
   resolved file fails at *Resolve package dependencies* with "a resolved file
   is required when automatic dependency resolution is disabled" — the first
@@ -1351,11 +1354,9 @@ forget:
   generating. That pin, not `project.yml`'s `from:`, is what the cloud build
   builds; `make resolved` refreshes it and it belongs in the same commit as any
   package change, because a stale pin fails the same way a missing one does.
-- **The framework is rebuilt on every cloud build**, roughly four minutes.
-  Xcode Cloud caches SPM checkouts and derived data; an xcframework at the
-  repository root is neither. If that cost starts to matter the answer is a
-  prebuilt binary somewhere fetchable — never a static link, which `LP-4`
-  forbids.
+- ~~**The framework is rebuilt on every cloud build**, roughly four minutes.~~
+  **Gone with APP-31**, which removed `Codec2.xcframework` from the app
+  entirely. Every cloud build is four minutes shorter and needs no cmake.
 
 Configuring the workflow needs a **locally** generated project, because the
 setup wizard reads the scheme list off disk. Run `make generate` first. What
@@ -1380,6 +1381,41 @@ by *selecting* the right one. The start condition is a tag change matching
 **Not in scope:** anything about whether the app is *ready*. `BU-7`, `BU-10` and
 `BU-18` are all open, and a beta build with known open faults is fine so long as
 the tester is told which.
+
+### APP-31 — remove Codec2 from the build
+
+✅ **DONE**, 2026-08-29. The maintainer's call: Weebill works, so the app stops
+carrying a second Codec 2.
+
+Deleted `Codec2.xcframework` and everything that existed to produce or consume
+it — `Sources/Currawong/Codec2Codec.swift`, its tests,
+`scripts/build-codec2-xcframework.sh`, `make codec2` and the framework
+prerequisite on `generate`, the cmake install and framework build in
+`ci_scripts/ci_post_clone.sh`, and the unreachable
+`M17LinkError.codecUnavailable`. `M17CodecIntegrationTests` is kept and now
+runs against `CompositionRoot.makeVoiceCodec()` rather than a named type, so it
+tracks whatever the app actually injects.
+
+What this buys, beyond a smaller build:
+
+- **The app ships no LGPL code.** `LP-4` constrained the app only through that
+  framework and now has nothing here to bind, and **`OQ-6` is avoidable rather
+  than answered** — the LGPL §6 relinking question was about shipping an LGPL
+  library inside a signed iOS app, and the app no longer does. Both are the
+  library's requirements; amending either is a change to
+  `swift-hamvoip/docs/DESIGN-REQUIREMENTS.md` and is **not** done by this task.
+- **A fresh clone builds with xcodegen and Xcode alone** — no cmake, no four
+  minutes.
+- **Every Xcode Cloud build is four minutes shorter**, which matters because
+  that build was uncacheable.
+- **One fewer embedded, separately signed binary** to satisfy under App
+  Sandbox, which is the next piece of work here.
+
+`FR-2.4` is untouched: an M17 stream frame still carries Codec 2 3200, and
+`M17Kit.WeebillVoiceCodec` (M17-7) is what encodes it since APP-27.
+
+**Reversing this is a real decision, not a revert.** See `docs/CODEC2.md`,
+which is now the record of what was removed and why.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
