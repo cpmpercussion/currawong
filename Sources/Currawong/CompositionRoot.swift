@@ -512,9 +512,8 @@ final class CompositionRoot {
     ///   throws rather than pretending. The connect form hides the keypad in
     ///   this mode, so an operator should never reach it.
     /// - **A codec has to be supplied.** `M17Client` takes an injected
-    ///   `VoiceCodec`, because the library's own Codec2 conformance is
-    ///   compiled out for SPM consumers. ``Codec2Codec`` is the app's, and
-    ///   this is its injection point. See docs/CODEC2.md.
+    ///   `VoiceCodec`; ``makeVoiceCodec()`` supplies it, and this is its
+    ///   injection point.
     ///
     /// **Not validated on air.** No M17 transmission has ever reached a real
     /// reflector, so this path is believed correct rather than known to be.
@@ -613,11 +612,10 @@ final class CompositionRoot {
     ///   both go in as `nil` and the session proceeds without the login.
     /// - **No DTMF.** Same as M17: `EchoLinkClient` has no digit path, so
     ///   `sendDTMF` throws rather than pretending.
-    /// - **A codec has to be supplied**, as with M17 — but unlike Codec2 this
-    ///   one always exists. `GSMVoiceCodec` ships inside EchoLinkKit on the
-    ///   vendored `CGSM` target, so there is no XCFramework to build and no
-    ///   `#if` guarding this call; it throws only if the encoder or decoder
-    ///   fails to allocate.
+    /// - **A codec has to be supplied**, as with M17. `GSMVoiceCodec` ships
+    ///   inside EchoLinkKit on the vendored `CGSM` target, so nothing has to be
+    ///   built or linked for it to exist; it throws only if the encoder or
+    ///   decoder fails to allocate.
     ///
     /// - Parameters:
     ///   - secret: the operator's EchoLink account password. Empty means "no
@@ -722,32 +720,28 @@ final class CompositionRoot {
             })
     }
 
-    /// The Codec 2 3200 conformance, or an error the operator can act on.
+    /// The Codec 2 3200 conformance the M17 path encodes and decodes with.
     ///
-    /// **APP-27: this is `M17Kit.WeebillVoiceCodec`, not ``Codec2Codec``.**
-    /// Weebill is the library's pure-Swift Codec 2 (M17-7), so unlike the
-    /// XCFramework binding it survives being consumed over SPM and the app no
-    /// longer has to carry its own conformance to have a codec at all. The
-    /// `#if` is gone with it: there is no longer a build of this app in which
-    /// M17 has no codec, which is why `M17LinkError.codecUnavailable` is now
-    /// unreachable from here.
+    /// `M17Kit.WeebillVoiceCodec` — the library's pure-Swift Codec 2 (M17-7),
+    /// adopted in APP-27 and the only codec in the app since APP-31 removed
+    /// `Codec2.xcframework`. Being Swift rather than an XCFramework binding, it
+    /// survives being consumed over SPM, so there is no longer a build of this
+    /// app in which M17 has no codec and nothing here to `#if` on. See
+    /// docs/CODEC2.md for what was removed and why.
     ///
-    /// ``Codec2Codec`` is still in the tree and still compiles, deliberately —
-    /// swapping this one line back is how the two are compared on the air, and
-    /// removing the framework is a separate decision that has not been taken.
-    /// See docs/CODEC2.md.
-    private static func makeVoiceCodec() throws -> any VoiceCodec {
+    /// Not `private`, so `M17CodecIntegrationTests` can assert the fit against
+    /// the codec that is actually injected rather than against a named type.
+    static func makeVoiceCodec() throws -> any VoiceCodec {
         return try WeebillVoiceCodec()
     }
 
     /// The GSM 06.10 conformance EchoLink audio needs.
     ///
-    /// The counterpart of ``makeVoiceCodec()``, and deliberately much duller:
-    /// GSM is vendored *inside* EchoLinkKit rather than linked from an
-    /// XCFramework, so there is no build configuration in which the type is
-    /// missing and nothing here to `#if` on. It stays a separate function only
-    /// so the two codec decisions read alike, and because `GSMVoiceCodec.init`
-    /// can still fail — the C encoder and decoder are heap-allocated.
+    /// The counterpart of ``makeVoiceCodec()``: both now come out of the
+    /// library, so neither has a build configuration in which the type is
+    /// missing. It stays a separate function only so the two codec decisions
+    /// read alike, and because `GSMVoiceCodec.init` can still fail — the C
+    /// encoder and decoder are heap-allocated.
     private static func makeGSMVoiceCodec() throws -> any VoiceCodec {
         try GSMVoiceCodec()
     }
@@ -783,9 +777,9 @@ final class CompositionRoot {
 ///
 /// Separate from ``M17LinkError`` rather than folded into it: these are three
 /// different mistakes an operator can make on a form, and merging the enums
-/// would put "build Codec2.xcframework" in the same type as "check the proxy
-/// address", which is how error text starts drifting away from the mode it
-/// belongs to.
+/// would put "use a single letter for the module" in the same type as "check
+/// the proxy address", which is how error text starts drifting away from the
+/// mode it belongs to.
 enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
     /// `settings.peer` is not four decimal octets. The EchoLink proxy carries
     /// the peer as raw address bytes and nothing in the path resolves DNS, so
@@ -828,9 +822,6 @@ enum M17LinkError: Error, Equatable, CustomStringConvertible {
     /// have caught this; this is the backstop.
     case invalidModule(String)
 
-    /// This build has no Codec2, so M17 audio cannot work.
-    case codecUnavailable
-
     /// DTMF was attempted on a mode that has no such thing.
     case dtmfUnsupported
 
@@ -838,11 +829,6 @@ enum M17LinkError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .invalidModule(let module):
             return "'\(module)' is not a reflector module. Use a single letter, A to Z."
-        case .codecUnavailable:
-            return """
-                This build has no Codec2, so M17 audio is unavailable. Build \
-                Codec2.xcframework and rebuild the app — see docs/CODEC2.md.
-                """
         case .dtmfUnsupported:
             return "M17 has no DTMF signalling. Connect to an AllStarLink node to send digits."
         }

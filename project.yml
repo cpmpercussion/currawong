@@ -134,26 +134,14 @@ targets:
           - M17Kit
           - EchoLinkKit
 
-      # Codec2 3200 (FR-2.4), the voice codec M17 stream mode carries.
-      #
-      # **Embed & Sign, never statically linked** — LP-4. Codec2 is LGPL-2.1
-      # and we ship it only as a dynamic framework carrying its own COPYING.
-      # Do not add `-force_load`/`-all_load` for it, and do not switch this to
-      # a static link: that would pull LGPL objects into the app binary.
-      #
-      # Why the app carries its own copy at all, when the library also knows
-      # how to build one: the library's `Codec2VoiceCodec` is compiled out for
-      # anyone consuming it over SPM. The XCFramework is 7.6 MB of LGPL binary
-      # and is not committed to either repository, so a resolved SPM checkout
-      # never contains it — and nothing can run a build script inside that
-      # checkout. Hence `Sources/Currawong/Codec2Codec.swift`, the app's own
-      # conformance, injected into `M17Client`. See docs/CODEC2.md.
-      #
-      # Built by `scripts/build-codec2-xcframework.sh`; `make` builds it
-      # automatically when it is missing. Not in version control (.gitignore).
-      - framework: Codec2.xcframework
-        embed: true
-        codeSign: true
+      # **No Codec2.xcframework, since APP-31.** Codec 2 3200 (FR-2.4) is still
+      # what an M17 stream frame carries; it is `M17Kit.WeebillVoiceCodec` that
+      # encodes it now, and Weebill is pure Swift arriving over SPM with
+      # everything else. The app carried a 7.6 MB LGPL XCFramework and its own
+      # `Codec2Codec` conformance until APP-27 stopped calling it, and this task
+      # removed it. With it went LP-4's embed-and-sign obligation and OQ-6's
+      # LGPL §6 relinking question, both of which only ever applied to that
+      # framework. See docs/CODEC2.md.
 
       # **APP-3.** The Live Activity's widget extension, embedded in the app.
       # `platformFilter: iOS` is load-bearing: this is one multiplatform target
@@ -239,20 +227,18 @@ targets:
         # Extensions extend the identifier (au.charlesmartin.currawong.liveactivity);
         # the Keychain access group is $(TeamID).au.charlesmartin.currawong.
 
-        # Where dyld looks for the embedded Codec2.framework, which is the
-        # difference between an app that runs and one that dies on launch.
-        #
-        # The two platforms put it in different places — `Currawong.app/
-        # Frameworks` on iOS, `Currawong.app/Contents/Frameworks` on macOS —
-        # and this is one multiplatform target, so a single value cannot be
-        # right for both. The default here is the iOS one, which built a macOS
-        # bundle whose executable searched `Contents/MacOS/Frameworks` and
-        # found nothing: `make build-macos` succeeded and the app then failed
-        # in dyld with "Library not loaded: @rpath/Codec2.framework". The tests
-        # solve the same iOS-versus-macOS layout question with
-        # BUNDLE_EXECUTABLE_FOLDER_PATH below; there is no equivalent variable
-        # for an executable-relative frameworks path, so this is conditioned on
-        # the SDK instead.
+        # Where dyld looks for frameworks embedded in the app bundle. The app
+        # embeds none of its own since APP-31 removed Codec2.xcframework, and
+        # these could go with it — they are kept because Swift's own runtime
+        # libraries are found the same way, and because the two platforms put
+        # an embedded framework in different places (`Currawong.app/Frameworks`
+        # on iOS, `Currawong.app/Contents/Frameworks` on macOS). A single value
+        # cannot be right for both, and getting that wrong once produced a
+        # macOS bundle that built cleanly and then died in dyld with "Library
+        # not loaded". The tests solve the same iOS-versus-macOS layout
+        # question with BUNDLE_EXECUTABLE_FOLDER_PATH below; there is no
+        # equivalent variable for an executable-relative frameworks path, so
+        # this is conditioned on the SDK instead.
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
         "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
 
