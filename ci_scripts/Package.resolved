@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/cpmpercussion/swift-hamvoip",
       "state" : {
-        "revision" : "6f2fe875f5e608eca85c8be906df8e0977283970",
-        "version" : "0.7.0"
+        "revision" : "ec66e35264f33db9dd836e9a1aaf7a9ffd4e28e6",
+        "version" : "0.8.0"
       }
     },
     {

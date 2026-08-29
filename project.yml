@@ -66,11 +66,30 @@ packages:
   # `do/catch` written to tolerate exactly that failure, which is `BU-24`. The
   # library now installs the tap with no format at all and verifies the chain
   # against what the node reports afterwards, so the mismatch is unreachable
-  # rather than handled. A build resolving 0.6.2 is a build that can still kill
+  # rather than handled. (**Wrong — see the v0.8.0 paragraph below.**) A build resolving 0.6.2 is a build that can still kill
   # itself at connect, which is why the pinned resolve below matters more than
   # usual here. Additive API only — `AudioPipelineError` gains
   # `.inputFormatUnstable`, which nothing here switches over — so again no code
   # beside the bump.
+  #
+  # **v0.8.0 is the floor** (`BU-25`), for RC-16 — and it corrects the paragraph
+  # above rather than adding to it. *"The mismatch is unreachable"* was wrong: a
+  # `nil` format makes AVFAudio use the input **node's** format, not the
+  # **hardware's**, and those two are allowed to disagree, so the raise stayed
+  # reachable. Worse, `AudioPipeline` released its one lock with a `defer`, and
+  # **a Swift `defer` does not run when an Objective-C exception unwinds through
+  # it** — the lock was not released late, it was orphaned for the life of the
+  # process, and AppKit swallowed the exception at the run loop. The app stayed
+  # up, kept its window and never responded again, with a dead audio pipeline.
+  # **On a transmit path that is worse than 0.7.0's crash:** nothing tells the
+  # operator the radio has stopped working. The library now keeps state and
+  # graph under two locks — one never held across a call into AVFAudio, the
+  # other only ever taken with a deadline — so a raise costs the audio path
+  # rather than a caller's thread, and checks node against hardware before
+  # installing at all. Confirmed on air 2026-08-29: the `BU-25` sequence did not
+  # reproduce across three input devices. Additive API again — three new
+  # `AudioPipelineError` cases, none of which this app switches over — so once
+  # more no code beside the bump.
   # `from:` accepts any 0.x above it — the library is 0.x, so its own
   # changelog warns the API may change in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
   # pins the build, and it is generated, so a fresh `make generate` resolves
@@ -90,7 +109,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.7.0
+    from: 0.8.0
 
 settings:
   base:
