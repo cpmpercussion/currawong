@@ -1321,16 +1321,92 @@ the `.xcodeproj` and `Info.plist` are generated.
    `M17ReflectorProtocol.Playability`); the IAX2 and EchoLink MD5
    challenge-response is authentication; the portal login rides the OS's TLS.
    All exempt. Revisit the day any of that stops being true.
-5. **App privacy answers**: no data collected, no tracking, no analytics. Worth
-   writing down here once so the form is filled the same way twice.
-6. **`UIBackgroundModes: audio`** will draw a review question — the honest answer
-   is `PD-2`'s: it is what keeps a *received* signal alive with the screen
-   locked. `PD-4` (no CallKit) and `PD-3` (no multicast entitlement) are the two
-   things reviewers might otherwise expect of a VoIP-shaped app and which this
-   app deliberately does not do.
-7. **Beta test information**: what the tester is being asked to look at. Given
-   `BRINGUP.md`, the honest brief is short — connect to a node, hold PTT, check
-   the strip agrees with what they hear.
+5. **App privacy answers**: ✅ drafted 2026-09-04, below. **Nothing collected,
+   nothing tracked, no analytics** — answered as *Data Not Collected*, and
+   checked against the tree rather than assumed.
+6. **`UIBackgroundModes`** will draw a review question. ✅ drafted 2026-09-04,
+   below — and note it is **two** modes, not the one this line used to name.
+7. **Beta test information**: ✅ drafted 2026-09-04, below.
+
+#### Item 5 — the privacy answers, written once
+
+The App Store Connect answer is **Data Not Collected**, every category. What
+makes that true, and the two things that look like exceptions and are not:
+
+- **No analytics, no tracking, no advertising identifier, no crash reporter.**
+  There is nothing to configure off, because there is no SDK to configure: the
+  app has no third-party dependencies at all, and the library's one is
+  `swift-argument-parser`, which is not in the app's build. `AppTrackingTransparency`
+  is not linked, so no tracking prompt is wanted and none should be offered.
+- **What the app stores, it stores on the device.** The channel list, the
+  operator identity (`OperatorIdentity` — callsign, name, location, all typed by
+  the operator) and the PTT mapping live in `UserDefaults`; the node and
+  EchoLink secrets live in the Keychain. None of it is uploaded, and there is
+  no account with us to upload it to. On macOS these now live in the app's
+  sandbox container (`APP-32`).
+- **The microphone is the app's function, not collection.** Voice goes to the
+  node or reflector the *operator* dialled, over the air to whoever is
+  listening, along with the callsign every mode carries — which is a legal
+  requirement, not telemetry. It does not reach us, and there is no server of
+  ours in the path. If a reviewer reads "audio data" as collection, this is the
+  distinction to draw: the destination is the operator's choice and the
+  transmission is the point of the app.
+- **Four outbound HTTPS fetches, all to third parties the operator is already a
+  user of**, and worth having listed before the form asks:
+  `m17-project.github.io` (the M17 host file), `stats.allstarlink.org` (node
+  info, node number in the URL and nothing else),
+  `www.echolink.org/proxyFind.jsp` (the public proxy list, in `EchoLinkKit`) and
+  `allstarlink.org/api/v2/auth-wt-legacy` (the Web Transceiver token, in
+  `IAX2Kit`). The first two use `URLSessionConfiguration.ephemeral` — no cookie
+  jar, no persistent cache, no identifier that outlives the fetch. The last one
+  sends the operator's own AllStarLink credentials to AllStarLink, which is what
+  logging in to a service means; it is still not data collected by us.
+- **No location.** `CoreLocation` is not linked and there is no location usage
+  string. `OperatorIdentity.location` is a free-text field the operator types,
+  and the proxy list's "distance" is computed from the *published* proxy
+  entries, not from the device.
+
+#### Item 6 — the background modes answer
+
+Two modes are declared, and the reasoning is already in `project.yml` beside
+them:
+
+- **`audio`** — `PD-2`'s answer, and the one this item was opened for: it is
+  what keeps a *received* signal alive with the screen locked. A repeater does
+  not stop talking because the phone did, and an app that goes deaf on lock is
+  not usable as a radio.
+- **`bluetooth-central`** — the PTT accessory's BLE link, which must stay up
+  with the app backgrounded or the physical button stops keying. This is not
+  hypothetical: ~25 accessory press/release pairs were delivered to a
+  backgrounded Currawong on 2026-08-22, logged edge by edge (`BU-10`).
+
+`PD-4` (no CallKit) and `PD-3` (no multicast entitlement) are the two things a
+reviewer might otherwise expect of a VoIP-shaped app and which this app
+deliberately does not do — and `voip` is deliberately **not** in the list, which
+is the same decision seen from the other side. If asked why a voice app has no
+CallKit: it is an amateur-radio half-duplex link, not a telephone call, and
+CallKit's semantics and regional restrictions are wrong for it.
+
+#### Item 7 — the beta brief
+
+Short, because `BRINGUP.md` says what is honest. Something close to:
+
+> Currawong connects an iPhone, iPad or Mac to an amateur-radio node or
+> reflector — AllStarLink, EchoLink or M17. **You need your own licence and
+> callsign to transmit**, and credentials for whichever network you use.
+>
+> What to look at: add a channel, connect, hold the PTT button, and check that
+> the status strip agrees with what you actually hear. Tell me when it does not.
+>
+> Known and not worth reporting: the Live Activity on a locked phone is
+> unverified (`BU-10`); a Bluetooth speaker-mic may stop carrying audio after
+> keying (`BU-13`); the first transmit after connecting on a Bluetooth route
+> takes about a second to key (`APP-24`).
+
+**The one thing to say out loud in that brief**: an accidental open microphone
+into a repeater is the failure this app is built to prevent, so a stuck transmit
+is the highest-value thing a tester can report. The 180 s watchdog (`SF-1`) will
+end it; that it *had* to is the bug.
 
 **The route: Xcode Cloud, triggered by a release tag.** Chosen 2026-08-23 over
 the `xcrun altool` path this task first assumed, so that signing is Apple's
