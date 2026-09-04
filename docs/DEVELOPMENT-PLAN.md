@@ -1368,13 +1368,14 @@ by *selecting* the right one. The start condition is a tag change matching
 
 **Two things this route does not cover:**
 
-- **macOS.** `PD-5` wants Developer ID plus notarisation for the Mac build, and
-  Xcode Cloud distributes to TestFlight and the App Store only. The Mac side
-  stays separate, most likely as an extension of `.github/workflows/ci.yml`.
-  Xcode Cloud is the iOS half of `PD-5`, not both halves. **The macOS upload
-  blocker itself is closed by `APP-32`** — the Mac build is sandboxed now, so
-  ITMS-90296 no longer stands between an archive and TestFlight if that route is
-  ever wanted.
+- **macOS — but less of it than this said.** **The Mac build uploads and is
+  accepted, 2026-09-04**, alongside iOS; `APP-32`'s sandbox entitlement closed
+  ITMS-90296 and the cloud has now shown it. So Mac TestFlight is a route that
+  works today, not one that would work if wanted. What Xcode Cloud still does
+  not cover is `PD-5`'s *other* half: Developer ID plus notarisation, for a Mac
+  build distributed outside the App Store. That stays separate, most likely as
+  an extension of `.github/workflows/ci.yml`, and it is a distribution channel
+  rather than a blocker.
 - **The terminal-first rule.** Xcode Cloud workflows are configured in Xcode or
   App Store Connect and have no terminal equivalent, which is a real exception
   to the rule in `CLAUDE.md` and is taken deliberately. Everything that *can*
@@ -1476,6 +1477,13 @@ sandboxed Release build, all three capabilities were exercised by the operator:
 the connect completed to both services (`network.client`), the Q2L keyed PTT
 over BLE (`device.bluetooth`), and capture ran (`device.audio-input`). **No
 sandbox denial was logged for the app at any point.**
+
+**And the cloud confirms it, 2026-09-04.** Xcode Cloud is green on both
+platforms and both were *accepted by App Store Connect* — which is the step that
+matters, because ITMS-90296 was an upload rejection and an archive that builds
+and exports cleanly is exactly what build 6 already did before being refused.
+The entitlement is therefore right in a cloud-signed archive and not only in a
+locally signed one, which is the check the list above could not make.
 
 **The session did find a fault, and it is not this one.** Switching the audio
 device mid-session and keying leaves the app permanently unresponsive: an
