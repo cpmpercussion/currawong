@@ -30,7 +30,8 @@ open out/<run>/index.html
   Wikimedia Commons if you want to rerun that variant. Anything shipped that is visibly
   derived from it would carry the share-alike terms, so treat that variant as
   a pose study, not a source for the final icon.
-- `out/` is git-ignored.
+- `out/` is git-ignored, except the keeper the trace step reads, which is
+  force-added so a fresh clone can rerun `trace.py`.
 
 ## Tracing a keeper
 
