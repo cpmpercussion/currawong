@@ -8,8 +8,8 @@
 #
 # Design/AppIcon.svg is the master (full-bleed, iOS). Design/AppIcon-macOS.svg
 # wraps the same artwork in the pre-Tahoe macOS treatment: an 824x824 rounded
-# rectangle (r=185) centred on a transparent 1024 canvas. Edit the master,
-# then mirror the change inside the <g> in the macOS variant.
+# rectangle (r=185) centred on a transparent 1024 canvas. Both are written by
+# Design/icon-explore/trace/trace.py --install; edit that, not the SVGs.
 set -eu
 cd "$(dirname "$0")/.."
 

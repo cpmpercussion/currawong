@@ -1,0 +1,16 @@
+{
+  "_comment": "Sanzo Wada colours, from https://sanzo-wada.dmbk.io/assets/colors.json. Wada's combination no. 222 is Yellow Ocher, Yellow Orange and Orange Rufous, which are exactly the three fills in Design/AppIcon.svg. Black is ours; Wada's darkest near-neutrals are listed for when a warm black reads better than #000.",
+  "colors": [
+    { "index": 60,  "name": "Yellow Ocher",     "hex": "#e0b81f", "role": "eye, call arcs, highlight" },
+    { "index": 62,  "name": "Yellow Orange",    "hex": "#ff8c00", "role": "ground" },
+    { "index": 68,  "name": "Orange Rufous",    "hex": "#c05200", "role": "shadow / second orange" },
+    { "index": 0,   "name": "Black",            "hex": "#000000", "role": "bird ink, paper" },
+    { "index": 86,  "name": "Vandyke Brown",    "hex": "#362304", "role": "alternative warm black (icon ink is #1f1509)" },
+    { "index": 131, "name": "Deep Slate Green", "hex": "#0f261f", "role": "alternative cool black" }
+  ],
+  "schemes": {
+    "wada222":      ["Yellow Ocher", "Yellow Orange", "Orange Rufous", "Black"],
+    "wada222-warm": ["Yellow Ocher", "Yellow Orange", "Orange Rufous", "Vandyke Brown"],
+    "_note": "Scheme names are used by prompts.json and by --remap."
+  }
+}

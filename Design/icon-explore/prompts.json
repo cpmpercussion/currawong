@@ -1,0 +1,100 @@
+{
+  "_comment": "Edit here, rerun explore.py, compare the contact sheet. {subject} and {style} are spliced in mid-sentence, so keep them lower-case phrases with no full stop. {palette} is filled from the scheme named in each variant. Change one thing per variant so a run isolates its effect.",
+  "style": "limited-palette screen print: flat spot colours plus black, slight misregistration between the layers, coarse visible halftone dot texture in every shaded area, hand-pulled serigraph on paper, mid-century Australian poster illustration, bold clean shapes, no gradients, no photorealism, no white, no lettering, no numbers, no border",
+  "subject": "a pied currawong (Strepera graculina), a large glossy black Australian bird with a heavy hooked black bill and a bright yellow eye; its wing patch, undertail and tail tip are printed in yellow ocher instead of white",
+  "negative": "text, watermark, signature, photograph, 3d render, soft shading, gradients, blurry, extra birds, crow, raven, magpie, blue, teal, green",
+  "variants": [
+    {
+      "id": "singing-black",
+      "scheme": "wada222",
+      "prompt": "Illustration of {subject}, perched on a eucalyptus branch with long narrow gum leaves and gum blossom made of fine radiating orange filaments, head thrown back and bill open in song, sunburst rays fanning out from the open bill across a black ground. Style: {style}. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "singing-orange",
+      "scheme": "wada222",
+      "prompt": "Illustration of {subject}, perched on a eucalyptus branch with long narrow gum leaves and gum blossom made of fine radiating orange filaments, head thrown back and bill open in song, sunburst rays fanning out from the open bill across a flat yellow-orange ground. The bird is printed in black. Style: {style}. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "bust-orange",
+      "scheme": "wada222",
+      "prompt": "Head-and-shoulders portrait of {subject}, in profile facing right, three concentric arcs radiating from the bill like a radio call, on a flat yellow-orange ground. Composed as a square app icon: one bold black silhouette, readable at thumbnail size, generous margins. Style: {style}. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "bust-black",
+      "scheme": "wada222",
+      "prompt": "Head-and-shoulders portrait of {subject}, in profile facing right, three concentric arcs radiating from the bill like a radio call, on a black ground with the bird's form picked out in orange rufous and yellow ocher halftone. Composed as a square app icon, readable at thumbnail size. Style: {style}. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "kontext-photo",
+      "scheme": "wada222",
+      "image": "reference-pied-currawong-jjharrison.jpg",
+      "prompt": "Redraw this photograph in this style: {style}. Keep the bird's pose and the yellow eye, replace the background with a flat yellow-orange ground and long narrow gum leaves. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "bust-orange-halftone",
+      "scheme": "wada222",
+      "prompt": "Head-and-shoulders portrait of {subject}, in profile facing right, three concentric arcs radiating from the bill like a radio call, on a flat yellow-orange ground. The black plumage carries coarse halftone dots of orange rufous as shading, like a two-layer screen print. Composed as a square app icon: one bold silhouette, readable at thumbnail size, generous margins. Style: {style}. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "kontext-iterate-bust",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/kontext-photo-101.png",
+      "prompt": "Recompose this print as a square app icon: crop to a head-and-shoulders portrait of the bird in profile facing right, remove the branch and leaves, add three concentric arcs radiating from the bill like a radio call, keep the flat yellow-orange ground and the coarse halftone screen-print texture. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "kontext-iterate-singing",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/kontext-photo-101.png",
+      "prompt": "Redraw this print with the bird's head thrown back and bill open in song, sunburst rays fanning out from the open bill, perched on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. Keep the coarse halftone screen-print texture and the flat yellow-orange ground. Palette, exactly and only: {palette}."
+    },
+    {
+      "id": "kontext-clean-singing-100",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-100.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground: keep the bird's head thrown back and bill open in song and the sunburst rays fanning from the open bill, give it the heavy hooked black bill and bright yellow eye of a pied currawong, perched on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. Remove any lettering or signature. Palette, exactly and only: {palette}.",
+      "_note": "Same idea as kontext-iterate-singing but seeded from a text-only output, so no photograph anywhere in the chain."
+    },
+    {
+      "id": "kontext-clean-singing-101",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-101.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground: keep the bird's head thrown back and bill open in song and the sunburst rays fanning from the open bill, give it the heavy hooked black bill and bright yellow eye of a pied currawong, perched on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. Remove any lettering or signature. Palette, exactly and only: {palette}.",
+      "_note": "Same idea as kontext-iterate-singing but seeded from a text-only output, so no photograph anywhere in the chain."
+    },
+    {
+      "id": "kontext-clean-singing-black-100",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-100.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground. The bird is {subject}: its whole body, breast and head are solid black, with no white anywhere. Keep the head thrown back and bill open in song and the sunburst rays fanning from the open bill, perched on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. Remove any lettering or signature. Palette, exactly and only: {palette}.",
+      "_note": "kontext-clean-singing came back white-breasted; this splices {subject} in and says black outright."
+    },
+    {
+      "id": "kontext-clean-singing-black-101",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-101.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground. The bird is {subject}: its whole body, breast and head are solid black, with no white anywhere. Keep the head thrown back and bill open in song and the sunburst rays fanning from the open bill, perched on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. Remove any lettering or signature. Palette, exactly and only: {palette}.",
+      "_note": "kontext-clean-singing came back white-breasted; this splices {subject} in and says black outright."
+    },
+    {
+      "id": "kontext-clean-singing-black-101-v2",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-101.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground. The bird is a pied currawong: a large, heavy-bodied Australian bird, glossy black all over including the breast and belly, with a bright yellow eye. Its bill is large, deep and straight, black, with only a slight downward hook at the very tip, not slender and not curved. Its only pale markings, printed in yellow ocher: one small patch on the folded wing near the wingtip, the feathers under the base of the tail, and a narrow band at the tip of the tail. Nowhere else. Keep the head thrown back and bill open in song, the sunburst rays fanning from the open bill, and the perch on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. No lettering, no signature. Palette, exactly and only: {palette}.",
+      "_note": "Refines kontext-clean-singing-black-101: correct pied currawong markings (small folded-wing patch, undertail, tail tip) and a heavy straight bill with a slight terminal hook rather than a blackbird's."
+    },
+    {
+      "id": "kontext-clean-singing-black-101-v3",
+      "scheme": "wada222",
+      "image": "out/20260903-231306/singing-orange-101-nosig.png",
+      "prompt": "Redraw this print as a coarse halftone screen print on a flat yellow-orange ground. The bird is a pied currawong: a large, heavy-bodied Australian bird, glossy black all over including the breast and belly, with a bright yellow eye. Replace the bill with a big heavy crow-like bill: black, very deep at the base, as long as the head, straight along its length with a small downward hook only at the tip. Not a thrush's or blackbird's bill. Its only pale markings, printed in yellow ocher: one small patch on the folded wing near the wingtip, the feathers under the base of the tail, and a narrow band at the tip of the tail. Nowhere else. Keep the head thrown back and bill open in song, the sunburst rays fanning from the open bill, and the perch on a eucalyptus branch with long narrow gum leaves and gum blossom of fine orange filaments. No lettering, no signature. Palette, exactly and only: {palette}.",
+      "_note": "v2 kept the source's slim bill and its fake signature. Source has the signature painted out with ImageMagick; bill described as crow-like and deep at the base."
+    },
+    {
+      "id": "kontext-refine-bill-331",
+      "scheme": "wada222",
+      "image": "out/20260904-194400/kontext-clean-singing-black-101-v3-331.png",
+      "prompt": "Edit only the bird's bill and leave everything else in this print exactly as it is. Make the bill shorter, about the length of the head from eye to nape, and straight: the upper edge runs in a straight line from the forehead, with no curve along its length, deep at the base and tapering to a small downward hook right at the tip, like a currawong or a crow. Keep the bill open in song, black. Do not change the body, wing, tail, eye, branch, leaves, rays or background. Palette, exactly and only: {palette}.",
+      "_note": "v3-331 was the keeper bar the bill, which was still a little long and curved. Single-edit pass on that image."
+    }
+  ]
+}
