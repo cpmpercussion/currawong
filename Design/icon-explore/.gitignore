@@ -1,0 +1,5 @@
+out/
+trace/work/
+__pycache__/
+.DS_Store
+reference-pied-currawong-jjharrison.jpg
