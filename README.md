@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="Sources/Currawong/Assets.xcassets/AppIcon.appiconset/AppIcon-macOS-512.png"
+       alt="Currawong app icon: a singing pied currawong on a banksia branch against a rising sun"
+       width="180">
+</p>
+
 # Currawong
 
 [![CI](https://github.com/cpmpercussion/currawong/actions/workflows/ci.yml/badge.svg)](https://github.com/cpmpercussion/currawong/actions/workflows/ci.yml)
@@ -22,6 +28,8 @@ and to be open with a permissive license for other radio amateurs to learn from 
 
 Currawong is named for a bird with a distinctive, far-carrying call, locally notable
 in VK1.
+The icon is that bird mid-call on a banksia branch, traced to vectors from a
+generated image; `Design/icon-explore/` has the exploration and the trace script.
 
 Currawong is the app half of the project. The protocols live in
 [`swift-hamvoip`](https://github.com/cpmpercussion/swift-hamvoip). The app
