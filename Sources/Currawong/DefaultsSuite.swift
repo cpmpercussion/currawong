@@ -52,6 +52,31 @@ enum DefaultsSuite {
     /// runner cannot reach it. One rule, both platforms.
     static let resetArgument = "currawong-defaults-reset"
 
+    /// **APP-33.** Starts the run with the licence acknowledgement already on
+    /// file, so a test that transmits is not stopped by a sheet.
+    ///
+    /// ## Why a bypass exists at all, and what bounds it
+    ///
+    /// The acknowledgement is answered on screen, once per install, and the
+    /// suite is wiped at every launch — so without this the on-air tests would
+    /// each have to spend their **first press** raising a sheet and dismissing
+    /// it. That press is the one `BU-15` measures (cold key-down, press to
+    /// carrier), and spending it on a dialogue would change the thing those
+    /// tests exist to observe.
+    ///
+    /// Three things keep it honest:
+    ///
+    /// * **`#if DEBUG` only**, like the two arguments above, so it cannot exist
+    ///   in a shipped binary.
+    /// * **It only runs on the custom-suite path.** The write below happens
+    ///   inside the `guard` that has already found a named suite, so there is no
+    ///   argument combination that pre-acknowledges the *operator's* defaults.
+    /// * **The gate itself is tested elsewhere**, properly, from every
+    ///   `PTTSource` — see `LicenceAcknowledgementTests`. This target is for
+    ///   radio behaviour, and a test target that cannot key a radio tests
+    ///   nothing.
+    static let acknowledgeLicenceArgument = "currawong-licence-acknowledged"
+
     /// The defaults the app should use. Resolved once — both stores must get the
     /// same answer, and the reset must happen before either of them reads.
     static let resolved: UserDefaults = resolve()
@@ -68,6 +93,12 @@ enum DefaultsSuite {
 
         if source.bool(forKey: resetArgument) {
             suite.removePersistentDomain(forName: name)
+        }
+        // After the reset, or it would be the first thing wiped.
+        if source.bool(forKey: acknowledgeLicenceArgument) {
+            suite.set(
+                LicenceAcknowledgement.currentVersion,
+                forKey: UserDefaultsSettingsStore.licenceAcknowledgementKey)
         }
         return suite
         #else

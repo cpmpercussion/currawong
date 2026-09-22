@@ -82,6 +82,17 @@ protocol SettingsStore: AnyObject, Sendable {
     /// written before the proxy was hoisted out of them.
     func loadEchoLinkProxy() -> StoredEchoLinkProxy?
     func saveEchoLinkProxy(_ proxy: EchoLinkProxySettings)
+
+    /// **APP-33.** Which version of the licence acknowledgement the operator has
+    /// accepted, or `nil` if they never have.
+    ///
+    /// A version rather than a flag, for the reason given on
+    /// ``LicenceAcknowledgement``. There is no migration behind this one: an
+    /// operator updating into the version that introduced it has acknowledged
+    /// nothing, which is the correct answer — there was no wording for them to
+    /// have agreed to.
+    func loadLicenceAcknowledgement() -> Int?
+    func saveLicenceAcknowledgement(_ version: Int)
 }
 
 /// What ``SettingsStore/loadEchoLinkProxy()`` found, and where.
@@ -123,6 +134,12 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let transmitTimeoutKey = "au.charlesmartin.currawong.transmitTimeoutSeconds"
     private static let receiveGainKey = "au.charlesmartin.currawong.receiveGainDB"
     private static let echoLinkProxyKey = "au.charlesmartin.currawong.echoLinkProxy"
+    /// **APP-33.** Internal rather than private, and the only key here that is:
+    /// ``DefaultsSuite`` writes it when a UI test asks to start already
+    /// acknowledged. See the note there for why that hook cannot reach the
+    /// operator's own defaults.
+    static let licenceAcknowledgementKey =
+        "au.charlesmartin.currawong.licenceAcknowledgement"
 
     private let defaults: UserDefaults
 
@@ -274,6 +291,18 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// Stored as a bare number, on the same reasoning as ``saveTransmitGain(_:)``.
     func saveTransmitTimeout(_ timeout: TransmitTimeout) {
         defaults.set(timeout.seconds, forKey: Self.transmitTimeoutKey)
+    }
+
+    /// **APP-33.** `nil` when the key has never been written — which
+    /// `integer(forKey:)` alone cannot say, since it answers `0` for both
+    /// "never acknowledged" and a stored `0`.
+    func loadLicenceAcknowledgement() -> Int? {
+        guard defaults.object(forKey: Self.licenceAcknowledgementKey) != nil else { return nil }
+        return defaults.integer(forKey: Self.licenceAcknowledgementKey)
+    }
+
+    func saveLicenceAcknowledgement(_ version: Int) {
+        defaults.set(version, forKey: Self.licenceAcknowledgementKey)
     }
 
     /// **APP-13.** The app-wide private proxy, rescuing one from older

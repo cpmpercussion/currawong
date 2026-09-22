@@ -1344,6 +1344,21 @@ makes that true, and the two things that look like exceptions and are not:
   EchoLink secrets live in the Keychain. None of it is uploaded, and there is
   no account with us to upload it to. On macOS these now live in the app's
   sandbox container (`APP-32`).
+- ⚠️ **Do not write "no account required" anywhere** — not in the App Store
+  description, not in the TestFlight brief, not in the README. It is true of
+  Currawong and false of getting on the air, and it laminates a privacy fact
+  onto a licensing one. **Two separate statements**, which is APP-33's rule:
+
+  > Currawong has no accounts and no server of its own — nothing you type
+  > reaches us.
+
+  > Currawong does not verify licences. Amateur transmission requires a licence
+  > in your country; your callsign is sent with every transmission and
+  > identifies you as responsible for it.
+
+  The first is the privacy claim and belongs in this item. The second is a
+  disclosure, it is what the operator acknowledges in the app (APP-33), and the
+  App Store copy should say the same thing the app says.
 - **The microphone is the app's function, not collection.** Voice goes to the
   node or reflector the *operator* dialled, over the air to whoever is
   listening, along with the callsign every mode carries — which is a legal
@@ -1601,4 +1616,89 @@ that genuinely remains, which is that none of it has met a real accessory.
   as a mapping. No device whitelist anywhere.
 - **BLE-3** — Runtime: apply learned mapping → press/release edges drive
   PTT; UI indicator for accessory link state.
+
+### APP-33 — the first-transmit licence acknowledgement
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-09-22, reviewing how
+the app handles login and setup: *"it seems poor form to say 'no account
+required' — the account is a licence that we don't check."*
+
+**The question that started it.** A ham app normally opens with a setup flow:
+licence check, callsign, registration. Currawong has none, and the maintainer's
+instinct was that the absence was being *marketed* rather than disclosed.
+
+**What was established first, and it corrects an earlier reading in this
+conversation.** All three networks the app can reach — AllStarLink, EchoLink and
+M17 — check a licence when they issue the account or token that gets an operator
+on the air. An earlier draft of this reasoning had M17 as the odd one out, on
+the grounds that its reflectors are unauthenticated (`FR-2.3`; the connect form
+already says *"M17 reflectors are unauthenticated. Your callsign identifies
+you."*). That framing was wrong: the reflector is not where an M17 operator is
+vetted, and the app was never patching a hole. **So this task is not a
+mitigation.** It states an obligation the operator already carries, at the one
+moment it becomes real, in an app that can otherwise be installed by anybody.
+
+**What it is not, and must not become.** A licence check. There is no global
+register; national registers are inconsistent and some are not public, so a
+check would work for VK, US and UK operators and quietly exclude everybody else.
+It would also mean sending a callsign to a third party, which the app otherwise
+does only to networks the operator is themselves a user of (`APP-25` item 5).
+
+**Delivered.**
+
+1. **`LicenceAcknowledgement`** (`Sources/Currawong/LicenceAcknowledgement.swift`)
+   — the stored version, the wording, and the sheet. A **version integer, not a
+   `Bool`**, so materially changed wording can be put in front of an operator
+   again; deliberately not keyed to the callsign, since a contest call is a
+   legitimate reason to change it and re-asking would train the operator to
+   dismiss it.
+2. **One gate, in `RadioSession.beginTransmit(from:)`** — the single choke point
+   every PTT source funnels through. Placed **after** the connected guard (a
+   licence notice shown to somebody who is not connected is noise) and **before**
+   all the hold bookkeeping, so a refused press costs one boolean and no
+   `await`: it cannot perturb the `BU-15`/`BU-16` key-down ordering. Not
+   branched on `PTTSource` — a fob press raises the same sheet, which then
+   *waits*, so an operator whose phone was in their pocket finds out why nothing
+   happened rather than being told nothing at all. Either way the radio stays
+   unkeyed.
+3. **Accepting does not transmit.** The press that raised the sheet is spent.
+   Keying a radio as a side effect of dismissing a dialogue is the
+   stuck-microphone shape this app exists to prevent.
+4. **Declining stores nothing** and leaves a working, listening radio. `Listen
+   only`, not `Cancel`: it is a supported way to use the app.
+
+**The RF wording, which is the half the maintainer specified.** *"Some of the
+nodes and reflectors you can reach from here are linked to radio transmitters
+and some are not. Currawong cannot tell which — assume anything you send may go
+out over the air."* General rather than per destination, because the app
+genuinely cannot tell: the M17 host file does not say, and an EchoLink
+conference may be bridged to a repeater at the far end without anything in the
+protocol mentioning it. A wrong guess in the reassuring direction is the one
+that matters.
+
+**What gating transmit rather than launch does and does not buy.** An operator
+may install, connect and listen without ever seeing the sheet — nothing in
+`connect()`, the browsers or the receive path consults it. But the three
+networks all require an identity on the wire to connect at all, so the
+unlicensed listener this permits is a case *Currawong* allows and the networks
+mostly do not. The gate is honest about the app's own behaviour; it does not
+claim to have opened a door somebody else keeps shut.
+
+**The on-air target needed a hook.** `CurrawongOnAirUITests` wipes its defaults
+suite at every launch, so without one every on-air test would spend its **first
+press** raising and dismissing a sheet — and that press is what `BU-15`
+measures. `DefaultsSuite.acknowledgeLicenceArgument` starts a run already
+acknowledged: `#if DEBUG` only, like the other two launch arguments, and it
+writes only inside the custom-suite branch, so no argument combination can
+pre-acknowledge the operator's own defaults. The gate itself is tested properly
+in `LicenceAcknowledgementTests`, from every `PTTSource`.
+
+ℹ️ **`m17-cbr.charlesmartin.au` is not RF-linked**, which is why the on-air
+target may key it repeatedly without putting a test pattern over anybody's
+repeater. Now recorded in both on-air test files rather than left as something
+one person happens to know — and it is the concrete case behind the wording
+above: one of the reflectors that is *not* linked, which the app cannot
+distinguish from one that is.
+
+**Also under this task:** `APP-25` item 5 gains the rule against writing "no
+account required", with the two statements that replace it.
 

@@ -469,6 +469,29 @@ final class RadioSession: ObservableObject {
     /// themselves.
     @Published private(set) var safetyNotice: SafetyNotice?
 
+    /// **APP-33.** Whether the licence acknowledgement is waiting to be answered.
+    ///
+    /// Set by ``beginTransmit(from:)`` when a press arrives and the operator has
+    /// never acknowledged; cleared by ``acknowledgeLicence()`` or
+    /// ``declineLicence()``. A sheet rather than an alert, so it is not in
+    /// ``alert``'s queue — the two are different questions and an acknowledgement
+    /// sitting behind "Not connected" would be a poor way to meet it.
+    @Published private(set) var needsLicenceAcknowledgement = false
+
+    /// Which version of the acknowledgement wording is on file. `nil` until one
+    /// is accepted. Not published: the sheet is driven by the flag above, and
+    /// this changes exactly once per install.
+    private var acknowledgedLicenceVersion: Int?
+
+    /// **APP-33.** Whether the operator has accepted the current wording.
+    ///
+    /// Read by ``beginTransmit(from:)`` and by nothing else. Connecting,
+    /// browsing and receiving deliberately do not consult it: declining leaves a
+    /// usable listening radio, which is the point.
+    var hasAcknowledgedLicence: Bool {
+        LicenceAcknowledgement.isSatisfied(by: acknowledgedLicenceVersion)
+    }
+
     /// The last reason transmission ended. Diagnostic, and what the tests
     /// assert against to prove each release path is wired up.
     @Published private(set) var lastStopReason: TransmitStopReason?
@@ -780,6 +803,7 @@ final class RadioSession: ObservableObject {
         self.transmitGain = storedGain
         self.gainBox.gain = storedGain
         self.transmitTimeout = settingsStore.loadTransmitTimeout() ?? .default
+        self.acknowledgedLicenceVersion = settingsStore.loadLicenceAcknowledgement()
         let storedReceiveGain = settingsStore.loadReceiveGain() ?? .unity
         self.receiveGain = storedReceiveGain
         self.receiveGainBox.gain = storedReceiveGain
@@ -1722,6 +1746,28 @@ final class RadioSession: ObservableObject {
             }
             return
         }
+
+        // **APP-33.** The one gate between a press and the air, and it is
+        // deliberately here rather than anywhere earlier:
+        //
+        // * **After the connected guard**, because a licence notice put in front
+        //   of somebody who is not even connected is noise.
+        // * **Before everything below**, so a press that will not transmit costs
+        //   nothing — no hold bookkeeping, no `scheduleTransmitWork()`, and
+        //   crucially no part of the BU-15/BU-16 key-down ordering. One boolean,
+        //   no `await`: the gate cannot perturb what those items measure.
+        //
+        // Not branched on `source`. A fob press while unacknowledged raises the
+        // sheet exactly as a screen press does, and the sheet waits — so an
+        // operator whose phone was in their pocket finds out why nothing
+        // happened the moment they look, rather than being told nothing at all.
+        // Either way the radio stays unkeyed, which is the failure this should
+        // have.
+        guard hasAcknowledgedLicence else {
+            needsLicenceAcknowledgement = true
+            return
+        }
+
         guard !transmitDesired else { return }
 
         safetyNotice = nil
@@ -2415,6 +2461,27 @@ final class RadioSession: ObservableObject {
     // MARK: - Alerts
 
     /// Dismisses the alert on screen and shows the next one waiting, if any.
+    /// **APP-33.** The operator says they hold a licence. Stored, so this is
+    /// asked once per install.
+    ///
+    /// It does **not** begin transmitting. The press that raised the sheet is
+    /// spent — the operator has let go of the button by the time they have read
+    /// three paragraphs, and keying a radio as a side effect of dismissing a
+    /// dialogue is the last thing this app should do. The next press transmits.
+    func acknowledgeLicence() {
+        acknowledgedLicenceVersion = LicenceAcknowledgement.currentVersion
+        settingsStore.saveLicenceAcknowledgement(LicenceAcknowledgement.currentVersion)
+        needsLicenceAcknowledgement = false
+    }
+
+    /// **APP-33.** The operator declines, and keeps a listening radio.
+    ///
+    /// Nothing is stored: declining is not a decision that needs remembering,
+    /// and the next press asks again. The connection is left alone.
+    func declineLicence() {
+        needsLicenceAcknowledgement = false
+    }
+
     func dismissAlert() {
         alert = pendingAlerts.isEmpty ? nil : pendingAlerts.removeFirst()
     }
