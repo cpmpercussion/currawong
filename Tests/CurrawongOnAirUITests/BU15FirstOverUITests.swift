@@ -64,6 +64,20 @@ import XCTest
 /// It also still prints the window it happened in, and asserts that the key
 /// comes back up when the operator lets go: a stuck key is the failure this app
 /// exists to prevent.
+///
+/// ## The reflector is not RF-linked
+///
+/// `m17-cbr.charlesmartin.au` is the maintainer's own reflector and has no
+/// transmitter on it. That is why this target may key it repeatedly without
+/// putting a test pattern over anybody's repeater, and it is worth stating here
+/// rather than leaving as something one person happens to know: point these
+/// tests at a reflector that *is* linked and every run is a real transmission
+/// into somebody's RF coverage.
+///
+/// It is also the concrete case behind APP-33's wording — "some of the nodes and
+/// reflectors you can reach from here are linked to radio transmitters and some
+/// are not". This is one of the ones that is not, and the app cannot tell the
+/// difference, which is why that notice warns generally.
 final class BU15FirstOverUITests: XCTestCase {
 
     private let reflector = "m17-cbr.charlesmartin.au"

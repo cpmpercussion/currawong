@@ -27,14 +27,26 @@ enum IsolatedApp {
     /// nothing here can reach `au.charlesmartin.currawong`.
     static let suiteName = "au.charlesmartin.currawong.uitests"
 
-    /// - Parameter reset: whether to empty the suite first. `true` for anything
-    ///   that counts rows; `false` for a test that wants to launch twice and
-    ///   check that something survived.
-    static func launched(reset: Bool = true) -> XCUIApplication {
+    /// - Parameters:
+    ///   - reset: whether to empty the suite first. `true` for anything that
+    ///     counts rows; `false` for a test that wants to launch twice and check
+    ///     that something survived.
+    ///   - acknowledgingLicence: **APP-33.** whether to start with the licence
+    ///     acknowledgement already on file. `true` by default, because the suite
+    ///     is wiped at launch and a test that transmits would otherwise spend its
+    ///     first press on a sheet — and the first press is what `BU-15` measures.
+    ///     Pass `false` to put the gate itself on screen.
+    static func launched(
+        reset: Bool = true,
+        acknowledgingLicence: Bool = true
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-currawong-defaults-suite", suiteName]
         if reset {
             app.launchArguments += ["-currawong-defaults-reset", "YES"]
+        }
+        if acknowledgingLicence {
+            app.launchArguments += ["-currawong-licence-acknowledged", "YES"]
         }
         app.launch()
         return app

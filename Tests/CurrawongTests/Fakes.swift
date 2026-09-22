@@ -500,6 +500,7 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private var storedReceiveGain: ReceiveGain?
     private var storedTimeout: TransmitTimeout?
     private var storedProxy: StoredEchoLinkProxy?
+    private var storedLicenceAcknowledgement: Int?
     private var storedSaveCount = 0
     private var storedChannelSaveCount = 0
 
@@ -511,7 +512,8 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         gain: TransmitGain? = nil,
         timeout: TransmitTimeout? = nil,
         receiveGain: ReceiveGain? = nil,
-        echoLinkProxy: StoredEchoLinkProxy? = nil
+        echoLinkProxy: StoredEchoLinkProxy? = nil,
+        licenceAcknowledgement: Int? = nil
     ) {
         self.stored = initial
         self.storedChannels = channels
@@ -521,6 +523,19 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         self.storedTimeout = timeout
         self.storedReceiveGain = receiveGain
         self.storedProxy = echoLinkProxy
+        self.storedLicenceAcknowledgement = licenceAcknowledgement
+    }
+
+    func loadLicenceAcknowledgement() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedLicenceAcknowledgement
+    }
+
+    func saveLicenceAcknowledgement(_ version: Int) {
+        lock.lock()
+        storedLicenceAcknowledgement = version
+        lock.unlock()
     }
 
     func loadEchoLinkProxy() -> StoredEchoLinkProxy? {
@@ -975,6 +990,11 @@ final class SessionHarness {
         timeout: TransmitTimeout? = nil,
         receiveGain: ReceiveGain? = nil,
         echoLinkProxy: StoredEchoLinkProxy? = nil,
+        // **APP-33.** Acknowledged by default, because almost every test in this
+        // suite is about what happens *after* a press is honoured and would
+        // otherwise be testing the gate by accident. The gate's own tests pass
+        // `false`.
+        licenceAcknowledged: Bool = true,
         reusing previous: SessionHarness? = nil
     ) {
         // `reusing:` is how a test quits and relaunches the app: a second
@@ -987,7 +1007,9 @@ final class SessionHarness {
             ?? InMemorySettingsStore(
                 initial: settings, channels: channels, selectedID: selectedID, identity: identity,
                 gain: gain, timeout: timeout, receiveGain: receiveGain,
-                echoLinkProxy: echoLinkProxy)
+                echoLinkProxy: echoLinkProxy,
+                licenceAcknowledgement: licenceAcknowledged
+                    ? LicenceAcknowledgement.currentVersion : nil)
         self.secretStore = previous?.secretStore ?? InMemorySecretStore(initial: secrets)
 
         let closedLinks = self.closedLinks

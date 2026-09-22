@@ -132,6 +132,20 @@ struct RootView: View {
         } message: { alert in
             Text(alert.message)
         }
+        // **APP-33.** Raised by the first press that would have gone on the air.
+        // `isPresented` is one-way from the session's side: the session sets it,
+        // and both buttons — and a swipe-down dismissal, which is a decline —
+        // clear it through the session rather than behind its back.
+        .sheet(
+            isPresented: Binding(
+                get: { session.needsLicenceAcknowledgement },
+                set: { if !$0 { session.declineLicence() } })
+        ) {
+            LicenceAcknowledgementView(
+                callsign: session.identity.callsign,
+                onAccept: { session.acknowledgeLicence() },
+                onDecline: { session.declineLicence() })
+        }
     }
 
     @ViewBuilder
