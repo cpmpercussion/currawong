@@ -45,26 +45,8 @@ final class BLEPTTControllerTests: XCTestCase {
 
     // MARK: - Repairing a link that has gone quiet (BU-14)
 
-    /// A clock the test moves by hand, so the repair cooldown does not cost real
-    /// seconds.
-    private final class TestClock: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = Date(timeIntervalSince1970: 1_000)
-        var now: Date {
-            lock.lock()
-            defer { lock.unlock() }
-            return value
-        }
-        func advance(_ seconds: TimeInterval) {
-            lock.lock()
-            value = value.addingTimeInterval(seconds)
-            lock.unlock()
-        }
-    }
-
     /// A mapping already stored and the link up — the state a repair applies to.
     private func makeConnectedController(
-        clock: TestClock,
         neverFiringBackstop: DelayGate? = nil,
         isRebuildSafe: (@MainActor () -> Bool)? = nil
     ) async -> (BLEPTTController, BLEPTTMapping) {
@@ -74,7 +56,6 @@ final class BLEPTTControllerTests: XCTestCase {
             makeCentral: { [central] in central! },
             store: store,
             retryDelay: {},
-            now: { clock.now },
             // A wait that is never released: these tests assert the
             // *event-driven* path, and a deadline that fired would mask it.
             probeDeadline: (neverFiringBackstop ?? DelayGate()).wait)
@@ -95,8 +76,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// for the length of a reconnection after *every over* — 1.6 s and 2.6 s
     /// measured on the device, which is the window a quick reply lands in.
     func testARouteChangeProbesBeforeRebuilding() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
 
@@ -116,8 +96,7 @@ final class BLEPTTControllerTests: XCTestCase {
 
     /// And a probe that answers costs nothing further: no rebuild, no downtime.
     func testAProbeThatAnswersLeavesTheLinkAlone() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         central.clearCalls()
@@ -143,8 +122,7 @@ final class BLEPTTControllerTests: XCTestCase {
 
     /// A probe that fails is what buys a rebuild.
     func testAFailedProbeRebuildsTheLink() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         central.clearCalls()
@@ -165,8 +143,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// **Coalescing by state, not by clock.** A burst of route changes produces
     /// one check, because one is already in flight — nothing to tune wrongly.
     func testABurstOfRouteChangesCoalescesIntoOneCheck() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         for _ in 0..<5 { controller.audioRouteDidChange() }
 
@@ -176,8 +153,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// Once a check resolves, a later route change is free to ask again — the gate
     /// is in-flight state, not a dead period.
     func testAfterACheckResolvesAnotherRouteChangeMayAskAgain() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         let echo = probeEcho(mapping)
@@ -197,10 +173,9 @@ final class BLEPTTControllerTests: XCTestCase {
     /// on device after every single over. The answer must cancel the deadline
     /// regardless of the verification state.
     func testAProbeAnswerOnAVerifiedLinkCancelsTheDeadline() async {
-        let clock = TestClock()
         let gate = DelayGate()
         let (controller, mapping) = await makeConnectedController(
-            clock: clock, neverFiringBackstop: gate)
+            neverFiringBackstop: gate)
 
         // Verify the link with the button's own data first — a release, which
         // cannot key the accessory.
@@ -228,8 +203,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// button's notifications in HFP call mode — so it must never verify the
     /// button. Only the button's own signals may.
     func testAProbeEchoDoesNotVerifyTheButton() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         let echo = probeEcho(mapping)
@@ -251,8 +225,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// update with no check in flight answers no question anyone asked; acting
     /// on it force-rebuilt a healthy link on one transient ATT error.
     func testAnUnsolicitedProbeFailureLeavesTheLinkAlone() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         central.emit(.probeFailed(id: mapping.accessoryID, reason: "transient ATT error"))
         for _ in 0..<10 { await Task.yield() }
@@ -268,10 +241,9 @@ final class BLEPTTControllerTests: XCTestCase {
     /// mid-discovery, so the probe silently cannot run — and the expiring
     /// deadline must read that as silence, not death.
     func testADeadlineWithNoReadIssuedLeavesTheLinkAlone() async {
-        let clock = TestClock()
         let gate = DelayGate()
         let (controller, mapping) = await makeConnectedController(
-            clock: clock, neverFiringBackstop: gate)
+            neverFiringBackstop: gate)
 
         controller.audioRouteDidChange()
         XCTAssertEqual(central.calls, [.probe(mapping.accessoryID)])
@@ -299,8 +271,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// back the press payload would otherwise be keyed by every post-over
     /// probe — with no release ever coming.
     func testAProbeAnswerThatEchoesThePressPayloadKeysNothing() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         let echo = BLECentralEvent.probeAnswered(
@@ -320,10 +291,9 @@ final class BLEPTTControllerTests: XCTestCase {
     /// checks, so the deadline must die when the rebuild commits — or it fires
     /// mid-rebuild and disconnects the link being rebuilt.
     func testReconnectDuringAPendingCheckKillsTheStaleDeadline() async {
-        let clock = TestClock()
         let gate = DelayGate()
         let (controller, mapping) = await makeConnectedController(
-            clock: clock, neverFiringBackstop: gate)
+            neverFiringBackstop: gate)
 
         controller.audioRouteDidChange()
         central.emit(.probeIssued(id: mapping.accessoryID))
@@ -356,8 +326,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// guards every repair path. The operator's Reconnect is the escape: it
     /// lets go of the claim (which can only unkey) and rebuilds.
     func testReconnectClearsAStuckKeyedClaimAndRebuilds() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
         central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
         await waitUntil("keyed") { controller.isAccessoryKeyed }
         sink.clear()
@@ -381,8 +350,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// claim whose release is never coming — and withdrawing it brings the
     /// repair machinery back to life.
     func testAnExternalUnkeyWithdrawsTheKeyedClaim() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
         central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.press))
         await waitUntil("keyed") { controller.isAccessoryKeyed }
         sink.clear()
@@ -421,8 +389,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// **A rebuilt link is probed too**, and a probe that fails again escalates —
     /// immediately, with no waiting.
     func testARebuiltLinkIsProbedAndCanEscalate() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         await rebuildAfterFailedCheck(mapping)
@@ -439,8 +406,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// It is a ladder, not a loop. Giving up leaves an honest "untested" and a
     /// Reconnect button, which beats retrying invisibly forever.
     func testEscalationGivesUpAfterTheBound() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         for _ in 0..<BLEPTTController.maximumRepairAttempts {
@@ -460,10 +426,9 @@ final class BLEPTTControllerTests: XCTestCase {
     /// session is asked again on every attempt, including one triggered by a probe
     /// failure while the operator was keying up on the on-screen button.
     func testARebuildIsDeclinedWhenTheSessionSaysItIsNotIdle() async {
-        let clock = TestClock()
         var isIdle = true
         let (controller, mapping) = await makeConnectedController(
-            clock: clock, isRebuildSafe: { isIdle })
+            isRebuildSafe: { isIdle })
 
         controller.audioRouteDidChange()
         central.clearCalls()
@@ -482,8 +447,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// already decided the link is not working, which is better information than a
     /// read.
     func testTheOperatorsReconnectRebuildsWithoutProbingFirst() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.reconnectAccessory()
 
@@ -494,8 +458,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// notification, and learn mode latches the first signal it sees — so a probe
     /// during learning would be recorded as the operator's press.
     func testNoProbeIsIssuedWhileLearning() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.relearnCurrentAccessory()
         central.clearCalls()
@@ -523,8 +486,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// The rule, now stated on the protocol and asserted here: **a probe that
     /// cannot run says nothing.** Only an attempted-and-failed read is evidence.
     func testAProbeThatCannotRunYetMustNotCauseARebuild() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
@@ -548,8 +510,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// round, eight times in all. That must produce **one** rebuild attempt, not
     /// eight — and it is the fake's failure to model this that hid the last bug.
     func testTheDevicesRepeatedSubscriptionsProduceOneAttempt() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         controller.audioRouteDidChange()
         central.emit(.disconnected(id: mapping.accessoryID, reason: nil))
@@ -576,8 +537,7 @@ final class BLEPTTControllerTests: XCTestCase {
     /// The lesson of `BU-14` as an invariant: `.connected` proves nothing, so the
     /// link starts unverified and only arriving data changes that.
     func testAFreshLinkIsUnverifiedUntilSomethingArrives() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
 
         XCTAssertFalse(
             controller.isButtonVerified,
@@ -600,8 +560,7 @@ final class BLEPTTControllerTests: XCTestCase {
 
     /// And a repair puts it back to unproven, because that is exactly what it is.
     func testARepairMakesTheLinkUnverifiedAgain() async {
-        let clock = TestClock()
-        let (controller, mapping) = await makeConnectedController(clock: clock)
+        let (controller, mapping) = await makeConnectedController()
         // A *release*, not a press: a press would key the accessory, and a
         // repair is rightly refused while the button holds the key.
         central.emit(.notified(id: mapping.accessoryID, signal: TestSignals.release))

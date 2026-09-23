@@ -392,24 +392,13 @@ final class RadioSession: ObservableObject {
     /// see the on-screen button.
     var isIdleForAccessoryRepair: Bool {
         // Nothing on air, no hold the operator is still making, no automatic
-        // resume about to key back down. **And nothing else** — see
-        // ``repairQuietPeriodAfterTransmit`` for the quiet period this must
-        // not have.
+        // resume about to key back down. **And nothing else:** no quiet period
+        // after an over. The accessory link dies during the unkey, so a quiet
+        // period suppresses exactly the repair it needs (BU-14;
+        // `testARouteChangeJustAfterAnOverDoesAskForARepair` holds it).
         !isTransmitting && heldSource == nil && !routeResumeInFlight
     }
 
-    /// When transmission last ended, for the quiet period below.
-    private var lastTransmitEndedAt: Date?
-
-    /// ⛔ **Withdrawn — do not reinstate.** A quiet period meant to coalesce
-    /// repairs after an over instead suppressed the one repair that matters:
-    /// the accessory link dies on the way **down**, during the unkey, not
-    /// before it, so this discarded exactly the route-change signal the
-    /// unkey causes and left the repair button dead for the length of the
-    /// period. A repair right after an over is the point, not a risk — it is
-    /// when the link needs rebuilding.
-    @available(*, deprecated, message: "Withdrawn — see the note. Do not reinstate.")
-    static let repairQuietPeriodAfterTransmit: TimeInterval = 3
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
@@ -1256,7 +1245,6 @@ final class RadioSession: ObservableObject {
             Diagnostics.keying(
                 "endTransmit reason=\(reason) wasTransmitting=\(isTransmitting) "
                     + "held=\(heldSource != nil)")
-            lastTransmitEndedAt = now()
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }
@@ -1421,7 +1409,6 @@ final class RadioSession: ObservableObject {
             refreshActivity()
             // After the stop, to log the route with the engine down (BU-13).
             if wasTransmitting {
-                lastTransmitEndedAt = now()
                 Diagnostics.keying("key-up: \(audio.audioStateDescription)")
             }
         }
