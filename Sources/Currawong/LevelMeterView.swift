@@ -26,10 +26,10 @@ import SwiftUI
 /// ## Redrawing
 ///
 /// `TimelineView` polls the meter twenty times a second rather than the meter
-/// pushing changes through Combine. Fifty published updates a second, each
-/// invalidating a view, is a lot of main-thread work to display a bar — and
-/// this way a meter nobody is looking at costs nothing at all, because
-/// `TimelineView` stops when it is off screen.
+/// pushing changes through Combine — fifty published updates a second, each
+/// invalidating a view, is a lot of main-thread work to display a bar. This
+/// way a meter nobody is looking at costs nothing, because `TimelineView`
+/// stops when it is off screen.
 struct LevelMeterView: View {
     let label: String
     let meter: AudioLevelMeter
@@ -155,19 +155,12 @@ struct LevelMeterView: View {
 /// receive side's (`ReceiveGain`, which is what makes up the difference when a
 /// phone at full volume is still not loud enough for the room).
 ///
-/// ## The gain belongs here, not on the connect form
-///
-/// It sat on the connect form to begin with, which was wrong twice over. That
-/// form edits *one channel*, and the microphone gain is not a property of
-/// anywhere you might connect to — it is a property of this phone, this voice
-/// and this room, the same argument that moved the callsign out of
-/// `NodeSettings`. And the form disables its fields while a link is up, so the
-/// control was unreachable during the only activity that tells you what to set
-/// it to.
-///
-/// Here, the loop closes: speak, watch the bar, drag, watch it move. The slider
-/// stays live while transmitting, which is the whole point of it being next to
-/// the thing it changes.
+/// **The gain belongs here, not on the connect form**: the microphone gain is
+/// a property of this phone, this voice and this room, not of any channel you
+/// might connect to — the same argument that moved the callsign out of
+/// `NodeSettings`. Here, the loop closes: speak, watch the bar, drag, watch it
+/// move. The slider stays live while transmitting, next to the thing it
+/// changes.
 struct LevelMetersView: View {
     @ObservedObject var session: RadioSession
 
@@ -214,13 +207,11 @@ struct LevelMetersView: View {
         }
     }
 
-    /// The receive side's counterpart, under its own meter and for the same
-    /// reason: listen, watch the bar, drag, watch it move — and the meter reads
-    /// after the gain, so the bar is what is actually coming out.
-    ///
-    /// It is here rather than on the settings screen because the only moment an
-    /// operator can set it is while somebody is talking to them, and it stays
-    /// live while a link is up.
+    /// The receive side's counterpart, under its own meter: listen, watch the
+    /// bar, drag, watch it move — the meter reads after the gain, so the bar
+    /// is what is actually coming out. Here rather than on the settings screen
+    /// because the only moment an operator can set it is while somebody is
+    /// talking to them.
     private var receiveGain: some View {
         HStack(spacing: 8) {
             Image(systemName: "speaker.wave.2")
