@@ -5,36 +5,25 @@ import SwiftUI
 /// The EchoLink directory browser: which stations are on, and — the part that
 /// matters — what their IP addresses are.
 ///
-/// Nothing in the library resolves an EchoLink callsign to an address. The
-/// proxy tunnels four literal octets, so `*ECHOTEST*` is not something the app
-/// can dial; the directory listing is the only thing that turns a callsign into
-/// an address, and this is the view over it. Tapping a station therefore does
-/// not connect — it **fills in the connect screen** with the address, which is
-/// the piece the operator could not have typed, and takes you there. Nothing is
-/// saved until the connection succeeds; browsing six thousand entries should
-/// not leave six thousand channels behind.
+/// The proxy tunnels four literal octets, and nothing in the library resolves
+/// a callsign to one; the directory listing is the only thing that does, and
+/// this is the view over it. Tapping a station does not connect — it fills in
+/// the connect screen with the address and takes you there. Nothing is saved
+/// until the connection succeeds.
 ///
-/// ## It does not fetch on appear, on purpose
-///
-/// A fetch is not a cheap read. It opens a real proxy session, and public
-/// EchoLink proxies are single-user: while this app holds one, nobody else can,
-/// and the operator's own connect attempt would find the proxy busy. A browser
-/// that refreshed itself every time the pane came into view would be an
-/// intermittent denial of service aimed at a stranger's proxy and at the
-/// operator's own next call. So the operator asks, every time.
-///
-/// The listing also goes stale — stations come and go and addresses change — so
-/// the fetch time is shown beside it rather than presenting an hour-old list as
-/// the current state of the network.
+/// Does not fetch on appear: a fetch opens a real proxy session, and public
+/// EchoLink proxies are single-user, so refreshing on every appearance would
+/// be an intermittent denial of service against a stranger's proxy and the
+/// operator's own next call. The listing also goes stale, so the fetch time
+/// is shown beside it rather than presenting an old list as current.
 struct StationBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: StationBrowser
 
-    /// The public-proxy finder. Here because a listing is read *through* a
-    /// proxy, so Refresh is one of the two moments a proxy is needed — see
-    /// ``ProxyPicker/route(privateProxy:privatePassword:)``. Its state is shown in
-    /// ``status`` as well, because from this pane the search is a step of the
-    /// refresh rather than something happening on another screen.
+    /// The public-proxy finder. Refresh is one of the two moments a proxy is
+    /// needed — see ``ProxyPicker/route(privateProxy:privatePassword:)`` — and
+    /// its state is shown in ``status`` too, since from this pane the search is
+    /// a step of the refresh rather than a separate screen.
     @ObservedObject var proxyPicker: ProxyPicker
 
     /// Called after a station is chosen, so the container can show the connect
@@ -43,13 +32,12 @@ struct StationBrowserView: View {
 
     /// Repointing the draft is refused while a link is up, by `RadioSession`.
     /// The browser itself stays usable — reading the directory mid-call is only
-    /// a second proxy session, and looking up who is on is a reasonable thing
-    /// to do — but the button that would choose one says why it cannot.
+    /// a second proxy session — but the button that would choose a station
+    /// says why it cannot.
     private var canChoose: Bool { session.connection == .disconnected }
 
-    /// Wall-clock time only. A directory listing that is a day old is a
-    /// different kind of wrong from one that is ten minutes old, and the date
-    /// makes that visible without a relative string that has to be recomputed.
+    /// Wall-clock time only, so a day-old listing reads differently from a
+    /// ten-minute-old one without a relative string that must be recomputed.
     private static let listedFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
@@ -96,15 +84,14 @@ struct StationBrowserView: View {
 
     /// Resolve a proxy, then read the directory through it.
     ///
-    /// The two steps are one button because they are one intention. A listing
+    /// One button for both steps because they are one intention: a listing
     /// travels through a proxy, so an operator who has just added an EchoLink
-    /// channel and pressed Refresh needs one — and being told to go to another
-    /// pane, open a drawer and press a different button first is a detour through
-    /// information they cannot act on.
+    /// channel needs one, and sending them to another pane first is a detour
+    /// through information they cannot act on.
     ///
-    /// The proxy this returns is handed straight to the fetch and stored nowhere
-    /// (APP-13). It is also the same one the Connect button will use, because a
-    /// public one is leased for the sitting rather than probed for again.
+    /// The proxy this returns is handed straight to the fetch and stored
+    /// nowhere (APP-13). It is also the one the Connect button will use — a
+    /// public proxy is leased for the sitting, not probed for again.
     private func refresh() async {
         guard
             let proxy = await proxyPicker.route(
@@ -112,12 +99,7 @@ struct StationBrowserView: View {
                 privatePassword: session.echoLinkProxyPassword)
         else { return }
 
-        // **APP-14: the session says what to send.** This used to assemble the
-        // arguments here and passed `session.secret` — the *channel's* secret,
-        // which for an EchoLink channel is the empty string. So the ordinary
-        // case, typing the password in Settings and then coming here, sent the
-        // directory server nothing, and this pane reported "Enter your EchoLink
-        // account password" while Settings said "Stored in the Keychain."
+        // The session says what to send (APP-14), not this view.
         browser.load(session.directoryRequest, proxy: proxy)
     }
 
@@ -135,14 +117,13 @@ struct StationBrowserView: View {
         }
     }
 
-    /// The spinner and the last failure. Both, rather than one or the other:
-    /// a refresh that fails leaves the previous listing on screen, and the
-    /// operator needs to know the rows they are looking at are the old ones.
+    /// The spinner and the last failure, both rather than one or the other: a
+    /// refresh that fails leaves the previous listing on screen, and the
+    /// operator needs to know those rows are the old ones.
     @ViewBuilder
     private var status: some View {
-        // Ahead of the fetch's own spinner, because it happens first and the
-        // two are steps of one press. Without this the pane sits still for the
-        // second or two the probing takes and Refresh looks like it missed.
+        // Ahead of the fetch's own spinner, since it happens first and the two
+        // are steps of one press.
         if proxyPicker.isSearching {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -158,9 +139,8 @@ struct StationBrowserView: View {
             }
         }
 
-        // The picker's failure, not the browser's: when no proxy could be
-        // found there was never a fetch to fail, and "they were all busy" is
-        // the thing to say rather than "enter the proxy's host name".
+        // The picker's failure, not the browser's: when no proxy was found
+        // there was never a fetch to fail.
         if let failure = proxyPicker.failure, !proxyPicker.isSearching {
             Label(failure, systemImage: "exclamationmark.triangle")
                 .font(.footnote)
@@ -195,15 +175,9 @@ struct StationBrowserView: View {
     }
 
     /// What the operator needs before Refresh can work at all. Named as the
-    /// places those things are *set* rather than as protocol steps, because that
-    /// is where the fix is; `StationBrowser` reports the same three as failures
-    /// once a fetch is attempted, and this is the version that is shown first.
-    ///
-    /// **APP-14 corrected the copy.** It sent the operator to the connect form
-    /// for a callsign and a password that APP-12 had already moved to the
-    /// settings screen — so the one instruction on screen named a field that no
-    /// longer exists, which is a poor thing to read while wondering why a
-    /// listing is empty.
+    /// places those things are set, on the Settings screen, rather than as
+    /// protocol steps; `StationBrowser` reports the same three as failures
+    /// once a fetch is attempted, and this is the version shown first.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(browser.search.isEmpty ? "No listing yet" : "Nothing matches that")
@@ -248,10 +222,9 @@ struct StationBrowserView: View {
 
 /// One station, and the button that turns it into somewhere to go.
 ///
-/// The button carries the label rather than the whole row, because tapping a
-/// row in a list of six thousand entries reads as "open this" — and what
-/// happens is that another pane changes. Naming the effect is cheaper than
-/// explaining it afterwards.
+/// The button carries the label rather than the whole row: tapping a row in a
+/// list of six thousand entries reads as "open this", but what happens is that
+/// another pane changes.
 private struct StationRow: View {
     let station: DirectoryStation
     let canChoose: Bool
@@ -284,18 +257,14 @@ private struct StationRow: View {
                 }
 
                 if station.isTestService {
-                    // Worth saying once per test service rather than in a note
-                    // somewhere: this is the station to try first, and knowing
-                    // that saves an operator their first call to a stranger.
                     Text("Echoes your audio back — the right first contact.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 if !station.hasDialableAddress {
-                    // Said on the row rather than left to a disabled button,
-                    // because a button that is merely grey reads as a bug in
-                    // the app rather than a fact about the listing.
+                    // On the row, not left to a disabled button: a merely grey
+                    // button reads as a bug rather than a fact about the listing.
                     Text("The directory lists no reachable address for this station.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -321,9 +290,9 @@ private struct StationRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Location, node number and address on one line. The address is the whole
-    /// reason the browser exists, so it is always shown even when the listing
-    /// gave nothing else.
+    /// Location, node number and address on one line. The address is always
+    /// shown, even when the listing gave nothing else — it's the whole reason
+    /// the browser exists.
     private var subtitle: String {
         var parts: [String] = []
         if !station.location.isEmpty { parts.append(station.location) }

@@ -49,41 +49,32 @@ protocol TransmitActivityPresenting: AnyObject {
     /// Ends every activity this app has left running, whether or not this
     /// process started it.
     ///
-    /// **This is the app-termination path.** A Live Activity outlives the
-    /// process that requested it — that is the whole point of one — so a
-    /// Currawong that was killed while transmitting leaves a red banner on the
-    /// lock screen with nothing behind it. Called once at launch, before
-    /// anything else can start an activity.
+    /// The app-termination path: a Live Activity outlives the process that
+    /// requested it, so a Currawong killed while transmitting would otherwise
+    /// leave a red banner on the lock screen with nothing behind it. Called
+    /// once at launch, before anything else can start an activity.
     func endOrphans() async
 }
 
 /// **SF-4.** Decides when the lock screen shows a transmitter, and — the part
 /// that matters — when it stops.
 ///
-/// ## Why this is a separate object
-///
-/// ``RadioSession`` knows the transmit state; it does not need to also know
-/// about activity identity, ordering, or the difference between starting one and
-/// updating one. What the session hands over is a single desired value:
-/// ``show(_:)`` with a request, or with `nil` for "nothing is on air". Every
-/// path that ends transmission — release, watchdog (SF-1), accessory loss
-/// (SF-2), interruption and route change (SF-3), disconnection — reaches that
-/// one call, so there is no per-path activity teardown to forget.
-///
-/// ## Ordering
+/// ``RadioSession`` hands over a single desired value — ``show(_:)`` with a
+/// request, or `nil` for "nothing is on air" — and knows nothing about
+/// activity identity or ordering. Every path that ends transmission (release,
+/// watchdog SF-1, accessory loss SF-2, interruption/route change SF-3,
+/// disconnection) reaches that one call, so there is no per-path teardown to
+/// forget.
 ///
 /// The three presenter operations are `async` and must not overtake one
-/// another: an `end()` that lands before the `start()` it was meant to cancel
-/// leaves an activity nobody is tracking. So they are chained through a single
-/// task, the same shape ``RadioSession/scheduleTransmitWork()`` uses, and
-/// ``settle()`` is what a test waits on.
+/// another — an `end()` landing before the `start()` it was meant to cancel
+/// leaves an activity nobody is tracking — so they are chained through a
+/// single task, the shape ``RadioSession/scheduleTransmitWork()`` also uses,
+/// with ``settle()`` for a test to wait on.
 ///
-/// ## Update rate
-///
-/// ActivityKit budgets updates, and this pushes one per *transition* rather than
-/// one per tick: the elapsed and remaining times are rendered by the widget from
-/// the two dates in ``TransmitActivityState``, so a running clock costs no
-/// updates at all.
+/// ActivityKit budgets updates, so this pushes one per transition rather than
+/// per tick: elapsed and remaining times are rendered by the widget from the
+/// two dates in ``TransmitActivityState``, so a running clock costs nothing.
 @MainActor
 final class TransmitActivityController {
     private let presenter: any TransmitActivityPresenting
@@ -109,14 +100,10 @@ final class TransmitActivityController {
     /// Clears anything a previous run of the app left behind. Call once, at
     /// launch. See ``TransmitActivityPresenting/endOrphans()``.
     ///
-    /// **Clears ``showing`` too**, because `endOrphans()` ends *every* activity
-    /// including one this controller started — so not clearing it would leave
-    /// this object believing a banner is up that it has just had taken down, and
-    /// the next ``show(_:)`` with the same content would then do nothing at all.
-    /// In practice this is called once, at launch, before anything can key up,
-    /// so the case is unreachable; making it correct anyway is cheaper than
-    /// relying on that staying true, and the reachability of a stale-indicator
-    /// bug is not the kind of thing this class should be betting on.
+    /// Clears ``showing`` too, since `endOrphans()` ends every activity
+    /// including one this controller started — otherwise this object would
+    /// believe a banner is up that has just been taken down, and the next
+    /// ``show(_:)`` with the same content would do nothing.
     func adopt() {
         showing = nil
         enqueue { [presenter] in await presenter.endOrphans() }

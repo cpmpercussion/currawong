@@ -9,10 +9,8 @@ import SwiftUI
 /// specific network lives in the composition root; everything that knows about
 /// the user lives below ``RootView``.
 ///
-/// Note that no type in this file is spelled out, and since `RadioSession`
-/// stopped being generic there is no longer a client type to name even by
-/// inference: the mode is chosen from the operator's settings at connect time,
-/// inside the composition root.
+/// No concrete client type appears in this file: the mode is chosen from the
+/// operator's settings at connect time, inside the composition root.
 @main
 struct CurrawongApp: App {
     /// `@State` rather than a plain `let`, because a `let` on an `App` is
@@ -26,18 +24,16 @@ struct CurrawongApp: App {
             content
         }
         #if os(macOS)
-        // Two columns' worth. The old 480×760 was one scrolling column, and a
-        // window that shape shows a sidebar and nothing beside it.
+        // Two columns' worth, so a sidebar shows something beside it.
         .defaultSize(width: 1000, height: 700)
         #endif
     }
 
     /// The root view, plus the one platform difference worth having.
     ///
-    /// Written as a property with the `#if` around whole expressions rather than
-    /// around a modifier in the middle of a chain, because the latter is a newer
-    /// piece of syntax than this app's floor of iOS 16 and macOS 13 implies and
-    /// there is nothing to be gained by finding out where the line is.
+    /// The `#if` wraps whole expressions rather than a modifier mid-chain,
+    /// since the latter is newer syntax than this app's floor of iOS 16 and
+    /// macOS 13 guarantees.
     @ViewBuilder
     private var content: some View {
         let view = RootView(
@@ -50,10 +46,8 @@ struct CurrawongApp: App {
             nodeLocator: root.nodeLocator,
             portalLogin: root.portalLogin)
             // The PTT input controllers, once, for the process. `RootView`
-            // starts the session's own SF-3 observation itself — that is the
-            // view's business and it should not depend on anybody
-            // remembering to call this — so `activate()` is idempotent and
-            // the two overlap harmlessly.
+            // starts the session's own SF-3 observation itself, so
+            // `activate()` is idempotent and the two overlap harmlessly.
             .task { root.activate() }
 
         #if os(macOS)

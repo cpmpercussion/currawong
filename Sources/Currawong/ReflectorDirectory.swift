@@ -4,43 +4,35 @@ import Foundation
 
 /// One module on a reflector — a channel, in the reflector's own vocabulary.
 ///
-/// A letter, and sometimes a word about what it carries. Modelled rather than
-/// left as a bare `String` because a multiprotocol reflector's modules are not
-/// interchangeable: some are D-Star or DMR and cannot be used from here at all,
-/// and the ones that can are worth labelling as such.
+/// Modelled rather than left as a bare `String`: a multiprotocol reflector's
+/// modules are not interchangeable, and the ones that are D-Star or DMR
+/// cannot be used from here at all.
 struct ReflectorModule: Equatable, Sendable, Identifiable {
     /// The module letter, `A`–`Z`. This is what goes on the wire.
     var letter: String
 
-    /// What the listing said this module carries, when it is worth repeating —
-    /// `"All modes"` on a transcoding module, for instance. `nil` on a plain
-    /// M17 reflector, where every module is an M17 module and saying so on each
-    /// of twenty-six rows would be noise.
+    /// What the listing said this module carries, e.g. `"All modes"` on a
+    /// transcoding module. `nil` on a plain M17 reflector, where saying so on
+    /// each of twenty-six rows would be noise.
     var note: String?
 
     var id: String { letter }
 }
 
-/// One M17 reflector, in the app's own vocabulary.
-///
-/// The published listing carries rather more than this — a slug, a dashboard
-/// URL, IPv6, DNS cache timestamps, the hosting network's type. What an
-/// operator choosing somewhere to talk needs is who it is, where it is, who
-/// runs it, and which modules it has.
+/// One M17 reflector, in the app's own vocabulary: who it is, where it is, who
+/// runs it, and which modules it has. The published listing carries more than
+/// this (a slug, IPv6, DNS cache timestamps) that an operator does not need.
 struct M17Reflector: Equatable, Sendable, Identifiable {
-    /// `M17-AUS`, `URF018`. The name everybody uses for the reflector, and the
-    /// identity: the listing is keyed by it.
+    /// `M17-AUS`, `URF018`. The name everybody uses; the listing is keyed by it.
     var designator: String
 
     /// A longer name, when the listing gives one. Most entries do not.
     var name: String?
 
     /// What to connect to — a host name where the listing has one, an address
-    /// otherwise. Empty when the listing has neither, which happens.
-    ///
-    /// A name is preferred over an address because reflectors move and the
-    /// listing's own DNS cache is a snapshot; the resolver on the device is
-    /// more current than a field regenerated once a day.
+    /// otherwise, empty if neither. A name is preferred over an address:
+    /// reflectors move, and the listing's own DNS cache is a snapshot, while
+    /// the resolver on the device is current.
     var host: String
 
     var port: UInt16
@@ -48,9 +40,8 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
     /// The callsign or organisation running it.
     var sponsor: String?
 
-    /// Two-letter country code, as the listing gives it. Not localised into a
-    /// country name: `AU` is what an operator will have seen the reflector
-    /// called elsewhere.
+    /// Two-letter country code, as the listing gives it. Not localised: `AU`
+    /// is what an operator will have seen elsewhere.
     var country: String?
 
     /// The modules that can be linked from here, in the listing's order.
@@ -58,24 +49,19 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
 
     /// The reflector's own dashboard, where the listing gives one.
     ///
-    /// This is the page that answers the questions the host file cannot: who was
-    /// last heard and when, which modules have anybody on them, what the
-    /// reflector is currently bridging. None of that is in `M17Hosts.json`, and
-    /// there is no aggregate feed for it — every reflector runs its own
-    /// dashboard, in its own dialect of HTML. So this is a link out rather than
-    /// something the app scrapes and parses.
+    /// Answers what the host file cannot — who was last heard, which modules
+    /// are active, what the reflector is bridging — but every reflector runs
+    /// its own dashboard in its own dialect of HTML, so this is a link out
+    /// rather than something scraped and parsed.
     ///
-    /// `nil` when the listing has no URL for it, which is eight entries of a
-    /// hundred and twenty-five, and also when what it has is not a web address
-    /// — see ``M17HostFile``, which is where that judgement is made.
+    /// `nil` when the listing has no URL, or what it has is not a web address
+    /// — see ``M17HostFile``, which makes that judgement.
     var dashboard: URL? = nil
 
-    /// Whether this is a multiprotocol reflector — a URF bridging M17 to D-Star,
-    /// DMR and others — rather than a native M17 one.
-    ///
-    /// Worth showing. On a bridged module the far end may not be running M17 at
-    /// all, and audio is transcoded on the way, so an operator debugging how
-    /// they sound should know which kind of reflector they are on.
+    /// Whether this is a multiprotocol reflector (a URF bridging M17 to
+    /// D-Star, DMR and others) rather than a native M17 one. Worth showing: on
+    /// a bridged module the far end may not be running M17, and audio is
+    /// transcoded on the way.
     var isMultiprotocol: Bool
 
     var id: String { designator }
@@ -103,9 +89,7 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
     ///
     /// Takes a template for the same reason `DirectoryStation` does: the fields
     /// this does not set are things the operator has already configured, and a
-    /// chooser that dropped them would be handing back a channel that cannot
-    /// connect. (The callsign and the watchdog are no longer among them — both
-    /// are app-wide now — but the rest still travels.)
+    /// chooser that dropped them would hand back a channel that cannot connect.
     func channel(module: String, basedOn template: NodeSettings) -> NodeSettings {
         var channel = template
         channel.id = UUID()
@@ -120,12 +104,12 @@ struct M17Reflector: Equatable, Sendable, Identifiable {
 
 /// Fetches the published list of M17 reflectors.
 ///
-/// A protocol so the chooser can be tested — and the app run — without a
-/// network. The real one is ``HostFileReflectorDirectory``.
+/// A protocol so the chooser can be tested, and the app run, without a
+/// network. The real implementation is ``HostFileReflectorDirectory``.
 ///
 /// Unlike ``StationDirectory``, nothing here touches the library or a radio
-/// protocol: this is an HTTPS GET of a JSON file that the M17 Project publishes
-/// for exactly this purpose. So it does not live in `CompositionRoot` — there is
+/// protocol: this is an HTTPS GET of a JSON file the M17 Project publishes for
+/// exactly this purpose, so it does not live in `CompositionRoot` — there is
 /// no library type for that file to hide.
 protocol ReflectorDirectory: Sendable {
     /// Every reflector the published listing carries.
@@ -141,9 +125,8 @@ enum ReflectorDirectoryError: Error, Equatable, CustomStringConvertible {
     /// The file arrived but was not the shape we expect.
     case malformed(detail: String)
 
-    /// It parsed, and there was nothing in it. Distinct from `malformed`
-    /// because it means the list is being served but is empty, which is a
-    /// problem at the other end rather than in our reading of it.
+    /// It parsed and there was nothing in it — distinct from `malformed`
+    /// because the list is being served, just empty.
     case empty
 
     var description: String {
@@ -166,16 +149,11 @@ enum ReflectorDirectoryError: Error, Equatable, CustomStringConvertible {
 
 /// The reflector chooser's state, kept out of the view so it can be tested.
 ///
-/// Mirrors ``StationBrowser``, and deliberately: two panes that do the same job
-/// for two networks should not have two different shapes. The differences are
-/// all in what the fetch costs.
-///
-/// ## This one may fetch on appear, and the station browser may not
-///
-/// The EchoLink browser refuses to fetch by itself because a listing there
-/// means seizing a public proxy that serves one user at a time. This is a
-/// static JSON file on a CDN. Refreshing it costs a hundred kilobytes and
-/// inconveniences nobody, so the operator does not have to ask.
+/// Mirrors ``StationBrowser`` deliberately: two panes doing the same job for
+/// two networks should not have two different shapes. The difference is what
+/// the fetch costs — this is a static JSON file on a CDN, so unlike the
+/// EchoLink browser (which would be seizing a public proxy), this one may
+/// fetch on appear without asking the operator.
 @MainActor
 final class ReflectorBrowser: ObservableObject {
     /// What the operator typed to narrow the list.
@@ -187,8 +165,8 @@ final class ReflectorBrowser: ObservableObject {
     /// Why the last fetch failed, in words the operator can act on.
     @Published private(set) var failure: String?
 
-    /// When the list was fetched. Reflectors come and go and addresses change,
-    /// so the age is shown rather than presenting an old list as current.
+    /// When the list was fetched, shown so an old list isn't presented as
+    /// current.
     @Published private(set) var fetchedAt: Date?
 
     private let directory: ReflectorDirectory
@@ -208,12 +186,9 @@ final class ReflectorBrowser: ObservableObject {
     /// pane is looked at, and not on every appearance after that".
     var hasList: Bool { fetchedAt != nil }
 
-    /// The list, filtered by ``search``.
-    ///
-    /// No re-ordering: the listing arrives grouped by designator, which is the
-    /// order an operator scanning for `M17-AUS` expects. Matching is on
-    /// everything visible on the row, so searching `AU` finds the Australian
-    /// reflectors and searching a sponsor's callsign finds theirs.
+    /// The list, filtered by ``search``. No re-ordering: the listing arrives
+    /// grouped by designator, the order an operator scanning for `M17-AUS`
+    /// expects. Matches everything visible on the row.
     var visibleReflectors: [M17Reflector] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !query.isEmpty else { return reflectors }
@@ -241,8 +216,7 @@ final class ReflectorBrowser: ObservableObject {
             // Guarded by generation for the same reason `StationBrowser`'s is:
             // a cancelled task observes its cancellation after the `load` that
             // cancelled it has already set `isLoading` back to true, so an
-            // unguarded `defer` would clear the spinner belonging to the fetch
-            // that replaced this one.
+            // unguarded `defer` clears the wrong fetch's spinner.
             defer { if self.generation == generation { self.isLoading = false } }
 
             do {
@@ -260,9 +234,8 @@ final class ReflectorBrowser: ObservableObject {
         }
     }
 
-    /// Fetches only if nothing has been fetched yet. What the pane calls when it
-    /// appears, so the list is there the first time it is looked at without
-    /// re-downloading on every switch between panes.
+    /// Fetches only if nothing has been fetched yet. Called when the pane
+    /// appears, so it isn't re-downloaded on every switch between panes.
     func loadIfNeeded() {
         guard !hasList, !isLoading else { return }
         load()

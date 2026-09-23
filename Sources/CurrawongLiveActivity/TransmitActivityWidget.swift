@@ -6,18 +6,15 @@ import WidgetKit
 
 /// **There are three states here, not two.**
 ///
-/// On air, not keyed, and *nobody knows* — and the third one is why this is an
-/// enum rather than the `Bool` this started as. A `Bool` forces stale into one
-/// of the other two, and whichever one you pick, it is an assertion the view
-/// has no grounds for. Picking "not keyed" is the worse of the two, because a
-/// stale activity's likeliest cause is an app that died mid-over: the reading
-/// that says "you are not transmitting" is the reading that gets an operator to
-/// stop checking.
+/// On air, not keyed, and *nobody knows*. A `Bool` would force stale into one
+/// of the other two, and whichever is picked is an assertion the view has no
+/// grounds for — "not keyed" is the worse pick, since a stale activity's
+/// likeliest cause is an app that died mid-over, and that reading is the one
+/// that gets an operator to stop checking.
 ///
-/// So `unknown` renders as itself, in every one of the five places the activity
-/// is drawn — expanded, compact leading, compact trailing, minimal, and the lock
-/// screen. Caught in review of the APP-3 PR; the lock screen had this right and
-/// the Dynamic Island did not.
+/// So `unknown` renders as itself, in every one of the five places the
+/// activity is drawn: expanded, compact leading, compact trailing, minimal,
+/// and the lock screen.
 enum TransmitActivityPresentation: Equatable {
     /// The client is keyed. The only state that may be red.
     case onAir
@@ -96,22 +93,20 @@ enum TransmitActivityPresentation: Equatable {
 
 /// **SF-4.** Transmit state on a locked iPhone.
 ///
-/// ## This view decides nothing about the radio
+/// This view decides nothing about the radio: every judgement about *transmit*
+/// is made in the app, in ``RadioSession/desiredActivity`` and
+/// ``TransmitStatusPresentation``, and arrives as ``TransmitActivityState``. A
+/// widget extension is a separate process a unit test cannot drive, so
+/// anything decided here would be an untested rule about when the banner is
+/// red, which SF-4 cannot tolerate.
 ///
-/// Every judgement it could make about *transmit* has already been made in the
-/// app, in ``RadioSession/desiredActivity`` and ``TransmitStatusPresentation``,
-/// and arrives as ``TransmitActivityState``. That is not tidiness: a widget
-/// extension is a separate process a unit test cannot drive, so anything decided
-/// in here is untested, and the one thing SF-4 cannot tolerate is an untested
-/// rule about when the banner is red.
-///
-/// The one thing it must judge is `context.isStale`, because that is the one
-/// piece of information the app cannot supply: it means the app has stopped
-/// updating this. That is the **app-termination** case — a Live Activity outlives
-/// its process, so a Currawong killed mid-over leaves this on the lock screen
-/// with nobody behind it. The app clears the leftover at its next launch
-/// (`TransmitActivityPresenting.endOrphans()`); until then, this is what stands
-/// between the operator and a display that lies.
+/// The one thing it must judge is `context.isStale` — the one piece of
+/// information the app cannot supply, meaning the app has stopped updating
+/// this. That is the app-termination case: a Live Activity outlives its
+/// process, so a Currawong killed mid-over leaves this on the lock screen with
+/// nobody behind it. The app clears the leftover at its next launch
+/// (`TransmitActivityPresenting.endOrphans()`); until then, this is what
+/// stands between the operator and a display that lies.
 struct TransmitActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TransmitActivityAttributes.self) { context in

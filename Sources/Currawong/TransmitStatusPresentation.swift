@@ -6,16 +6,13 @@ import RadioCore
 /// How a `TransmitState` is shown to the operator.
 ///
 /// A pure value derived from the state and nothing else, so the decision about
-/// what "transmitting" looks like can be unit-tested without a view, a client
-/// or a network. Everything that displays transmit state — the placeholder view
-/// today, the TX banner in APP-2, the Live Activity in APP-3 — should go
-/// through this, so they cannot disagree with one another about what the radio
-/// is doing.
+/// what "transmitting" looks like can be unit-tested. Everything that displays
+/// transmit state — the TX banner, the Live Activity — goes through this, so
+/// they cannot disagree about what the radio is doing.
 ///
-/// APP-3's Live Activity holds to the same rule from one step further out: it is
+/// The Live Activity holds to the same rule from one step further out: it is
 /// handed strings rather than a `TransmitState`, so the widget process cannot
-/// form its own opinion about what "transmitting" looks like. See
-/// ``RadioSession/desiredActivity``.
+/// form its own opinion. See ``RadioSession/desiredActivity``.
 struct TransmitStatusPresentation: Equatable {
     /// Short label, e.g. for a status line.
     let label: String
