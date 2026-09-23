@@ -2,38 +2,24 @@
 
 import Foundation
 
-/// A peak-reading level meter, in dBFS.
+/// A peak-reading level meter in dBFS, one per audio path.
 ///
-/// One sits on each audio path — what the microphone is sending, and what the
-/// far end is sending back — so "am I too quiet?" is answerable without
-/// asking another operator for a radio check.
+/// ``note(_:)`` runs on the real-time capture thread, so it takes a short
+/// uncontended lock and never allocates, logs or blocks.
 ///
-/// **Written from the audio thread, read from the main one.** ``note(_:)`` is
-/// called by the capture tap, fifty times a second, on a real-time thread: it
-/// takes a short uncontended lock, scans 160 samples for a peak, and returns —
-/// no allocation, no logging, nothing that can block. `CapturedFrameRelay`
-/// follows the same policy, for the same reason: an `await` or a malloc on
-/// that thread manufactures dropouts that then get blamed on the network.
-///
-/// **Ballistics: instant attack, timed decay.** A meter that fell as slowly as
-/// it rose would miss a peak, and one that fell instantly would be an
-/// unreadable flicker at fifty updates a second. Decay is computed on *read*
-/// from a timestamp rather than driven by a timer, so the reading is correct
-/// whether it is polled at 60 Hz or once a second, and a meter nobody is
-/// looking at costs nothing.
+/// Instant attack, timed decay. Decay is computed on read from a timestamp,
+/// not by a timer, so any polling rate reads correctly and an unwatched meter
+/// costs nothing.
 final class AudioLevelMeter: @unchecked Sendable {
-    /// Quieter than this reads as silence. Speech peaks well above it and room
-    /// noise on a phone microphone sits below it, so it is roughly the line
-    /// between "nothing is arriving" and "something is".
+    /// Quieter than this reads as silence: above phone room noise, below
+    /// speech peaks.
     static let floorDB: Double = -54
 
-    /// How fast the needle falls, in dB per second. In the range broadcast
-    /// peak-programme meters use, and slow enough to read at arm's length.
+    /// How fast the needle falls, in dB per second, as broadcast peak meters do.
     static let decayPerSecond: Double = 24
 
-    /// A sample this close to full scale is treated as clipped. Not 32767: a
-    /// converter or a codec will round, and a signal riding the rail is already
-    /// distorting before it reaches the exact maximum.
+    /// A sample this close to full scale counts as clipped. Below 32767,
+    /// because a signal riding the rail is distorting before it reaches it.
     static let clipThreshold: Int32 = 32000
 
     private let lock = NSLock()
@@ -52,8 +38,7 @@ final class AudioLevelMeter: @unchecked Sendable {
     func note(_ frame: [Int16]) {
         var peak: Int32 = 0
         for sample in frame {
-            // `magnitude` rather than `abs`: Int16.min has no positive
-            // counterpart, and `abs` on it traps.
+            // `magnitude`, not `abs`, which traps on Int16.min.
             let magnitude = Int32(sample.magnitude)
             if magnitude > peak { peak = magnitude }
         }
@@ -62,8 +47,7 @@ final class AudioLevelMeter: @unchecked Sendable {
         let stamp = now()
 
         lock.lock()
-        // Attack is instant, so a louder reading always wins; a quieter one has
-        // to wait for the decay to bring the needle down to it.
+        // A louder reading wins at once; a quieter one waits for the decay.
         let decayed = Self.decayed(from: heldDB, since: heldAt, to: stamp)
         heldDB = max(decayed, db)
         heldAt = stamp
@@ -78,26 +62,20 @@ final class AudioLevelMeter: @unchecked Sendable {
         return Self.decayed(from: heldDB, since: heldAt, to: now())
     }
 
-    /// The reading as `0...1` across ``floorDB`` to full scale, for a bar.
-    ///
-    /// Linear in dB rather than in amplitude. A linear-amplitude bar spends
-    /// nearly all its travel in the top 6 dB and shows speech as a twitch near
-    /// zero, which is why every meter worth reading is scaled this way.
+    /// The reading as `0...1` from ``floorDB`` to full scale, linear in dB: a
+    /// linear-amplitude bar shows speech as a twitch near zero.
     var fraction: Double { Self.fraction(ofDecibels: decibels) }
 
-    /// Whether the signal hit the rail recently enough to still matter.
-    ///
-    /// Held for a moment rather than reported instantaneously: a clip is one
-    /// sample out of eight thousand, and an indicator that honest would flash
-    /// too briefly to see.
+    /// Whether the signal clipped in the last second. Held, because a single
+    /// clipped sample would flash too briefly to see.
     var isClipping: Bool {
         lock.lock()
         defer { lock.unlock() }
         return now().timeIntervalSince(clippedAt) < 1.0
     }
 
-    /// Drops the needle to the floor. Called when a path closes, so a stale
-    /// reading does not sit on screen implying audio that stopped.
+    /// Drops the needle to the floor when a path closes, so a stale reading
+    /// does not imply audio.
     func reset() {
         lock.lock()
         heldDB = Self.floorDB
@@ -125,21 +103,9 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 }
 
-/// A gain setting, readable from the audio thread.
-///
-/// The gain is a `@Published` property of a `@MainActor` view model, and the
-/// capture tap runs on a real-time thread that cannot touch either — snapshotting
-/// the value at key-down would avoid the problem, but a slider that does
-/// nothing until the next over reads as broken: the operator's workflow here
-/// is speak, watch, adjust, without letting go.
-///
-/// So the value lives in a box: written on the main actor when the slider
-/// moves, read on the audio thread once per frame behind an uncontended lock —
-/// the same arrangement `AudioLevelMeter` uses in the other direction.
-///
-/// Generic over the gain, because the receive side needs the same arrangement:
-/// its frames arrive on a detached task rather than a capture tap, which is no
-/// more able to read a main-actor property than the tap is.
+/// A gain setting behind a lock, written on the main actor and read per frame
+/// off it: by the capture tap for transmit, by a detached task for receive.
+/// A box rather than a snapshot at key-down, so the slider works mid-over.
 final class GainBox<Gain: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Gain
@@ -162,29 +128,15 @@ final class GainBox<Gain: Sendable>: @unchecked Sendable {
     }
 }
 
-/// Software gain on the transmit path, in dB.
-///
-/// **Why this exists.** `AVAudioSession.inputGain` is only writable when
-/// `isInputGainSettable` says so, which on an iPhone's built-in microphone it
-/// does not — the input level is the system's business. So the only place
-/// left to make a quiet operator louder is the samples themselves, after
-/// capture and before the codec.
-///
-/// **Hard-limited.** Multiplying 16-bit samples without clamping wraps a loud
-/// syllable around to the opposite rail — a click, far worse on the air than
-/// the clipping it came from. Every sample is clamped to the Int16 range, so
-/// the worst this can do is flat-top a peak.
-///
-/// A fixed gain, not compression: what goes up is the whole signal, room noise
-/// included. That is why the meter matters — the operator can see how much
-/// headroom is left rather than guessing.
+/// Software gain on the transmit path, in dB, applied between capture and the
+/// codec: `AVAudioSession.inputGain` is not settable on an iPhone's built-in
+/// microphone. A fixed, clamped gain (see `amplify`), not compression, so room
+/// noise rises too.
 struct TransmitGain: Equatable, Sendable {
     /// Decibels of gain. `0` passes samples through untouched.
     var decibels: Double
 
-    /// The useful range. Zero is "leave it alone"; +30 dB is enough to rescue a
-    /// microphone that is genuinely far away, and beyond that the noise floor
-    /// arrives before the speech does.
+    /// Beyond +30 dB the noise floor arrives before the speech.
     static let range: ClosedRange<Double> = 0...30
 
     static let unity = TransmitGain(decibels: 0)
@@ -203,33 +155,17 @@ struct TransmitGain: Equatable, Sendable {
     }
 }
 
-/// Software gain on the receive path, in dB.
+/// Software gain on the receive path, in dB, for when a phone at full volume
+/// is still too quiet after the library's leveller (AU-4). Same clamp and trade
+/// as ``TransmitGain``.
 ///
-/// **Why this exists.** The far end decides how hot it sends, the library's
-/// leveller normalises what arrives (AU-4, see
-/// ``CompositionRoot/receiveLeveller``), and iOS decides how loud the speaker
-/// goes — and on a phone at full volume the result can still be quieter than
-/// an operator wants in a noisy shack or a car. The volume buttons cannot go
-/// past 100%, so the only place left to make received audio louder is the
-/// samples themselves, between the link and playback.
-///
-/// **The counterpart of ``TransmitGain``**, same clamp, same trade: a fixed
-/// gain rather than compression, so the far end's noise floor comes up too.
-/// The receive meter reads after this, so the operator can see the headroom
-/// left.
-///
-/// **Boost only.** Zero is "leave it alone" — turning the audio down is what
-/// the device's own volume control is for, and a software attenuator here
-/// would be a second volume knob the ring/silent switch and the lock screen
-/// know nothing about.
+/// Boost only: turning audio down is the device volume's job, and a software
+/// attenuator would be a second volume knob the system knows nothing about.
 struct ReceiveGain: Equatable, Sendable {
     /// Decibels of gain. `0` passes samples through untouched.
     var decibels: Double
 
-    /// The useful range. `+20 dB` is four times the amplitude of what the
-    /// leveller already targets, which is past the point where the far end's own
-    /// hiss becomes the loudest thing in the room — there is nothing above it
-    /// worth offering.
+    /// Beyond +20 dB the far end's hiss dominates.
     static let range: ClosedRange<Double> = 0...20
 
     static let unity = ReceiveGain(decibels: 0)
@@ -242,20 +178,16 @@ struct ReceiveGain: Equatable, Sendable {
     var multiplier: Double { pow(10, decibels / 20) }
 
     /// Applies the gain. Returns the frame unchanged at unity, so the common
-    /// case — an operator who never touched the slider — allocates nothing.
+    /// case allocates nothing.
     func apply(to frame: [Int16]) -> [Int16] {
         amplify(frame, by: decibels)
     }
 }
 
-/// The sample arithmetic both gains share.
-///
-/// One implementation rather than two identical ones, because the clamp is the
-/// part that matters and a second copy of it is a second chance to get it wrong.
-///
-/// Clamped in `Double` before narrowing: `Int16(exactly:)` on an out-of-range
-/// value is nil and `Int16(_:)` traps, and this runs on an audio thread where a
-/// trap is a crash mid-transmission.
+/// The sample arithmetic both gains share. Clamped, so a loud syllable
+/// flat-tops rather than wrapping to the opposite rail, and clamped in `Double`
+/// before narrowing, because `Int16(_:)` traps out of range and a trap here is
+/// a crash mid-transmission.
 private func amplify(_ frame: [Int16], by decibels: Double) -> [Int16] {
     guard decibels > 0 else { return frame }
     let multiplier = pow(10, decibels / 20)
