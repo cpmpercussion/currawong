@@ -5,12 +5,10 @@ import Security
 
 /// Where the node secret lives.
 ///
-/// Separate from ``SettingsStore`` because the two have genuinely different
-/// requirements: settings want to be easy to read, back up and sync, and the
-/// secret wants none of those things. Keeping them behind two protocols means
+/// Separate from ``SettingsStore``: settings want to be easy to read, back up
+/// and sync, and the secret wants none of those things. Two protocols means
 /// there is no single "save everything" call that could put a password in
-/// `UserDefaults`, which is the migration this task exists to avoid needing
-/// later.
+/// `UserDefaults`.
 protocol SecretStore: AnyObject, Sendable {
     /// The stored secret for an account, or `nil` if there is none.
     func secret(for account: String) throws -> String?
@@ -32,20 +30,19 @@ struct KeychainError: Error, Equatable, CustomStringConvertible {
 /// The real thing: a generic-password item per account, in the data protection
 /// keychain.
 ///
-/// `kSecAttrAccessibleAfterFirstUnlock` rather than `WhenUnlocked`, because
-/// PD-2 gives this app the `audio` background mode and a connection is
-/// expected to survive the screen locking. A secret the app cannot read while
-/// locked would make a background reconnect impossible.
+/// `kSecAttrAccessibleAfterFirstUnlock` rather than `WhenUnlocked`: PD-2 gives
+/// this app the `audio` background mode, and a connection is expected to
+/// survive the screen locking, so a secret the app cannot read while locked
+/// would make a background reconnect impossible.
 ///
-/// `kSecUseDataProtectionKeychain` is set explicitly so macOS behaves like iOS
-/// — the same item semantics, no login-keychain prompt — rather than falling
-/// back to the file-based keychain where the same query means something
-/// subtly different.
+/// `kSecUseDataProtectionKeychain` is set explicitly so macOS behaves like
+/// iOS — the same item semantics, no login-keychain prompt — rather than the
+/// file-based keychain, where the same query means something subtly different.
 ///
-/// Note that nothing in the test suite touches this type. Tests use an
-/// in-memory double; a unit test that writes to the real keychain is a unit
-/// test that fails on a machine without a signed host app, and worse, leaves
-/// the developer's keychain dirty.
+/// Nothing in the test suite touches this type: tests use an in-memory
+/// double, since a unit test that writes to the real keychain fails on a
+/// machine without a signed host app and leaves the developer's keychain
+/// dirty.
 final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     private let service: String
 

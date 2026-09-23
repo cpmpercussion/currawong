@@ -5,24 +5,18 @@ import Foundation
 /// **APP-13.** The operator's own EchoLink proxy, if they run one.
 ///
 /// **App-wide, not per channel.** A proxy is the operator's station
-/// infrastructure: it is the machine their traffic leaves through, the same one
-/// for every node they call, and it is set up once. It used to live in
-/// ``NodeSettings`` as `host`, `port` and `proxyPassword`, which put the one
-/// durable proxy setting in the least durable place in the app — and, worse,
-/// meant a public proxy found by probing got written into a channel and reused
-/// for ever. See ``ProxyPicker/lease`` for the other half of that fix.
-///
-/// Two facts in ``NodeSettings`` had already said the proxy was not channel
-/// state: `isSamePlace(as:)` ignores the host in EchoLink, and
-/// `secretAccount(for:)` is `echolink:<callsign>` with no host in it. The field
-/// was vestigial and persisted anyway.
+/// infrastructure — the machine their traffic leaves through, the same one for
+/// every node they call, set up once. `isSamePlace(as:)` already ignores the
+/// host in EchoLink and `secretAccount(for:)` has no host in it, so
+/// ``NodeSettings`` was never really treating a proxy as channel state; see
+/// ``ProxyPicker/lease`` for how a probed public proxy is kept from being
+/// reused forever instead.
 ///
 /// **The password is not in here.** It goes in the Keychain, under
-/// ``passwordAccount``, for the reason the old per-channel field's own
-/// documentation admitted: an operator running a private proxy would otherwise
-/// be storing its password in `UserDefaults`, less carefully than their account
-/// password. A *public* proxy's password is the protocol literal
-/// ``publicPassword`` and is not stored at all.
+/// ``passwordAccount``, so an operator running a private proxy is not storing
+/// its password in `UserDefaults`, less carefully than their account password.
+/// A *public* proxy's password is the protocol literal ``publicPassword`` and
+/// is not stored at all.
 struct EchoLinkProxySettings: Equatable, Codable, Sendable {
     /// The proxy's host name or address. Empty means "no private proxy" — find
     /// a public one instead.
@@ -82,18 +76,14 @@ struct EchoLinkProxySettings: Equatable, Codable, Sendable {
     /// Trimmed settings, or an error naming what is wrong.
     ///
     /// **Deliberately more permissive than ``NodeSettings/isPlausibleHostName``**,
-    /// which insists on a dot. That rule is right for a directory server — the
-    /// pool is a handful of published names — and wrong here: a private proxy is
-    /// very often a machine on the operator's own network, reached as `pi` or
-    /// `shackpi`, and refusing a single-label name would refuse the commonest
-    /// private setup there is. What is caught is what is actually a mistake: a
-    /// URL pasted in whole, or a name with a space in it.
+    /// which insists on a dot — right for a directory server's handful of
+    /// published names, wrong here: a private proxy is often a single-label
+    /// machine name like `pi` or `shackpi`. What is caught is what is actually
+    /// a mistake: a URL pasted in whole, or a name with a space in it.
     ///
-    /// A colon is refused with them, which does rule out a bare IPv6 literal.
-    /// That is a deliberate trade: the port has its own field, `shackpi:8100` is
-    /// far and away the likelier thing to be typed here, and no EchoLink proxy
-    /// has been reached over IPv6 in any capture this project has — the peer
-    /// address is four octets by protocol.
+    /// A colon is refused too, which rules out a bare IPv6 literal — a
+    /// deliberate trade, since the port has its own field and `shackpi:8100` is
+    /// far likelier to be typed here.
     func validated() throws -> EchoLinkProxySettings {
         var trimmed = EchoLinkProxySettings(
             host: host.trimmingCharacters(in: .whitespacesAndNewlines), port: port)

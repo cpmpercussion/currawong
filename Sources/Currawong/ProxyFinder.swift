@@ -126,17 +126,12 @@ final class ProxyPicker: ObservableObject {
 
     /// The public proxy this sitting is using, if one has been found.
     ///
-    /// **A lease, not a setting** (APP-13). It is held here, in memory, for as
-    /// long as the operator is doing one thing — a directory refresh and the
-    /// connect that follows it are one sitting and should go through one proxy,
-    /// because probing again would take a second stranger's machine to do one
-    /// operator's work — and it is dropped by ``releaseLease()`` when the link is
-    /// torn down, so the next session probes afresh.
-    ///
-    /// It used to be written into the channel's `host` instead, and that was the
-    /// fault APP-13 exists to fix: the first EchoLink connect burned whichever
-    /// machine answered quickest into the channel permanently, and no later
-    /// connect ever probed again.
+    /// **A lease, not a setting** (APP-13): held in memory for as long as the
+    /// operator is doing one thing — a directory refresh and the connect that
+    /// follows it should go through the same proxy, rather than taking a
+    /// second stranger's machine to do one operator's work — and dropped by
+    /// ``releaseLease()`` when the link is torn down, so the next session
+    /// probes afresh.
     @Published private(set) var lease: ProxyCandidate?
 
     /// Why the last search found nothing, in words the operator can act on.
@@ -169,11 +164,10 @@ final class ProxyPicker: ObservableObject {
     /// The same search, awaited.
     ///
     /// The button path above fires and forgets; ``route(privateProxy:privatePassword:)``
-    /// has to *wait*, because the thing it is finding a proxy for cannot start
-    /// until there is one. Both go through ``beginSearch()``, so a search started
-    /// either way is the same single search — same spinner, same probe count,
-    /// same cancellation — rather than a second one racing the first for the same
-    /// strangers' machines.
+    /// has to *wait*, since the thing it is finding a proxy for cannot start
+    /// until there is one. Both go through ``beginSearch()``, so a search
+    /// started either way is the same single search rather than a second one
+    /// racing the first for the same strangers' machines.
     ///
     /// - Returns: the proxy, or nil if none was found, the search failed, or it
     ///   was superseded. In the failure case ``failure`` says why, which is
@@ -187,20 +181,17 @@ final class ProxyPicker: ObservableObject {
     ///
     /// **Everything up to `searchTask = task` happens synchronously**, before
     /// this returns: the spinner going up is the caller's own effect, not
-    /// something that lands a hop later. ``findAnother()`` is called straight
-    /// from a button, and a picker that had not yet started when the press
-    /// returned would let a second press start a second search.
+    /// something that lands a hop later, so a second button press before the
+    /// first search has registered cannot start a second search.
     ///
     /// The lease is set *inside* the task, so by the time the spinner comes down
     /// the proxy the next operation will use is already the one on screen.
     @discardableResult
     private func beginSearch() -> Task<ProxyCandidate?, Never> {
-        // Cancelled *and* waited for, below, before the new search opens
-        // anything. Cancelling alone would leave the two overlapping for a
-        // round trip, and a superseded search can be probing the very proxy the
-        // new one is about to pick — which would present as the winner being
-        // busy, from our own app rather than from a stranger. Probing is
-        // touching other operators' equipment, so the overlap is worth removing
+        // Cancelled *and* waited for, below: a superseded search can be probing
+        // the very proxy the new one is about to pick, which would present as
+        // the winner being busy — from our own app, not a stranger. Probing
+        // touches other operators' equipment, so the overlap is worth removing
         // even though it is brief.
         let superseded = searchTask
         superseded?.cancel()
@@ -215,10 +206,9 @@ final class ProxyPicker: ObservableObject {
             guard let self else { return ProxyCandidate?.none }
             defer { if self.generation == generation { self.isSearching = false } }
 
-            // The cancelled search drops its sockets within a round trip — the
-            // probe closes its transport even on the cancelled path — so this
-            // is a short wait, and it is what keeps the two from probing at
-            // once. `Never` as the failure type, so awaiting it cannot throw.
+            // Short wait: the probe closes its transport even on the cancelled
+            // path, so this is what keeps the two from probing at once.
+            // `Never` as the failure type, so awaiting it cannot throw.
             _ = await superseded?.value
 
             do {
@@ -249,12 +239,11 @@ final class ProxyPicker: ObservableObject {
     /// The proxy this sitting's EchoLink traffic goes through, finding a public
     /// one if there is nothing else to use.
     ///
-    /// **A proxy is not a preference, it is plumbing** (FR-3.3): EchoLink cannot
-    /// be reached from a phone without one, and there is nothing an operator
-    /// knows that would let them fill a field in better than a probe can. So the
-    /// two places that need a proxy — reading the directory, and placing a call —
-    /// resolve one at the moment they need it, and "connect to a proxy" is not a
-    /// step anybody performs.
+    /// **A proxy is not a preference, it is plumbing** (FR-3.3): EchoLink
+    /// cannot be reached from a phone without one, and a probe fills the field
+    /// better than an operator could. So the two places that need a
+    /// proxy — reading the directory, and placing a call — resolve one at the
+    /// moment they need it; "connect to a proxy" is not a step anybody performs.
     ///
     /// The order is the whole of the policy:
     ///
@@ -280,10 +269,9 @@ final class ProxyPicker: ObservableObject {
 
     /// Gives up the public proxy this sitting was using.
     ///
-    /// Called when the link is torn down. A public proxy carries one client at a
-    /// time, so holding the name of one past the session that used it is how an
-    /// operator ends up reconnecting to a machine that somebody else has since
-    /// taken — the fault this replaced, in miniature. The private proxy is
+    /// Called when the link is torn down. A public proxy carries one client at
+    /// a time, so holding the name of one past its session risks reconnecting
+    /// to a machine somebody else has since taken. The private proxy is
     /// untouched: it is a setting, not a lease.
     func releaseLease() {
         lease = nil

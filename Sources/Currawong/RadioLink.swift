@@ -5,23 +5,15 @@ import RadioCore
 
 /// What the app needs to know about a connection, beyond `TransmitState`.
 ///
-/// `RadioCore.NetworkClient` gives the app `state`, `connect`, `disconnect`,
-/// `startTransmit` and `stopTransmit` and nothing else — no event stream, no
-/// received audio, no way to hand captured audio back. Every concrete client
-/// has all three, but they are on the concrete type, so the app cannot reach
-/// them generically. This enum is the app-side vocabulary the composition root
-/// maps a concrete client's events into; see ``RadioLink`` for the rest of the
-/// hole and the note in `CompositionRoot`.
+/// The app-side vocabulary each concrete client's own `events` are mapped into
+/// by the factories in `CompositionRoot`; see ``RadioLink``. `NetworkClient`
+/// has a generic `radioEvents` stream, which the factories do not yet use.
 enum RadioLinkEvent: Sendable, Equatable {
     /// The call is up and media may flow. `codec` is the negotiated codec as a
-    /// human-readable name, already rendered by the composition root — the app
-    /// displays it and does not reason about it. It is `nil` when the far end
-    /// did not say.
-    ///
-    /// Worth surfacing rather than swallowing: "connected but negotiated
-    /// something we cannot decode" and "connected and silent" look identical
-    /// from the operator's chair, and the first is a configuration problem at
-    /// the node.
+    /// human-readable name, rendered by the composition root; `nil` when the
+    /// far end did not say. Surfaced because "connected but negotiated
+    /// something we cannot decode" and "connected and silent" sound identical
+    /// to the operator, and the first is a node configuration problem.
     case connected(codec: String?)
 
     /// Transmission started.
@@ -33,9 +25,7 @@ enum RadioLinkEvent: Sendable, Equatable {
     /// A DTMF digit arrived from the far end (FR-1.5).
     ///
     /// Nodes echo digits back and announce their own, so this is how the
-    /// operator can tell "the node heard my command" from "the node ignored
-    /// it" — which, when commanding an AllStar node by DTMF, is the whole
-    /// question.
+    /// operator tells "the node heard my command" from "the node ignored it".
     case dtmfReceived(Character)
 
     /// **SF-1.** The transmit watchdog reached its deadline and unkeyed on the
@@ -50,14 +40,11 @@ enum RadioLinkEvent: Sendable, Equatable {
 
     /// Who is transmitting on a shared channel, or `nil` when they stopped.
     ///
-    /// **M17 only.** A reflector module is a shared channel — everyone linked
-    /// to it hears everyone else — so the identity of the station currently
-    /// transmitting is both available and worth showing. An AllStarLink call
-    /// is point-to-point and produces this never.
-    ///
-    /// A `nil` callsign means a station whose base-40 address did not decode
-    /// to text, which is legal and happens for the reserved and extended
-    /// address ranges.
+    /// **M17 only** — a reflector module is a shared channel, so the current
+    /// transmitter's identity is available and worth showing; an AllStarLink
+    /// call is point-to-point and never produces this. A `nil` callsign is a
+    /// station whose base-40 address did not decode to text, which is legal
+    /// for the reserved and extended address ranges.
     case remoteStation(callsign: String?)
 
     /// The call ended, with the reason if there was one.
@@ -76,20 +63,16 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     case released
 
     /// **PT-2.** The release edge from a learned Bluetooth accessory. Distinct
-    /// from ``released`` only so the tests can tell which input let go, which
-    /// matters because the accessory is the one input whose release can also go
-    /// missing — see ``accessoryLinkLost`` on `PTTSink`.
+    /// from ``released`` so the tests can tell which input let go — the
+    /// accessory is the one input whose release can also go missing; see
+    /// ``accessoryLinkLost`` on `PTTSink`.
     case accessoryReleased
 
     /// **SF-2.** The Bluetooth accessory's link went away while it was, or
-    /// might have been, holding the key.
-    ///
-    /// Distinct from ``accessoryReleased`` because nobody let go of anything.
-    /// An accessory that has dropped off the link cannot report a release, so
-    /// the app can no longer answer "is the button still held?" — and the only
-    /// safe answer to a question like that is to unkey. This is the case
-    /// SF-2 exists for: an accessory that goes out of range, runs out of
-    /// battery or falls off the desk mid-sentence.
+    /// might have been, holding the key. Distinct from ``accessoryReleased``
+    /// because nobody let go of anything: an accessory that has dropped off
+    /// the link cannot report a release, so the only safe answer to "is the
+    /// button still held?" is to unkey.
     case accessoryLinkLost
 
     /// **PT-4.** A latched remote-command transmission was unlatched — either
@@ -97,10 +80,8 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// while it still held the key. Deliberate in both cases.
     case remoteCommandToggled
 
-    /// The finger left the button's bounds while still down. A finger that has
-    /// slid off the button is a finger that is no longer paying attention to
-    /// it, and a PTT that keeps transmitting in that state is a PTT that can
-    /// be forgotten about.
+    /// The finger left the button's bounds while still down. A PTT that stays
+    /// keyed after that is one that can be forgotten about.
     case draggedOffButton
 
     /// The gesture was cancelled out from under us — a system gesture took
@@ -132,18 +113,15 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// Whether the operator's finger (or fob, or headset button) is still
     /// down after this stop.
     ///
-    /// **Only a route change leaves a hold alive.** Everything else either is
-    /// the release, or is a reason the hold must not survive: an interruption
-    /// means something else wants the microphone, the watchdog means the hold
-    /// has run too long already and auto-resuming would defeat SF-1, and
-    /// backgrounding or disconnecting means there is nothing to hold on to.
-    ///
-    /// A route change is different in kind. The operator did not let go, and
-    /// nothing is competing for the audio path — a device appeared or vanished
-    /// and the graph had to be rebuilt underneath them. Telling them to press
-    /// again is asking them to do the app's work, so ``RadioSession`` keys back
-    /// down instead. SF-3 still holds: transmission *does* stop, and the
-    /// resume is a fresh key-down with its own watchdog.
+    /// **Only a route change leaves a hold alive.** Everything else is either
+    /// the release, or a reason the hold must not survive — an interruption
+    /// means something else wants the microphone, the watchdog means
+    /// auto-resuming would defeat SF-1, backgrounding or disconnecting leaves
+    /// nothing to hold on to. A route change is different: the operator did
+    /// not let go, a device just appeared or vanished and the graph had to be
+    /// rebuilt underneath them, so ``RadioSession`` keys back down rather than
+    /// asking them to press again. SF-3 still holds — transmission *does*
+    /// stop, and the resume is a fresh key-down with its own watchdog.
     var leavesTheHoldAlive: Bool {
         switch self {
         case .routeChanged:
@@ -174,25 +152,20 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
 
 /// One connection's worth of plumbing, assembled by the composition root.
 ///
-/// **Not generic, and deliberately no longer holding a client.** It used to be
-/// `RadioLink<Client: NetworkClient>`, which worked while there was one mode
-/// and stopped working the moment there were two: `NetworkClient` has an
-/// `associatedtype Destination`, so `any NetworkClient` does not exist, and a
-/// generic parameter has to be *chosen* somewhere. It was chosen in
-/// `CompositionRoot`, which meant the app could hold an AllStarLink session or
-/// an M17 session, but never one of either.
-///
-/// The way out is that ``RadioSession`` never needed the client — only five
-/// operations on it. Each is a closure here, captured over whichever concrete
-/// client and destination the composition root built. The generic parameter
-/// disappears, both modes produce the same type, and the seam is otherwise
-/// unchanged: this is still the only place the app's vocabulary meets the
+/// **Not generic over the client.** `NetworkClient` has an `associatedtype
+/// Destination`, so `any NetworkClient` does not exist, and a generic
+/// parameter would have to be chosen once in `CompositionRoot` — meaning the
+/// app could hold an AllStarLink session or an M17 session, never one of
+/// either. ``RadioSession`` only needs five operations on a client, so each is
+/// a closure here instead, captured over whichever concrete client and
+/// destination the composition root built. Both modes then produce the same
+/// type, and this stays the only place the app's vocabulary meets the
 /// library's.
 ///
 /// A link is single-use. Both clients shut down for good on `disconnect()` —
 /// the streams finish and a second connect throws — so reconnecting means a
-/// new link, not a reset of this one. ``RadioSession`` asks the factory for a
-/// fresh one on every connect.
+/// new link. ``RadioSession`` asks the factory for a fresh one on every
+/// connect.
 struct RadioLink {
     /// Which network this link speaks. For display, and for the few decisions
     /// the app is allowed to make about modes; it names no library type.

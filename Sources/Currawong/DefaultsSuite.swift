@@ -5,21 +5,11 @@ import Foundation
 /// Which `UserDefaults` the app's stores read and write — the operator's, or a
 /// throwaway one a UI test asked for.
 ///
-/// ## Why the app needs to know about this at all
-///
-/// The UI tests drive the **real app**, so until now they edited the operator's
-/// real channel list. Two things went wrong with that, both of them expensive:
-///
-/// 1. **A run that dies before its cleanup leaves rows behind**, and the next run
-///    finds two rows of one name, deletes one, and reports that Delete did
-///    nothing. That false negative was read as a live bug for a morning under
-///    BU-9, and it recurred under APP-19.
-/// 2. **The blank rows APP-19 was opened for came from these tests** — a `+` tap
-///    that never got as far as being named or deleted.
-///
-/// Both are the same fault: a test writing to the operator's data. Isolating it
-/// is a change the app has to take part in, because the app is what opens the
-/// defaults.
+/// The UI tests drive the real app, so without this they write to the
+/// operator's own channel list: a run that dies before cleanup leaves rows
+/// behind, and a `+` tap that never gets named or deleted leaves a blank one.
+/// Isolating it is a change the app has to take part in, since the app is what
+/// opens the defaults.
 ///
 /// ## The hook, and its bounds
 ///
@@ -53,28 +43,15 @@ enum DefaultsSuite {
     static let resetArgument = "currawong-defaults-reset"
 
     /// **APP-33.** Starts the run with the licence acknowledgement already on
-    /// file, so a test that transmits is not stopped by a sheet.
+    /// file, so a test that transmits is not stopped by a sheet — the suite is
+    /// wiped at every launch, and the acknowledgement is otherwise answered on
+    /// screen once per install. Dismissing it would otherwise consume the
+    /// first press that `BU-15` measures (cold key-down to carrier).
     ///
-    /// ## Why a bypass exists at all, and what bounds it
-    ///
-    /// The acknowledgement is answered on screen, once per install, and the
-    /// suite is wiped at every launch — so without this the on-air tests would
-    /// each have to spend their **first press** raising a sheet and dismissing
-    /// it. That press is the one `BU-15` measures (cold key-down, press to
-    /// carrier), and spending it on a dialogue would change the thing those
-    /// tests exist to observe.
-    ///
-    /// Three things keep it honest:
-    ///
-    /// * **`#if DEBUG` only**, like the two arguments above, so it cannot exist
-    ///   in a shipped binary.
-    /// * **It only runs on the custom-suite path.** The write below happens
-    ///   inside the `guard` that has already found a named suite, so there is no
-    ///   argument combination that pre-acknowledges the *operator's* defaults.
-    /// * **The gate itself is tested elsewhere**, properly, from every
-    ///   `PTTSource` — see `LicenceAcknowledgementTests`. This target is for
-    ///   radio behaviour, and a test target that cannot key a radio tests
-    ///   nothing.
+    /// Bounded like the two arguments above (`#if DEBUG`, and only on the
+    /// custom-suite path, so no combination pre-acknowledges the operator's own
+    /// defaults). The gate itself is tested from every `PTTSource` in
+    /// `LicenceAcknowledgementTests`; this target is for radio behaviour.
     static let acknowledgeLicenceArgument = "currawong-licence-acknowledged"
 
     /// The defaults the app should use. Resolved once — both stores must get the
