@@ -4,38 +4,31 @@ import Foundation
 
 /// A peak-reading level meter, in dBFS.
 ///
-/// One of these sits on each audio path: what the microphone is sending, and
-/// what the far end is sending back. They exist because "am I too quiet?" is
-/// otherwise unanswerable without another operator's help — which on a repeater
-/// means asking a stranger for a radio check every time you change a setting.
+/// One sits on each audio path — what the microphone is sending, and what the
+/// far end is sending back — so "am I too quiet?" is answerable without
+/// asking another operator for a radio check.
 ///
-/// ## Written from the audio thread, read from the main one
+/// **Written from the audio thread, read from the main one.** ``note(_:)`` is
+/// called by the capture tap, fifty times a second, on a real-time thread: it
+/// takes a short uncontended lock, scans 160 samples for a peak, and returns —
+/// no allocation, no logging, nothing that can block. `CapturedFrameRelay`
+/// follows the same policy, for the same reason: an `await` or a malloc on
+/// that thread manufactures dropouts that then get blamed on the network.
 ///
-/// ``note(_:)`` is called by the capture tap, fifty times a second, on a
-/// real-time thread. It takes a short uncontended lock, scans 160 samples for a
-/// peak, and returns — no allocation, no logging, nothing that can block. The
-/// same policy `CapturedFrameRelay` follows, for the same reason: an `await` or
-/// a malloc on that thread manufactures dropouts that then get blamed on the
-/// network.
-///
-/// ## Ballistics
-///
-/// Instant attack, timed decay. A meter that fell as slowly as it rose would
-/// miss a peak, and one that fell instantly would be an unreadable flicker at
-/// fifty updates a second. ``decayPerSecond`` is 24 dB/s, which is in the range
-/// broadcast peak-programme meters use and is slow enough to read on a phone
-/// held at arm's length.
-///
-/// Decay is computed on *read* from a timestamp rather than driven by a timer,
-/// so the reading is correct whether it is polled at 60 Hz or once a second,
-/// and a meter nobody is looking at costs nothing.
+/// **Ballistics: instant attack, timed decay.** A meter that fell as slowly as
+/// it rose would miss a peak, and one that fell instantly would be an
+/// unreadable flicker at fifty updates a second. Decay is computed on *read*
+/// from a timestamp rather than driven by a timer, so the reading is correct
+/// whether it is polled at 60 Hz or once a second, and a meter nobody is
+/// looking at costs nothing.
 final class AudioLevelMeter: @unchecked Sendable {
     /// Quieter than this reads as silence. Speech peaks well above it and room
-    /// noise on a phone microphone sits below it, so it is also roughly the
-    /// line between "nothing is arriving" and "something is".
+    /// noise on a phone microphone sits below it, so it is roughly the line
+    /// between "nothing is arriving" and "something is".
     static let floorDB: Double = -54
 
-    /// How fast the needle falls, in dB per second.
+    /// How fast the needle falls, in dB per second. In the range broadcast
+    /// peak-programme meters use, and slow enough to read at arm's length.
     static let decayPerSecond: Double = 24
 
     /// A sample this close to full scale is treated as clipped. Not 32767: a
@@ -135,19 +128,18 @@ final class AudioLevelMeter: @unchecked Sendable {
 /// A gain setting, readable from the audio thread.
 ///
 /// The gain is a `@Published` property of a `@MainActor` view model, and the
-/// capture tap runs on a real-time thread that cannot touch either. Snapshotting
-/// the value at key-down would avoid the problem and did, briefly — but a
-/// slider sitting directly under the meter that does nothing until the next
-/// over reads as broken, and the operator's whole workflow here is speak, watch,
-/// adjust, in that order and without letting go.
+/// capture tap runs on a real-time thread that cannot touch either — snapshotting
+/// the value at key-down would avoid the problem, but a slider that does
+/// nothing until the next over reads as broken: the operator's workflow here
+/// is speak, watch, adjust, without letting go.
 ///
-/// So the value lives in a box: written on the main actor when the slider moves,
-/// read on the audio thread once per frame behind an uncontended lock, the same
-/// arrangement `AudioLevelMeter` uses in the other direction.
+/// So the value lives in a box: written on the main actor when the slider
+/// moves, read on the audio thread once per frame behind an uncontended lock —
+/// the same arrangement `AudioLevelMeter` uses in the other direction.
 ///
-/// Generic over the gain, because the receive side needs exactly the same
-/// arrangement: its frames arrive on a detached task rather than a capture tap,
-/// which is no more able to read a main-actor property than the tap is.
+/// Generic over the gain, because the receive side needs the same arrangement:
+/// its frames arrive on a detached task rather than a capture tap, which is no
+/// more able to read a main-actor property than the tap is.
 final class GainBox<Gain: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Gain
@@ -172,22 +164,20 @@ final class GainBox<Gain: Sendable>: @unchecked Sendable {
 
 /// Software gain on the transmit path, in dB.
 ///
-/// **Why this exists at all.** `AVAudioSession.inputGain` is only writable when
+/// **Why this exists.** `AVAudioSession.inputGain` is only writable when
 /// `isInputGainSettable` says so, which on an iPhone's built-in microphone it
-/// does not — the input level is the system's business and an app does not get
-/// a say. So the only place left to make a quiet operator louder is the samples
-/// themselves, after capture and before the codec.
+/// does not — the input level is the system's business. So the only place
+/// left to make a quiet operator louder is the samples themselves, after
+/// capture and before the codec.
 ///
-/// **Hard-limited, deliberately.** Multiplying 16-bit samples without clamping
-/// wraps a loud syllable around to the opposite rail, which is not distortion
-/// but a click — far worse on the air than the clipping it came from. Every
-/// sample is clamped to the Int16 range, so the worst this can do is flat-top a
-/// peak.
+/// **Hard-limited.** Multiplying 16-bit samples without clamping wraps a loud
+/// syllable around to the opposite rail — a click, far worse on the air than
+/// the clipping it came from. Every sample is clamped to the Int16 range, so
+/// the worst this can do is flat-top a peak.
 ///
-/// This is a fixed gain and not compression: what goes up is the whole signal,
-/// room noise included. That is the honest trade and it is why the meter
-/// matters — the operator can see how much headroom they have left rather than
-/// guessing.
+/// A fixed gain, not compression: what goes up is the whole signal, room noise
+/// included. That is why the meter matters — the operator can see how much
+/// headroom is left rather than guessing.
 struct TransmitGain: Equatable, Sendable {
     /// Decibels of gain. `0` passes samples through untouched.
     var decibels: Double
@@ -218,22 +208,20 @@ struct TransmitGain: Equatable, Sendable {
 /// **Why this exists.** The far end decides how hot it sends, the library's
 /// leveller normalises what arrives (AU-4, see
 /// ``CompositionRoot/receiveLeveller``), and iOS decides how loud the speaker
-/// goes — and on a phone at full volume the result can still be quieter than an
-/// operator wants in a noisy shack or a car. The volume buttons cannot go past
-/// 100%, so the only place left to make received audio louder is the samples
-/// themselves, between the link and playback.
+/// goes — and on a phone at full volume the result can still be quieter than
+/// an operator wants in a noisy shack or a car. The volume buttons cannot go
+/// past 100%, so the only place left to make received audio louder is the
+/// samples themselves, between the link and playback.
 ///
-/// **The counterpart of ``TransmitGain``, and the same trade.** A fixed gain, not
-/// compression: everything comes up together, including the far end's noise
-/// floor, and every sample is clamped to the `Int16` range so the worst case is a
-/// flat-topped peak rather than the click that a wrapped sample would make. The
-/// receive meter reads *after* this, so the operator can see the headroom they
-/// have left.
+/// **The counterpart of ``TransmitGain``**, same clamp, same trade: a fixed
+/// gain rather than compression, so the far end's noise floor comes up too.
+/// The receive meter reads after this, so the operator can see the headroom
+/// left.
 ///
-/// **Boost only.** Zero is "leave it alone", and turning the audio down is what
-/// the device's own volume control is for — a software attenuator here would be a
-/// second volume knob that the ring/silent switch and the lock screen know
-/// nothing about.
+/// **Boost only.** Zero is "leave it alone" — turning the audio down is what
+/// the device's own volume control is for, and a software attenuator here
+/// would be a second volume knob the ring/silent switch and the lock screen
+/// know nothing about.
 struct ReceiveGain: Equatable, Sendable {
     /// Decibels of gain. `0` passes samples through untouched.
     var decibels: Double

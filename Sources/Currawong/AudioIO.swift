@@ -15,10 +15,9 @@ import AVFoundation
 ///
 /// The warm-up is opportunistic and never fails a connect, so this is not an
 /// error type and nothing branches on it to decide whether to carry on. It
-/// exists so that a warm-up that could not open the microphone leaves a mark
-/// somewhere an operator or a device test can find, instead of only in a
-/// diagnostic log: without one, its consequence — a silent first over, or a PTT
-/// that fails — arrives with nothing in the session that says why.
+/// exists so a warm-up that could not open the microphone leaves a mark an
+/// operator or a device test can find, rather than only a silent first over
+/// or a PTT failure with nothing in the session that says why.
 ///
 /// See ``AudioIO/warmUpInput()``.
 enum InputWarmUpOutcome: Equatable, Sendable {
@@ -27,9 +26,7 @@ enum InputWarmUpOutcome: Equatable, Sendable {
     case warmed
 
     /// The microphone could not be opened, described as the library described
-    /// it. **Reachable for the first time since RC-15**: the interesting
-    /// failure used to be an Objective-C `NSException` that terminated the
-    /// process rather than an error anything could catch (`BU-24`).
+    /// it.
     case couldNotOpenInput(String)
 
     var didWarm: Bool { self == .warmed }
@@ -52,21 +49,13 @@ protocol AudioIO: AnyObject, Sendable {
     /// Asks the operating system for microphone access, returning what it
     /// decided. Must be called — and awaited — before ``configureSession()``.
     ///
-    /// ### Why this cannot be left implicit
-    ///
-    /// iOS shows the microphone prompt when an app first *touches* the
-    /// microphone: installs a tap and starts the engine. Setting the session
-    /// category and activating it does not count, so `configureSession()` alone
-    /// never triggers it.
-    ///
-    /// That produced a deadlock. Until permission is granted, the input node
-    /// reports a sample rate of 0; `AudioPipeline.startCapture` builds its
-    /// converter from that rate and throws `converterUnavailable` *before*
-    /// reaching `installTap` — so the app never touched the microphone, so it
-    /// was never asked about, so the rate stayed 0. The app could not bootstrap
-    /// its own permission, PTT failed on the first press and every press after
-    /// it, and the app did not appear under Settings → Privacy → Microphone at
-    /// all. Asking explicitly is the only way out of the cycle.
+    /// iOS shows the microphone prompt only when an app first *touches* the
+    /// microphone — installs a tap and starts the engine — not when it sets
+    /// and activates the session category, so `configureSession()` alone never
+    /// triggers it. And until permission is granted the input node reports a
+    /// sample rate of 0 Hz, which `AudioPipeline.startCapture` cannot build a
+    /// converter from: without an explicit ask first, the app can never touch
+    /// the microphone, so is never asked, so the rate never leaves 0.
     ///
     /// Returns `true` on macOS, which has no `AVAudioSession`: device selection
     /// there belongs to the user, and TCC is attributed to the host process.
@@ -81,13 +70,10 @@ protocol AudioIO: AnyObject, Sendable {
     /// anything. Call before ``startCapture(onFrame:)``; then ``settleRoute()``.
     ///
     /// **`BU-15`.** Escalating to the radio policy is a route change, and so is
-    /// opening the microphone. Both used to happen after the link was keyed, so
-    /// SF-3 — correctly, and non-negotiably — dropped the transmission they were
-    /// enabling. The fix is the ordering: everything that disturbs the route
-    /// happens first, ``settleRoute()`` waits for the disturbance to finish, and
-    /// only then is anything keyed. There is no transmission to drop while it is
-    /// going on, so nothing is suppressed and no route change has to be told
-    /// apart from an unplugged accessory.
+    /// opening the microphone; both must happen before the link is keyed —
+    /// SF-3 correctly drops any transmission a route change lands on top of,
+    /// so keying must wait until nothing is disturbing the route rather than
+    /// racing it. ``settleRoute()`` is that wait.
     ///
     /// Deliberately not throwing. A failed escalation here is not the place to
     /// report it: ``startCapture(onFrame:)`` asks again and its failure path
@@ -97,12 +83,11 @@ protocol AudioIO: AnyObject, Sendable {
     /// Waits until the route stops moving, having been disturbed by
     /// ``prepareForCapture()`` and ``startCapture(onFrame:)``.
     ///
-    /// **Returns immediately when nothing was disturbed**, which is what keeps
-    /// `BU-16`'s fast path: an over inside the hand-back linger finds the
-    /// session already on radio and an engine whose input unit is already
-    /// instantiated, so there is no cascade to wait for and the far end is
-    /// keyed with the press. The wait is paid on the first over after a pause
-    /// and nowhere else.
+    /// **Returns immediately when nothing was disturbed**, which is `BU-16`'s
+    /// fast path: an over inside the hand-back linger finds the session
+    /// already on radio and an engine whose input unit is already
+    /// instantiated, so the far end is keyed with the press. The wait is paid
+    /// on the first over after a pause and nowhere else.
     ///
     /// Bounded three ways and unable to stall a key-down for ever: see the
     /// implementation's constants.
@@ -116,53 +101,26 @@ protocol AudioIO: AnyObject, Sendable {
     /// that the device is awake before the first key-down (`BU-22`).
     ///
     /// **The fault it fixes.** The first over after the input device spins up
-    /// is silent: no transmit meter, and nothing at the far end. Overs 2..n are
-    /// normal. The silent one is always the one preceded by an escalation —
-    /// i.e. the one where the device had just been opened — and about a second
-    /// elapsed between the two, so it is not a race ``settleRoute()`` is
-    /// losing: that waits for the *route* to stop changing, which it had, and
-    /// it does not wait for the device to produce signal. Corroborated off the
-    /// app entirely, in a different process: a scratch tool driving the library
-    /// directly got four seconds of exact zeros on its first run and normal
-    /// room noise moments later. The warm-up is the device's, and no amount of
-    /// app-side bookkeeping can see it as anything but silence.
+    /// is silent — no transmit meter, nothing at the far end — because the
+    /// device itself takes a while to start producing signal after it opens;
+    /// ``settleRoute()`` waits for the *route* to stop changing, which is a
+    /// different thing, and does not cover this. The warm-up is the device's
+    /// own wake-up, paid before a key-down is waiting on it rather than during
+    /// one.
     ///
-    /// **This is `BU-2`'s shape one layer down**, and takes `BU-2`'s fix: that
-    /// one was the macOS permission prompt, and moving the ask to connect time
-    /// put it "where the operator is already waiting and no over is at stake".
-    /// The same sentence holds with *device warm-up* in place of *permission*.
+    /// **Deliberately not throwing.** A connection must not fail because the
+    /// microphone could not be opened a few seconds before anybody asked to
+    /// transmit — ``startCapture(onFrame:)`` owns the failure path for when
+    /// somebody does. But it does report whether it worked (`BU-24`): a silent
+    /// failure here is a first over that is silent, or a PTT that fails, with
+    /// nothing in the session that says why. The outcome goes back to
+    /// ``RadioSession``, which publishes it; the operator-facing failure stays
+    /// on the key-down path, which fails closed and alerts.
     ///
-    /// **Deliberately not throwing. It does report whether it worked, and that
-    /// is `BU-24`.** A warm-up is opportunistic — a connection must not fail
-    /// because the microphone could not be opened a few seconds before anybody
-    /// asked to transmit, and ``startCapture(onFrame:)`` owns the failure path
-    /// for when somebody does — but "opportunistic" is not the same as
-    /// "invisible", and it used to be both.
-    ///
-    /// Reporting it costs nothing and settles a real question. Until RC-15 the
-    /// interesting failure here could not be caught at all: `installTap`
-    /// rejected a format the input device had moved on from by raising an
-    /// Objective-C `NSException`, which took the process with it — through this
-    /// `do/catch`, which exists precisely to tolerate it. The library reports
-    /// that as a Swift error now, so this path is reachable for the first time
-    /// and wants a deliberate answer rather than a `return`.
-    ///
-    /// **The answer is: the connect continues, and the failure is recorded.**
-    /// Failing the connect would be wrong — receiving is most of what a
-    /// connection is for, and the microphone is asked for again at key-down,
-    /// behind ``startCapture(onFrame:)``'s reactivate-and-rebuild repair. But a
-    /// silent failure here is a first over that is silent (`BU-22`'s fault,
-    /// returning) or a PTT that fails, with nothing in the session that says
-    /// why. So the outcome goes back to ``RadioSession``, which publishes it;
-    /// the operator-facing failure stays where it belongs, on the key-down path
-    /// that fails closed and alerts.
-    ///
-    /// Rejected alternative, recorded because it is the obvious one: hold
-    /// `OnAirGate` closed until the tap delivers a non-silent buffer. It fixes
-    /// the symptom and breaks something real — a legitimately quiet start to an
-    /// over would be swallowed, and an operator whose first word is soft would
-    /// key up into nothing. Silence is not the same thing as a dead device, and
-    /// the gate must not be taught to confuse them.
+    /// Rejected alternative: hold `OnAirGate` closed until the tap delivers a
+    /// non-silent buffer. That would swallow a legitimately quiet start to an
+    /// over — silence is not the same thing as a dead device, and the gate must
+    /// not be taught to confuse them.
     @discardableResult
     func warmUpInput() async -> InputWarmUpOutcome
 
@@ -177,12 +135,10 @@ protocol AudioIO: AnyObject, Sendable {
     /// How long the last ``startCapture(onFrame:)`` spent opening the
     /// microphone, in milliseconds.
     ///
-    /// Diagnostic, and the evidence for
-    /// `AudioPipelineIO.captureSlowThresholdNanoseconds` — which is the one
-    /// number the `BU-15` wait is conditioned on, so it should be a measurement
-    /// rather than an inference. Published by ``RadioSession`` on the transmit
-    /// strip in DEBUG builds; no behaviour outside `AudioPipelineIO` may branch
-    /// on it.
+    /// Diagnostic: `AudioPipelineIO.captureSlowThresholdNanoseconds` is
+    /// conditioned on this measurement. Published by ``RadioSession`` on the
+    /// transmit strip in DEBUG builds; no behaviour outside `AudioPipelineIO`
+    /// may branch on it.
     var lastCaptureStartMilliseconds: Int { get }
 
     /// What the audio system thinks is true, in one line, for the key/unkey log.
@@ -199,8 +155,8 @@ protocol AudioIO: AnyObject, Sendable {
 /// `RadioCore.AudioPipeline` satisfies this in production (see the retroactive
 /// conformance below); it exists as a protocol only so the rebuild-and-retry
 /// logic in ``AudioPipelineIO`` — which is on the transmit path and therefore
-/// has to fail closed — can be tested without a microphone. It is deliberately
-/// narrower than ``AudioIO``: no permission, no session, just the engine.
+/// has to fail closed — can be tested without a microphone. Narrower than
+/// ``AudioIO`` on purpose: no permission, no session, just the engine.
 ///
 /// `configureSession()` is absent on purpose. On iOS the audio session is
 /// process-wide state that has to be settled *before* an engine is built, so
@@ -220,24 +176,21 @@ extension AudioPipeline: CapturePipeline {}
 /// ### Why the pipeline is built late, and can be rebuilt
 ///
 /// `AVAudioEngine` decides its input format once, when its input audio unit is
-/// first instantiated, and **never revisits that decision**. On iOS, an engine
-/// whose input unit is instantiated while the audio session is still the default
-/// `.soloAmbient` — playback only — reports an input sample rate of 0 Hz, and
-/// keeps reporting 0 Hz after the session is switched to `.playAndRecord` and
-/// activated. `AudioPipeline.startCapture` builds its converter from that rate,
-/// `AudioConverterNew` refuses 0 Hz, and every PTT press for the rest of the
+/// first instantiated, and never revisits that decision. On iOS, an engine
+/// whose input unit is instantiated while the session is still
+/// `.soloAmbient` (playback only) reports an input sample rate of 0 Hz
+/// forever, even after the session switches to `.playAndRecord` — and
+/// `AudioConverterNew` refuses 0 Hz, so every PTT press for the rest of the
 /// process fails with `converterUnavailable`. A fresh engine, built after the
-/// session is up, reports the real hardware rate.
+/// session is up, reports the real hardware rate. So:
 ///
-/// Two consequences, both visible in the code below:
-///
-/// 1. The pipeline is created lazily, on first use, which is always after
-///    ``configureSession()`` and after the microphone has been granted — never
-///    at launch, as a stored property of the composition root would be.
-/// 2. ``startCapture(onFrame:)`` retries once on a **freshly built** pipeline.
-///    A poisoned engine cannot recover, so retrying on the same one would be
-///    pointless; discarding it is the only repair. The second failure is
-///    reported with the audio state attached rather than retried again.
+/// 1. The pipeline is created lazily, on first use — always after
+///    ``configureSession()`` and after the microphone has been granted, never
+///    at launch as a stored property of the composition root would be.
+/// 2. ``startCapture(onFrame:)`` retries once on a freshly built pipeline: a
+///    poisoned engine cannot recover, so discarding it is the only repair. The
+///    second failure is reported with the audio state attached rather than
+///    retried again.
 ///
 /// ``signals`` therefore cannot be the pipeline's own stream — that one dies
 /// with the pipeline it belongs to, and SF-3 with it. This class owns a durable
@@ -247,23 +200,21 @@ extension AudioPipeline: CapturePipeline {}
 /// ### Why `stopCapture()` stops the whole engine
 ///
 /// `AudioPipeline.stop()` tears down the microphone tap *and* stops the
-/// engine, so it stops playback too. That reads like a bug and is not one
-/// here: this is half-duplex push-to-talk, so there is nothing to receive
-/// while the microphone is open, and `enqueuePlayback(_:)` restarts the engine
-/// by itself on the next inbound frame. The alternative — leaving the tap
-/// installed all the time and gating frames in software — keeps the
-/// microphone (and the system's recording indicator) live for the whole call,
-/// which is precisely the impression this app must never give.
+/// engine, so it stops playback too. That is deliberate: this is half-duplex
+/// push-to-talk, so there is nothing to receive while the microphone is open,
+/// and `enqueuePlayback(_:)` restarts the engine on the next inbound frame.
+/// The alternative — leaving the tap installed all the time and gating frames
+/// in software — keeps the microphone (and the system's recording indicator)
+/// live for the whole call, which this app must never give the impression of.
 final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// Both halves of a failed key-up, with the state of the audio system at the
     /// moment it failed.
     ///
-    /// The operator sees this in the "Could not transmit" alert, which is the
-    /// only diagnostic channel a radio in the field has: nobody is going to
-    /// attach a debugger on a hilltop. `converterUnavailable` on its own says
-    /// only that CoreAudio said no — the numbers below say *why*, and in
-    /// particular whether the session was healthy (a live hardware rate) when
-    /// the engine claimed it was not.
+    /// The operator sees this in the "Could not transmit" alert, the only
+    /// diagnostic channel a radio in the field has. `converterUnavailable` on
+    /// its own says only that CoreAudio said no — the numbers below say why,
+    /// and in particular whether the session was healthy (a live hardware
+    /// rate) when the engine claimed it was not.
     struct CaptureUnavailable: Error, CustomStringConvertible {
         let first: Error
         let afterRebuild: Error
@@ -298,19 +249,17 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     private var forwarder: Task<Void, Never>?
 
     /// The policy last applied, so an over that begins inside the linger — the
-    /// automatic resume after a route change, most importantly — finds the
-    /// session already on radio and does **not** re-apply the category. A
-    /// redundant category change is not harmless: it is a fresh route-change
-    /// cascade, and re-triggering the cascade from inside its own recovery is
-    /// the loop that killed `BU-17`'s first attempt.
+    /// automatic resume after a route change — finds the session already on
+    /// radio and does not re-apply the category. A redundant category change
+    /// is not harmless: it is a fresh route-change cascade, and re-triggering
+    /// one from inside its own recovery is a loop (`BU-17`).
     private var appliedPolicy: AudioSessionPolicy?
 
     /// Whether anything since the last ``settleRoute()`` actually moved the
-    /// route: a category change that was really applied, or a capture opened on
-    /// an engine whose input unit had not been instantiated yet. Those are the
-    /// two things measured to produce a cascade, and an over that does neither
-    /// — every over inside the hand-back linger — must not wait for one
-    /// (`BU-15`, and `BU-16`'s fast path).
+    /// route: a category change that was really applied, or a capture opened
+    /// on an engine whose input unit had not been instantiated yet. An over
+    /// that does neither — every over inside the hand-back linger — must not
+    /// wait for one (`BU-15`, and `BU-16`'s fast path).
     private var routeDisturbed = false
 
     /// ``routeChangeCount`` as it was when the disturbance began, so
@@ -344,20 +293,18 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
 
     /// Frames handed to ``enqueuePlayback(_:)``, ever. A hand-back compares the
     /// count at its linger's start with the count at its expiry: a difference
-    /// means the far side talked during the linger, and the engine still holds
-    /// their audio — replies land at a measured 1.6–2.6 s, comfortably inside
-    /// the 3 s linger — so the discard waits out another linger rather than
-    /// cutting the reply off mid-word. Not a clock: it observes arriving data,
-    /// which is the same rule the BLE probe follows.
+    /// means the far side talked during the linger and the engine still holds
+    /// their audio, so the discard waits out another linger rather than
+    /// cutting the reply off mid-word. Not a clock: it observes arriving data.
     private var playbackFrameCount = 0
 
     /// Whether the hand-back discards a capture-bearing engine (see
     /// ``completeHandback(_:attempt:playbackBaseline:)``). Platform truth by
-    /// default — the discard exists because restarting such an engine re-raises
-    /// an input route, and on iOS the only Bluetooth input route is HFP, which
-    /// re-mutes the accessory's button; macOS manages its own routes, gets the
-    /// per-over SCO behaviour right by itself, and would pay the engine churn
-    /// for nothing. Injectable so the discard logic stays testable on macOS.
+    /// default — restarting such an engine re-raises an input route, and on
+    /// iOS the only Bluetooth input route is HFP, which re-mutes the
+    /// accessory's button; macOS manages its own routes and gets the per-over
+    /// SCO behaviour right by itself. Injectable so the discard logic stays
+    /// testable on macOS.
     private let discardsEngineOnHandback: Bool
 
     /// One step of ``prepareForCapture()``'s wait. Injectable so the settle
@@ -381,33 +328,22 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// The linger between the microphone closing and the route being handed
     /// back to listening (BU-17).
     ///
-    /// macOS keeps SCO up for ~2.1 s after the last capture client closes
-    /// (measured 2026-08-22), and that linger is what makes its per-over HFP
-    /// behaviour feel instant in a quick exchange. This reproduces it, a little
-    /// longer, for a second reason macOS does not have: the drop-and-resume
-    /// that SF-3 performs when the escalation's own route-change cascade lands
-    /// mid-over takes up to ~1 s (300 ms settle plus engine start plus the
-    /// cascade tail), and the hand-back must comfortably outlast it so the
-    /// resume re-keys into a session still on radio.
+    /// macOS keeps SCO up for a while after the last capture client closes,
+    /// and that linger is what makes its per-over HFP behaviour feel instant
+    /// in a quick exchange. This reproduces it, a little longer, for a second
+    /// reason macOS does not have: the drop-and-resume that SF-3 performs when
+    /// the escalation's own route-change cascade lands mid-over must finish
+    /// inside this window, so the resume re-keys into a session still on
+    /// radio.
     static let listeningLingerNanoseconds: UInt64 = 3_000_000_000
 
     // MARK: The settle wait (BU-15)
     //
-    // All four numbers come from holds measured on melchior on 2026-08-23, no
-    // accessory attached. The one the fix was finally built against, read out
-    // of the app's own instrument by `BU15FirstOverUITests` (times in ms from
-    // the press):
-    //
-    //     press@0  escalate@16  mic@518   ... the microphone takes ~500 ms
-    //     signal@851, 859, 861             ... 333 ms after the mic, 8 ms apart
-    //     settled@1083  carrier@1089       ... one key-down, and it stays
-    //
-    // Two things in that shape decide the constants. **The cascade starts late**
-    // — 290, 333 and 534 ms after the disturbance across four runs — so a wait
-    // that only looked for quiet would declare victory before it began and hand
-    // the whole thing to SF-3 anyway; hence an onset budget separate from the
-    // quiet window. **And it is dense** — 8 to 140 ms between signals — so the
-    // quiet window has to be wider than any gap the cascade itself contains.
+    // The cascade this waits out starts late relative to the disturbance, so a
+    // wait that only looked for quiet would declare victory before it began and
+    // hand the whole thing to SF-3 anyway — hence an onset budget separate from
+    // the quiet window. And the cascade is dense, so the quiet window has to be
+    // wider than any gap it contains internally.
 
     /// The granularity of the wait. Small enough that the quiet and onset
     /// windows below are expressible, large enough not to spin.
@@ -416,116 +352,45 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// How long to keep waiting for the *first* signal before concluding that
     /// this switch is not going to produce one.
     ///
-    /// 720 ms nominal, against onsets of 290, 333 and 534 ms measured across
-    /// several runs on melchior — deliberately several times the spread, because
-    /// **under-shooting here re-creates the whole fault**: the wait gives up, the
-    /// carrier goes up, the cascade arrives late, and SF-3 drops the
-    /// transmission exactly as it did before. Intermittently, which is worse
-    /// than reliably.
-    ///
-    /// **This is the wait's one real cost, and it has been paid on air.** A
-    /// macOS run on 2026-08-23 opened the microphone in 111 ms — 11 ms past
-    /// ``captureSlowThresholdNanoseconds``, because SCO was already up from an
-    /// earlier session — and then saw **no signals at all**, so it spent the
-    /// whole budget, ~850 ms of wall clock, waiting for a cascade that was never
-    /// coming. One key-down, no dance, and 850 ms of latency for nothing.
-    ///
-    /// The trade is deliberate in this direction: latency the operator feels
-    /// once per cold over, against an intermittent visible drop mid-over. But it
-    /// is the number to revisit first if the cold over is being made faster, and
-    /// `APP-24` is the change that would make the whole question rarer by making
-    /// cold overs rare.
+    /// **Under-shooting here re-creates the whole fault**: the wait gives up,
+    /// the carrier goes up, the cascade arrives late, and SF-3 drops the
+    /// transmission exactly as it did before — intermittently, which is worse
+    /// than reliably. The trade is deliberate in this direction: latency the
+    /// operator feels once per cold over, against an intermittent visible drop
+    /// mid-over. It is the number to revisit first if the cold over is being
+    /// made faster; `APP-24` would make the whole question rarer.
     static let settleOnsetTicks = 12
 
-    /// How much quiet ends the cascade. 180 ms, comfortably past the 8–140 ms
-    /// spacing measured within it. Under-shooting here lets the tail land after
-    /// the carrier is up, which is `BU-15` again.
+    /// How much quiet ends the cascade. Under-shooting here lets the tail land
+    /// after the carrier is up, which is `BU-15` again.
     static let settleQuietTicks = 3
 
     /// How slow opening the microphone has to be before it counts as having
-    /// **brought something up** — and therefore as having moved the route.
+    /// brought something up — and therefore as having moved the route.
     ///
-    /// Measured, 2026-08-23, by carrying the capture-start duration out of the
-    /// app on the transmit strip (`micMs` in `BU15FirstOverUITests`'s trace) —
-    /// which had to be instrumented, because the timeline in `holdTrace` cannot
-    /// show it: its gaps bracket the escalation and this wait as well.
-    ///
-    /// | | cold over | warm over |
-    /// |---|---|---|
-    /// | iOS, built-in mic | 16 ms | 0 ms |
-    /// | macOS, Q2L as the route | 798 ms, and 111 ms with SCO already up | 1 ms |
-    ///
-    /// **So this threshold is what carries macOS, and it is not what carries
-    /// iOS.** On macOS `startCapture` blocks on the SCO link and the
-    /// configuration change follows it, so the duration is the whole signal. On
-    /// iOS capture is fast either way and this never fires — what fires there is
-    /// the other half of ``settleRoute()``'s guard, because the escalation
-    /// itself blocks the main actor for ~480 ms while the forwarder (a detached
-    /// task, and so not blocked) counts the cascade arriving. Both conditions
-    /// are load-bearing; neither is redundant.
-    ///
-    /// 100 ms is an order of magnitude above every warm figure and comfortably
-    /// below the cold ones. **The 111 ms case is the one to watch**: it is 11 ms
-    /// over, and it bought a full onset budget — see ``settleOnsetTicks``.
+    /// **Carries macOS, not iOS.** On macOS `startCapture` blocks on the SCO
+    /// link and the configuration change follows it, so the duration is the
+    /// whole signal. On iOS capture is fast either way and this never fires —
+    /// what fires there is the other half of ``settleRoute()``'s guard,
+    /// because the escalation itself blocks the main actor while the forwarder
+    /// (a detached task, and so not blocked) counts the cascade arriving. Both
+    /// conditions are load-bearing; neither is redundant.
     static let captureSlowThresholdNanoseconds: UInt64 = 100_000_000
 
     /// How long the warm-up capture stays open once the route has settled
     /// (`BU-22`), on top of whatever ``settleRoute()`` spends getting there.
     ///
-    /// **This one number is argued rather than derived, and says so.** Every
-    /// other constant here came off a recorded hold. What was measured for this
-    /// one (melchior, 2026-08-28, `experiment-data/bu22-input-warmup.txt`) is
-    /// the fault and the fix, not the duration:
-    ///
-    /// | cold Bluetooth input, this code path | |
-    /// |---|---|
-    /// | warm-up capture | frames from 178 ms, **audio only from 1574 ms** |
-    /// | the next open, 1.5 s later | **audio in the first frame, 151 ms** |
-    ///
-    /// Nearly a second and a half of zeros *with frames arriving the whole
-    /// time* — which is why nothing above the device can tell it from silence —
-    /// and then, after the warm-up, audio immediately. Note that the fault is a
-    /// **Bluetooth** one: a USB webcam is permanently powered and showed nothing
-    /// at all, which is why it would not reproduce on demand during the day.
-    ///
-    /// **What that pair could not settle was this number**: the 1.6 s warm-up
-    /// *outlasted* the 1574 ms, so it did not separate "opening the device wakes
-    /// it" from "holding it open until audio appears wakes it" — and if it were
-    /// the latter, 1020 ms would be short. A second measurement settled it. On a
-    /// cold device, a **0.8 s warm-up that never saw audio itself** (35 frames,
-    /// every one of them zero) still left the next open carrying audio 98 ms in,
-    /// against roughly 1400 ms cold. It is the opening that wakes the hardware,
-    /// so a hold shorter than the silence is enough — and in this class the hold
-    /// is paid on top of a ``settleRoute()`` that spends most of a second on a
-    /// cold SCO open anyway.
-    ///
-    /// **The second device, 2026-08-29: a TIDRADIO Q2L, and it does not have the
-    /// fault at all.** Three trials — 20 minutes idle as the default input, 10
-    /// minutes idle with the default moved away so macOS released the audio
-    /// profile, and a genuine power cycle measured within a second of the device
-    /// reappearing — all delivered audio in the *first frame*: 265–279 ms to
-    /// that frame, 0–1 ms from it to audio. Against cold AirPods' 1574 ms of
-    /// exact zeros, this device sits with the USB webcam.
-    ///
-    /// So the fault is not simply "Bluetooth" — but **what distinguishes the two
-    /// devices is not established.** What was measured is behaviour: one input
-    /// delivered frames of exact zeros for 1574 ms after the open, another
-    /// delivered audio in its first frame. Why is unknown, and there are several
-    /// candidates that no measurement here separates — SCO setup timing, profile
-    /// switching, the device's own DSP or AGC start-up, noise gating, or the
-    /// link simply being kept active. Do not repeat a power-management story as
-    /// though it were the finding. **That does not argue for removing this
-    /// warm-up** — it costs a device like the Q2L
-    /// nothing it was not already paying, since the hold sits on top of a
-    /// ``settleRoute()`` the cold SCO open dominates — but it does mean a second
-    /// device failing to reproduce a silent first over says nothing about
-    /// whether the number is right. Only an AirPods-class input tests it.
-    ///
-    /// If a silent first over is ever seen again after this, **do not simply
-    /// raise this number**: the thing to establish first is whether the
-    /// warm-up ran at all (`input warmed` in the route log) and whether the
-    /// device was still cold when it did. A warm-up that ran and did not work
-    /// is a different fault from one that was too short.
+    /// **Argued rather than derived, and says so.** Some Bluetooth inputs
+    /// deliver frames of exact zeros for well over a second after opening —
+    /// nothing above the device can tell that from silence — and it is the
+    /// *opening* that wakes the hardware, not holding it open until audio
+    /// appears, so a hold shorter than the silence is enough. What
+    /// distinguishes an input that has this fault from one that does not is
+    /// not established; do not repeat a power-management story as though it
+    /// were the finding. If a silent first over is seen again, establish first
+    /// whether the warm-up ran at all (`input warmed` in the route log) and
+    /// whether the device was still cold when it did — a warm-up that ran and
+    /// did not work is a different fault from one that was too short.
     static let warmUpHoldTicks = 17
 
     /// The hard ceiling: 1.2 s, or half a second past the whole measured
@@ -542,13 +407,11 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
                     try AudioPipeline.activateSession(policy)
                 } else {
                     // Category-only, no `setActive(true)`: the session is
-                    // already active when the route is handed back, and the
-                    // redundant re-activation is what refused with `'!pri'`
-                    // (insufficient priority, OSStatus 561017449) during the
-                    // post-over route shuffle — measured on air 2026-08-22. A
-                    // category change on an active session takes effect on its
-                    // own. The values are still the library's policy, not a
-                    // copy (RC-11).
+                    // already active when the route is handed back, and a
+                    // redundant re-activation can be refused mid-shuffle
+                    // (`'!pri'`, insufficient priority). A category change on
+                    // an active session takes effect on its own. The values
+                    // are still the library's policy, not a copy (RC-11).
                     try AVAudioSession.sharedInstance().setCategory(
                         AVAudioSession.Category(rawValue: policy.category),
                         mode: AVAudioSession.Mode(rawValue: policy.mode),
@@ -650,13 +513,9 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             }
         }
         #else
-        // macOS never asked, and returning `true` here was a lie that cost the
-        // operator their first over: with nothing having prompted, the *first
-        // capture attempt* is what triggers the system dialog, and that press
-        // puts no audio on air. Observed on 2026-08-20 — press once, nothing;
-        // the microphone indicator appears in the menu bar; press again, and
-        // now there are levels. Asking here moves the prompt to connect time,
-        // where the operator is already waiting and no over is at stake.
+        // Asking here (rather than returning `true` unconditionally) moves the
+        // system dialog to connect time: the first *capture attempt* is what
+        // would otherwise trigger it, and that press puts no audio on air.
         //
         // `AVCaptureDevice` rather than `AVAudioApplication`: the latter is
         // iOS-only, and this app is not sandboxed, so there is no
@@ -698,24 +557,19 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         // Then hand the accessory straight back to listening (BU-17, RC-12) —
         // no linger, because configuration happens with nothing on air, so the
         // route-change cascade this causes lands while idle and SF-3 has
-        // nothing to drop. Until this existed, configuring the session was
-        // what pinned the route to HFP for the whole call: 16 kHz receive
-        // audio, a speaker-mic whose "in a call" light never went out, and —
-        // the root cause proven on 2026-08-22 — a PTT button the accessory
-        // itself mutes for as long as that idle call is held.
+        // nothing to drop. Without this, configuring the session pins the
+        // route to HFP for the whole call: narrowband receive audio, and a PTT
+        // button the accessory mutes for as long as that idle call is held.
         handRouteBack(afterLinger: false)
     }
 
     /// The session half of ``configureSession()``, on its own so the repair path
     /// in ``startCapture(onFrame:)`` can reach it without building an engine.
     ///
-    /// **The policy is the library's** (RC-11, v0.5.3):
-    /// `AudioPipeline.activateSession()` is static, so reaching it does not mean
-    /// owning a pipeline and therefore having built an engine — which is the
-    /// ordering that must not be violated (see the type note). The app kept a
-    /// copy of the category while that static did not exist; it no longer does,
-    /// and with it went the `allowBluetooth` → `allowBluetoothHFP` shim, because
-    /// the library states the options as a raw value.
+    /// **The policy is the library's** (RC-11): `AudioPipeline.activateSession()`
+    /// is static, so reaching it does not mean owning a pipeline and therefore
+    /// having built an engine — which is the ordering that must not be
+    /// violated (see the type note).
     ///
     /// What is left here is the platform guard: `AVAudioSession` does not exist
     /// on macOS, where input and output device selection is the user's, via
@@ -731,41 +585,20 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         lock.unlock()
     }
 
-    // **Third attempt at `BU-17`, and the first with the mechanism in hand.**
+    // BU-17. The hand-back to listening happens on a *linger* rather than
+    // inside `stopCapture()`, so SF-3's transient drop-and-resume completes
+    // inside it and re-keys into a session still on radio, rather than
+    // handing the route straight back and re-triggering the category-change
+    // cascade every cycle. `BU-15` (below) removes the residual drop-and-
+    // resume this still leaves on the first over after a hand-back, by moving
+    // everything that disturbs the route to before anything is keyed, instead
+    // of suppressing the cascade or SF-3 itself.
     //
-    // The first attempt failed because a category change is a route change and
-    // SF-3 dropped the transmission it was enabling — and then looped, because
-    // the drop's own `stopCapture()` handed the route straight back, so the
-    // automatic resume re-escalated and re-triggered the cascade every cycle.
-    // The second attempt (RC-13's cause) failed because one deliberate switch
-    // produces a cascade — `categoryChange`, `override`, `newDeviceAvailable`,
-    // `engineConfigurationChange` — and only the first is self-evidently ours;
-    // the rest are indistinguishable from an accessory being unplugged, and
-    // SF-3 must drop transmit for those.
-    //
-    // This attempt changes neither SF-3 nor the cascade. It removes the loop:
-    // the hand-back to listening happens on a **linger** rather than inside
-    // `stopCapture()`, so SF-3's transient drop-and-resume completes inside it
-    // and re-keys into a session still on radio — no category change, no fresh
-    // cascade, convergence. The residual cost was one `BU-15`-style drop-and-
-    // resume on the first over after each hand-back, which is SF-3 performing
-    // exactly as specified and is the same dance macOS does on a cold SCO link.
-    //
-    // **`BU-15` removed that residual on 2026-08-23**, and note *how*, because
-    // it is the same discipline as the paragraph above: not by suppressing the
-    // cascade, but by moving everything that causes one — this escalation, and
-    // the microphone opening — to before anything is keyed. See
-    // `prepareForCapture()` and `settleRoute()`.
-    //
-    // Why per-over switching is worth that residual, and is not merely the
-    // receive-quality nicety it was first costed as: **the Q2L mutes its own
-    // BLE PTT notifications for as long as its Classic side sits in an idle
-    // HFP call** — proven 2026-08-22 by holding the BLE link from a Mac while
-    // the phone held the call. Handing the route back between overs is what
-    // lets the button live. That finding is the requirements decision the
-    // previous version of this comment said must be taken deliberately: taken
-    // 2026-08-22, with the operator, on that evidence — and note that SF-3 is
-    // *not* suppressed anywhere in it.
+    // Per-over route switching is worth this cost because some Bluetooth
+    // accessories mute their own PTT notifications for as long as their
+    // Classic side sits in an idle HFP call; handing the route back between
+    // overs is what lets the button live. SF-3 is not suppressed anywhere in
+    // this.
 
     /// ``routeChangeCount``, for the settle tests: they have to know the
     /// forwarder has *observed* a signal before stepping the clock, or they
@@ -829,21 +662,11 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// preparation caused, so the key-down that follows happens on a route that
     /// has stopped moving.
     ///
-    /// Measured on melchior, 2026-08-23, with no accessory attached — and the
-    /// measurement is why this is one wait after both disturbances rather than
-    /// one after each:
-    ///
-    /// ```
-    /// press@0  escalate@19   category cascade@553,559,569   settled@797
-    /// carrier@801  mic@801   on air@1179   ROUTE CHANGE@1242,1261   ← dropped
-    /// ```
-    ///
-    /// The first fix caught the category cascade and the dance survived: opening
-    /// the microphone posts a route change of its own, 63 ms after the input
-    /// unit comes up, and the original diagnosis had folded that into the
-    /// category change. The microphone takes ~380 ms to open, which the category
-    /// cascade largely arrives during — so disturbing both and then waiting once
-    /// costs little more than waiting for either.
+    /// One wait after both disturbances — the category change and opening the
+    /// microphone, which itself posts a route change once the input unit comes
+    /// up — rather than one after each: the microphone's cascade largely
+    /// arrives while it is still opening, so waiting once costs little more
+    /// than waiting for either alone.
     func settleRoute() async {
         lock.lock()
         let disturbed = routeDisturbed
@@ -966,15 +789,15 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
     /// The second half of ``handRouteBack(afterLinger:)``: discard the engine,
     /// then apply the listening policy.
     ///
-    /// **The discard is the half that was missing on the first on-air try.**
-    /// After any capture the engine carries an instantiated input audio unit,
-    /// and restarting that engine for *received* audio — which is most of what
-    /// happens between overs — re-raises an input route. On Bluetooth the only
-    /// input route is HFP, so the accessory was pulled straight back into the
-    /// call the hand-back had just ended, LED lit and button muted, every time
-    /// the far side talked. A fresh engine is playback-only until the next
-    /// capture instantiates its input — under the radio policy, which is
-    /// `BU-1`'s ordering, preserved.
+    /// **The discard matters.** After any capture the engine carries an
+    /// instantiated input audio unit, and restarting that engine for
+    /// *received* audio — which is most of what happens between overs —
+    /// re-raises an input route. On Bluetooth the only input route is HFP, so
+    /// the accessory would be pulled straight back into the call the hand-back
+    /// had just ended, LED lit and button muted, every time the far side
+    /// talked. A fresh engine is playback-only until the next capture
+    /// instantiates its input — under the radio policy, which is `BU-1`'s
+    /// ordering, preserved.
     ///
     /// A key-down can race the apply; the second locked check catches it. In
     /// that window the session is momentarily on listening under a live
@@ -1066,42 +889,16 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         Diagnostics.route("audio route handed back to listening")
     }
 
-    /// Opens the microphone, repairing the audio stack once if the first attempt
-    /// fails.
-    ///
-    /// The repair is "reactivate the session, then build a new engine", in that
-    /// order, and it addresses two different real failures with one path:
-    ///
-    /// * An engine that settled on a 0 Hz input format because it was built
-    ///   before the session was active. It cannot be talked out of that, so the
-    ///   only repair is a different engine (see the type note).
-    /// * A session left deactivated by something else — the usual culprit being
-    ///   an interruption whose end we handled by dropping transmit and not by
-    ///   reactivating. `engine.start()` fails against an inactive session, and
-    ///   the operator's response to a dead PTT button is to press it again,
-    ///   which should work rather than fail identically forever.
-    ///
-    /// Exactly one retry. A loop here would be a loop on the transmit path, and
-    /// the second failure is more useful reported than retried.
-    /// `BU-22`. See the protocol requirement for the fault and why it is fixed
-    /// here rather than at the gate.
-    ///
-    /// Everything it does, the first over would otherwise do at key-down:
-    /// escalate, open the microphone, wait out the cascade. The point is only
-    /// *when* — with no over at stake — plus the hold at the end, which is the
-    /// part a key-down does not do and the reason the first over was silent.
-    ///
-    /// The captured frames are dropped on the floor. Nothing is keyed, so there
-    /// is nowhere for them to go; `RadioSession` does not even see them, which
-    /// keeps the transmit meter honest about having shown only what left.
+    /// Opens the microphone: everything a first over would otherwise do at
+    /// key-down (escalate, open the microphone, wait out the cascade), except
+    /// with no over at stake, plus the hold at the end that a key-down does
+    /// not pay (`BU-22`). The captured frames are dropped on the floor —
+    /// nothing is keyed, so ``RadioSession`` never sees them, which keeps the
+    /// transmit meter honest about only having shown what left.
     ///
     /// Closing through ``stopCapture()`` puts this on the ordinary hand-back
-    /// path: the route goes back to listening after the usual linger, so an
-    /// operator who keys up straight away still takes `BU-16`'s fast path into
-    /// a device that is now awake. On iOS the hand-back also discards the
-    /// engine the capture was attempted on, which is a cost this pays once per
-    /// connect and is worth it — the warm-up is the *device's*, and survives
-    /// the engine that woke it.
+    /// path, so an operator who keys up straight away still takes `BU-16`'s
+    /// fast path into a device that is now awake.
     @discardableResult
     func warmUpInput() async -> InputWarmUpOutcome {
         await prepareForCapture()
@@ -1110,9 +907,6 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
         } catch {
             // Opportunistic: the connection is not failed over this, and the
             // key-down path asks again with the failure handling that matters.
-            // Reported rather than swallowed, though — see the protocol
-            // requirement, and `BU-24` for what used to happen instead of an
-            // error arriving here at all.
             Diagnostics.route("input warm-up could not open the microphone: \(error)")
             return .couldNotOpenInput("\(error)")
         }
@@ -1139,12 +933,10 @@ final class AudioPipelineIO: AudioIO, @unchecked Sendable {
             let pipeline = pipeline()
             lock.lock()
             // **The second half of `BU-15`.** The first capture on an engine
-            // instantiates its input audio unit, and that posts a route change
-            // of its own — measured 63 ms after the microphone came up, which is
-            // what survived the first attempt at this fix. So it is a
-            // disturbance for `settleRoute()` to wait out, exactly like the
-            // category change. A later capture on the same engine is not: the
-            // unit is already there.
+            // instantiates its input audio unit, which posts a route change of
+            // its own — a disturbance for `settleRoute()` to wait out, exactly
+            // like the category change. A later capture on the same engine is
+            // not: the unit is already there.
             if !captureAttemptedOnCurrent { noteRouteDisturbanceLocked() }
             captureAttemptedOnCurrent = true
             lock.unlock()
