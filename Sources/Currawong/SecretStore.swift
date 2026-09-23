@@ -5,10 +5,8 @@ import Security
 
 /// Where the node secret lives.
 ///
-/// Separate from ``SettingsStore``: settings want to be easy to read, back up
-/// and sync, and the secret wants none of those things. Two protocols means
-/// there is no single "save everything" call that could put a password in
-/// `UserDefaults`.
+/// Separate from ``SettingsStore`` so no single "save everything" call could
+/// put a password in `UserDefaults`.
 protocol SecretStore: AnyObject, Sendable {
     /// The stored secret for an account, or `nil` if there is none.
     func secret(for account: String) throws -> String?
@@ -30,19 +28,10 @@ struct KeychainError: Error, Equatable, CustomStringConvertible {
 /// The real thing: a generic-password item per account, in the data protection
 /// keychain.
 ///
-/// `kSecAttrAccessibleAfterFirstUnlock` rather than `WhenUnlocked`: PD-2 gives
-/// this app the `audio` background mode, and a connection is expected to
-/// survive the screen locking, so a secret the app cannot read while locked
-/// would make a background reconnect impossible.
-///
-/// `kSecUseDataProtectionKeychain` is set explicitly so macOS behaves like
-/// iOS — the same item semantics, no login-keychain prompt — rather than the
-/// file-based keychain, where the same query means something subtly different.
-///
-/// Nothing in the test suite touches this type: tests use an in-memory
-/// double, since a unit test that writes to the real keychain fails on a
-/// machine without a signed host app and leaves the developer's keychain
-/// dirty.
+/// `kSecAttrAccessibleAfterFirstUnlock`, not `WhenUnlocked`: a connection
+/// survives the screen locking (PD-2), so a background reconnect must be able
+/// to read the secret. `kSecUseDataProtectionKeychain` makes macOS use the
+/// same item semantics as iOS. Tests use an in-memory double.
 final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     private let service: String
 

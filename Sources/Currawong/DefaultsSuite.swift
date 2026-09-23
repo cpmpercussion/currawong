@@ -2,60 +2,35 @@
 
 import Foundation
 
-/// Which `UserDefaults` the app's stores read and write — the operator's, or a
-/// throwaway one a UI test asked for.
+/// Which `UserDefaults` the app's stores use — the operator's, or a throwaway
+/// suite a UI test asked for, so tests driving the real app leave the
+/// operator's channel list alone.
 ///
-/// The UI tests drive the real app, so without this they write to the
-/// operator's own channel list: a run that dies before cleanup leaves rows
-/// behind, and a `+` tap that never gets named or deleted leaves a blank one.
-/// Isolating it is a change the app has to take part in, since the app is what
-/// opens the defaults.
-///
-/// ## The hook, and its bounds
-///
-/// A launch argument, read out of `UserDefaults`' own argument domain — so it can
-/// only be set by whoever launched the process, never by a stored preference:
+/// Set by launch argument (the argument domain, so never by a stored
+/// preference):
 ///
 /// ```sh
 /// Currawong -currawong-defaults-suite au.charlesmartin.currawong.uitests \
 ///           -currawong-defaults-reset YES
 /// ```
 ///
-/// **`#if DEBUG` only.** A release build ignores both arguments and always uses
-/// `.standard`, so the hook cannot exist in a shipped binary — which is the
-/// answer to "what if somebody passes this to the App Store build". The UI tests
-/// run against a Debug build, as `xcodebuild test` always does.
-///
-/// **The Keychain is not part of this.** Secrets are keyed by account, shared
-/// between channels by design (every EchoLink channel for one callsign shares
-/// one), and an orphaned Keychain item is invisible and harmless — where a lost
-/// password is neither. A test that stores a secret still stores it for real.
+/// **`#if DEBUG` only**: a release build always uses `.standard`. The Keychain
+/// is not isolated — a test that stores a secret stores it for real.
 enum DefaultsSuite {
     /// Names the suite to use instead of `.standard`.
     static let suiteArgument = "currawong-defaults-suite"
 
-    /// Empties that suite before the app reads it, so every run starts from the
-    /// same place: no channels, no drafts, no identity.
-    ///
-    /// It is the *app* that resets rather than the test runner, because on iOS a
-    /// suite that is not an app group lives in the app's own container and the
-    /// runner cannot reach it. One rule, both platforms.
+    /// Empties that suite before the app reads it. The app does this because
+    /// on iOS the test runner cannot reach the app's container.
     static let resetArgument = "currawong-defaults-reset"
 
-    /// **APP-33.** Starts the run with the licence acknowledgement already on
-    /// file, so a test that transmits is not stopped by a sheet — the suite is
-    /// wiped at every launch, and the acknowledgement is otherwise answered on
-    /// screen once per install. Dismissing it would otherwise consume the
-    /// first press that `BU-15` measures (cold key-down to carrier).
-    ///
-    /// Bounded like the two arguments above (`#if DEBUG`, and only on the
-    /// custom-suite path, so no combination pre-acknowledges the operator's own
-    /// defaults). The gate itself is tested from every `PTTSource` in
-    /// `LicenceAcknowledgementTests`; this target is for radio behaviour.
+    /// **APP-33.** Pre-acknowledges the licence in the test suite, so a
+    /// transmitting UI test is not stopped by the sheet. `#if DEBUG` and
+    /// custom-suite only, so it can never touch the operator's own defaults.
     static let acknowledgeLicenceArgument = "currawong-licence-acknowledged"
 
-    /// The defaults the app should use. Resolved once — both stores must get the
-    /// same answer, and the reset must happen before either of them reads.
+    /// The defaults the app should use. Resolved once, so both stores agree and
+    /// the reset precedes any read.
     static let resolved: UserDefaults = resolve()
 
     /// - Parameter source: where to look for the launch arguments. The argument

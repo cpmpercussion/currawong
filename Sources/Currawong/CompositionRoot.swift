@@ -11,7 +11,7 @@ import RadioCore
 /// Views and view models see ``RadioSession``, ``RadioLink`` and
 /// ``RadioLinkEvent``, never a protocol library. This file is the documented
 /// exception: it is the only place `IAX2Kit`, `M17Kit` and `EchoLinkKit` are
-/// imported, and ``makeLink(settings:identity:credentials:)`` is where
+/// imported, and ``makeLink(settings:identity:credentials:transmitTimeout:proxy:)`` is where
 /// `settings.mode` chooses an `IAX2Client`, `M17Client` or `EchoLinkClient`.
 /// All three factories return the same non-generic ``RadioLink``.
 ///
@@ -38,79 +38,50 @@ import RadioCore
 @MainActor
 final class CompositionRoot {
     /// The view model everything else in the app is built on.
-    ///
-    /// Not generic over the client: ``RadioLink`` carries closures instead of a
-    /// concrete type, so an AllStarLink session and an M17 session are the same
-    /// type and the choice of mode is the operator's, at connect time.
     let session: RadioSession
 
-    /// **PT-2, PT-3.** The Bluetooth accessory. Owned here for the process
-    /// lifetime and pointed at ``session``; it constructs no `CBCentralManager`
-    /// and triggers no permission prompt until either an accessory has been
-    /// learned or the operator opens the accessory screen.
+    /// **PT-2, PT-3.** The Bluetooth accessory, for the process lifetime. No
+    /// permission prompt until an accessory is learned or its screen opened.
     let accessory: BLEPTTController
 
-    /// **PT-4.** The headset or remote button. Off unless the operator turned it
-    /// on, and it touches nobody's media controls until then.
+    /// **PT-4.** The headset or remote button. Off until the operator enables it.
     let remoteCommand: RemoteCommandPTTController
 
     /// Transmit state, for anything that only needs to display it.
     var transmitState: TransmitState { session.transmitState }
 
-    /// **EchoLink.** The station browser's state, over the real directory.
-    ///
-    /// Owned here, not by the view: a fetch is a network session measured in
-    /// seconds that should survive a pane being scrolled away from, and the
-    /// concrete `EchoLinkStationDirectory` is a type only this file may name.
+    /// **EchoLink.** The station browser's state. This and the three helpers
+    /// below are owned here so a fetch outlives the pane that started it.
     let stationBrowser: StationBrowser
 
-    /// **EchoLink.** The "find me a public proxy" state, over the real
-    /// echolink.org list and a real probe (EL-12). Owned here for the same two
-    /// reasons as ``stationBrowser``.
+    /// **EchoLink.** The public proxy search (EL-12).
     let proxyPicker: ProxyPicker
 
-    /// **M17.** The reflector chooser's state, over the M17 Project's published
-    /// host file. Owned here so the download survives a pane being scrolled
-    /// away from; `HostFileReflectorDirectory` names no library type, but lives
-    /// alongside the other network-backed pickers for the same reason.
+    /// **M17.** The reflector chooser, over the published host file.
     let reflectorBrowser: ReflectorBrowser
 
-    /// **AllStarLink.** The node-number lookup's state, over the public stats
-    /// API. Owned here so a round trip survives a pane being scrolled away
-    /// from, like the other three network-backed helpers.
+    /// **AllStarLink.** The node-number lookup, over the public stats API.
     let nodeLocator: NodeLocator
 
-    /// **APP-12.** The settings screen's portal-login state, over
-    /// ``AllStarLinkPortalLogin`` (the adapter over IAX-13's
-    /// `WebTransceiverTokenSource`). Owned here for ``stationBrowser``'s two
-    /// reasons. The default is a live login, not `nil`, because the app's
-    /// floor already carries the fetch; `nil` is still supported and means "no
-    /// logging in", for a preview or a test with no business talking to
-    /// allstarlink.org.
+    /// **APP-12.** The portal login, over ``AllStarLinkPortalLogin``. A `nil`
+    /// login (previews, tests) means no logging in.
     let portalLogin: PortalLoginController
 
     /// - Parameters:
-    ///   - configuration: media grid, jitter buffer and leveller. Injectable so
-    ///     a test can build a root without waiting for anything. Note that the
-    ///     **watchdog timeout is not taken from here** — it belongs to the
-    ///     operator, so it travels in `NodeSettings` and is applied per link;
-    ///     see ``makeIAX2Link(settings:identity:credentials:configuration:)``.
-    ///   - audio: the microphone and speaker. Injectable so a test never opens
-    ///     either.
+    ///   - configuration: the IAX2 media grid, jitter buffer and leveller. The
+    ///     watchdog timeout is not taken from here: it is the operator's
+    ///     app-wide ``TransmitTimeout``, applied per link.
+    ///   - audio: the microphone and speaker; a test injects a fake.
     init(
         configuration: IAX2Client.Configuration = IAX2Client.Configuration(
             leveller: CompositionRoot.receiveLeveller),
         audio: AudioIO = AudioPipelineIO(),
-        // `DefaultsSuite.resolved` rather than `.standard`: the operator's
-        // defaults in every ordinary launch, and a throwaway suite when a UI test
-        // asked for one on the command line. See ``DefaultsSuite``.
+        // A UI test may substitute a throwaway suite; see ``DefaultsSuite``.
         settingsStore: SettingsStore = UserDefaultsSettingsStore(
             defaults: DefaultsSuite.resolved),
         secretStore: SecretStore = KeychainSecretStore(),
-        // `nil` rather than a default-constructed controller: a default argument
-        // expression is evaluated in a nonisolated context, and both of these
-        // types are `@MainActor`. Built below instead, inside this initialiser,
-        // which is isolated.
+        // `nil` defaults: a default argument is evaluated nonisolated, and these
+        // are `@MainActor`, so they are built in the body instead.
         accessory: BLEPTTController? = nil,
         remoteCommand: RemoteCommandPTTController? = nil,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
@@ -118,23 +89,14 @@ final class CompositionRoot {
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
         portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin(),
-        // `nil` for the same isolation reason as the two controllers above. A
-        // test that passes one gets to read what the app asked the lock screen
-        // for; a test that passes nothing gets the real thing on iOS and
-        // nothing on macOS, which is what the app itself gets.
+        // `nil` for the same isolation reason.
         activity: TransmitActivityController? = nil
     ) {
-        // Route-change *reasons*, which `AudioSessionSignal` does not carry.
-        // Diagnostic only, registers one observer, and is a no-op on macOS —
-        // see `Diagnostics` and `BU-13`. Here rather than in `AudioPipelineIO`
-        // because the pipeline is built lazily on first capture, and a route
-        // change before the first key-down is exactly the kind this is for.
+        // Diagnostic route-change reasons (BU-13). Here, not in the lazily built
+        // pipeline, so changes before the first key-down are logged too.
         Diagnostics.startRouteLogging()
 
-        // Before the session, so the session can be handed its release hook
-        // (APP-13). The order is load-bearing rather than tidy: a closure
-        // capturing `self` cannot be built until every property is initialised,
-        // and capturing the picker itself needs the picker to exist first.
+        // Before the session, whose release hook captures it (APP-13).
         let proxyPicker = ProxyPicker(finder: proxyFinder)
 
         let session = RadioSession(
@@ -142,7 +104,6 @@ final class CompositionRoot {
             settingsStore: settingsStore,
             secretStore: secretStore,
             makeLink: { settings, identity, credentials, transmitTimeout, proxy in
-                // `configuration` is the IAX2 one; it only applies in that case.
                 switch settings.mode {
                 case .allStarLink:
                     return CompositionRoot.makeIAX2Link(
@@ -154,21 +115,16 @@ final class CompositionRoot {
                         settings: settings, identity: identity,
                         transmitTimeout: transmitTimeout)
                 case .echoLink:
-                    // The secret is the operator's EchoLink *account* password
-                    // here, not a node password — see `makeEchoLinkLink`.
+                    // The secret is the EchoLink account password here.
                     return try CompositionRoot.makeEchoLinkLink(
                         settings: settings, identity: identity, secret: credentials.secret,
                         proxy: proxy, transmitTimeout: transmitTimeout)
                 }
             },
             releaseProxyLease: { proxyPicker.releaseLease() },
-            // **APP-3 (SF-4).** The lock-screen transmit indicator. Built here
-            // and nowhere else, for the same reason the clients are: this is the
-            // one file that names a platform framework's concrete type.
+            // **SF-4.** The lock-screen transmit indicator.
             activity: activity ?? CompositionRoot.makeActivityController())
-        // Same suite as the settings store, for the same reason: a UI test that
-        // isolates one and not the other would still be editing the operator's
-        // learned accessory.
+        // Same suite as the settings store, so a UI test isolates both.
         let pttStore = UserDefaultsPTTSettingsStore(defaults: DefaultsSuite.resolved)
         let accessory = accessory ?? BLEPTTController(store: pttStore)
         let remoteCommand = remoteCommand ?? RemoteCommandPTTController(store: pttStore)
@@ -182,54 +138,39 @@ final class CompositionRoot {
         self.nodeLocator = NodeLocator(lookup: nodeLookup)
         self.portalLogin = PortalLoginController(login: portalLogin)
 
-        // The wire SF-2 depends on. Weak on the controllers' side, so this does
-        // not make the three of them immortal.
+        // The wire SF-2 depends on (weak on the controllers' side).
         accessory.sink = session
         remoteCommand.sink = session
 
-        // The other direction, for BU-14's repair: the session knows when
-        // nothing is on air, and only then may the accessory rebuild a link
-        // that has silently stopped delivering. Captured weakly so the pair is
-        // not made immortal.
+        // BU-14's repair: only the session knows when nothing is on air, the
+        // one time the accessory may rebuild a silently dead link (SF-2).
         session.onIdleAudioRouteChange = { [weak accessory] in
             accessory?.audioRouteDidChange()
         }
-        // And the other half of it: the controller asks before a repair it
-        // scheduled itself, because an escalation fires on a timer and by then
-        // the operator may have keyed up on the on-screen button, which the
-        // controller cannot see.
+        // Asked again before a timer-scheduled repair: the operator may have
+        // keyed on the on-screen button since, which the controller cannot see.
         accessory.isRebuildSafe = { [weak session] in
             session?.isIdleForAccessoryRepair ?? false
         }
-        // And the claim's backstop: the SF-1 watchdog fires precisely when no
-        // release has arrived, so it is the one event that can withdraw an
-        // accessory-keyed claim whose release is never coming — without it the
-        // claim guards every repair path closed, Reconnect included.
+        // The SF-1 watchdog fires exactly when no release arrived, so it is what
+        // withdraws an accessory-keyed claim whose release is never coming;
+        // without it that claim would block every repair, Reconnect included.
         session.onWatchdogUnkey = { [weak accessory] in
             accessory?.radioUnkeyedExternally()
         }
     }
 
-    /// Starts everything with a process-long lifetime. Idempotent, and called
-    /// once from ``CurrawongApp``.
-    ///
-    /// Separate from `init`: two of the three things it does have visible side
-    /// effects — a Bluetooth permission prompt and taking over the system's
-    /// transport controls — which should not happen while SwiftUI is still
-    /// deciding whether to keep the value. Both are additionally gated on the
-    /// operator having asked for the feature at all.
+    /// Starts everything with a process-long lifetime. Idempotent. Separate from
+    /// `init` because a permission prompt and taking the transport controls
+    /// should not happen while SwiftUI may still discard the value.
     func activate() {
         session.start()
         accessory.activateIfConfigured()
         remoteCommand.activateIfEnabled()
     }
 
-    /// **APP-3 (SF-4).** The transmit Live Activity's controller.
-    ///
-    /// iOS only. macOS has no Live Activities, so the macOS app gets a disabled
-    /// controller rather than a compile-time hole: `RadioSession` then calls a
-    /// controller that does nothing, and every SF-4 code path is still exercised
-    /// by `make test-macos`.
+    /// **SF-4.** The transmit Live Activity's controller; a disabled one on
+    /// macOS, so the same code paths still run there.
     private static func makeActivityController() -> TransmitActivityController {
         #if os(iOS)
         return TransmitActivityController(presenter: ActivityKitPresenter())
@@ -238,51 +179,31 @@ final class CompositionRoot {
         #endif
     }
 
-    /// **AU-4.** The received-audio leveller every mode is built with.
-    ///
-    /// −12 dBFS, not the library's default of −18: that headroom is right for a
-    /// mixing stage but too quiet out of a phone speaker, especially with iOS's
-    /// voice-processing path on top of it. The rest of the leveller's shape —
-    /// attack, release, the +18 dB ceiling — stays the library's; only the
-    /// output level is a property of the device rather than of the protocol.
+    /// **AU-4.** The received-audio leveller for every mode: −12 dBFS rather
+    /// than the library's −18, which is too quiet from a phone speaker.
     static let receiveLeveller = AudioLeveller(targetRMSdBFS: -12)
 
-    /// **SF-1.** The operator's watchdog timeout, as the library wants it.
-    ///
-    /// A separate function purely so it can be tested: `IAX2Client` keeps its
-    /// configuration private, so there is no way to ask a built client what
-    /// timeout it got, and a wiring mistake here would be invisible until a
-    /// transmission ran for three minutes when the operator asked for ten
-    /// seconds. Returning a `Duration` rather than a `Configuration` also keeps
-    /// the test from having to import `IAX2Kit`.
+    /// **SF-1.** The operator's watchdog timeout, as the library wants it. A
+    /// function so it can be tested: a built client's timeout cannot be read back.
     static func watchdogTimeout(for timeout: TransmitTimeout) -> Duration {
         .seconds(timeout.seconds)
     }
 
     // MARK: - Web Transceiver (APP-11)
 
-    /// The guest account every Web Transceiver call authenticates as — a
-    /// shared account, not the operator's callsign, which draws a bare REJECT
-    /// with no CAUSE or challenge (IAX-12; `swift-hamvoip/docs/CLI.md` §11.2).
+    /// The shared guest account every Web Transceiver call authenticates as
+    /// (IAX-12). The operator's callsign draws a bare REJECT.
     static let webTransceiverUsername = "allstar-public"
 
-    /// The static secret that guest account uses. The same on every ASL3
-    /// node — it ships in `iax.conf` — so it is a constant rather than
-    /// something to ask an operator for. **Not** the token, and not a portal
-    /// password.
+    /// The guest account's secret, the same on every ASL3 node. Not the token.
     static let webTransceiverSecret = "allstar"
 
-    /// The extension a WT call dials: `s`, the Asterisk start extension. WT
-    /// never dials the node number — it calls in like a telephone, and CALLING
+    /// The extension a WT call dials: `s`, never the node number. CALLING
     /// NUMBER decides which node answers.
     static let webTransceiverExtension = "s"
 
-    /// What a Web Transceiver guest call presents, in the app's own vocabulary.
-    ///
-    /// Exists so the mapping can be *tested*: a destination cannot be asked
-    /// afterwards what it was built from, and a wiring mistake among five
-    /// values, four of them counter-intuitive, would otherwise be invisible
-    /// until a node rejected the call.
+    /// What a Web Transceiver guest call presents. Exists so the mapping, which
+    /// is mostly counter-intuitive, can be tested.
     struct WebTransceiverCall: Equatable {
         /// The shared guest account, not the operator's callsign.
         let username: String
@@ -298,15 +219,12 @@ final class CompositionRoot {
         let callsign: String
     }
 
-    /// The guest-call parameters for a channel, or `nil` when the channel is not
-    /// a Web Transceiver one. Four of these are not what anyone would guess
-    /// (IAX-12; `swift-hamvoip/docs/CLI.md` §11.2).
+    /// The guest-call parameters for a channel, or `nil` when it is not a Web
+    /// Transceiver one (IAX-12).
     ///
-    /// The identity mapping is the part worth understanding: the node passes
-    /// CALLING NAME to allstarlink.org, which resolves it to a callsign — the
-    /// whole of the authentication, and why the token must reach the wire
-    /// unaltered. `callsign` is upper-cased on the way out and would corrupt a
-    /// lowercase-hex token, so the token travels in `callingName` instead.
+    /// The node sends CALLING NAME to allstarlink.org to resolve a callsign —
+    /// that is the whole of the authentication — so the token goes there,
+    /// unaltered; `callsign` is upper-cased and would corrupt it.
     static func webTransceiverCall(
         settings: NodeSettings,
         identity: OperatorIdentity,
@@ -323,9 +241,8 @@ final class CompositionRoot {
             callsign: identity.callsign)
     }
 
-    /// The destination for a Web Transceiver guest call, or `nil` when this
-    /// channel is not one. The reasoning is in ``webTransceiverCall(settings:identity:credentials:)``;
-    /// this is only the translation into the library's vocabulary.
+    /// ``webTransceiverCall(settings:identity:credentials:)`` as a library
+    /// destination.
     private static func webTransceiverDestination(
         _ settings: NodeSettings,
         _ identity: OperatorIdentity,
@@ -347,15 +264,11 @@ final class CompositionRoot {
             callingName: call.callingName)
     }
 
-    /// Builds one IAX2 connection's worth of plumbing.
+    /// Builds one IAX2 connection's worth of plumbing. Opens nothing until
+    /// `connect`; an unused link costs two suspended tasks, released by `close()`.
     ///
-    /// Opens nothing: `IAX2Client` builds its transport lazily inside
-    /// `connect(to:)`, so an unused link costs two suspended tasks, released by
-    /// `close()`.
-    ///
-    /// **`transmitTimeout` overrides `configuration.transmitTimeout`** — SF-1 is
-    /// enforced by the library, but the number is the operator's, and this is
-    /// where the two meet. `TransmitTimeout` clamps itself on the way in.
+    /// `transmitTimeout` overrides `configuration.transmitTimeout`: the library
+    /// enforces SF-1, with the operator's number. The other factories do the same.
     static func makeIAX2Link(
         settings: NodeSettings,
         identity: OperatorIdentity,
@@ -381,8 +294,7 @@ final class CompositionRoot {
         let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
         let eventContinuation = eventEscape!
 
-        // Translation, not forwarding: `IAX2ClientEvent` is the library's
-        // vocabulary and must not escape this file.
+        // Translated, because `IAX2ClientEvent` must not escape this file.
         let clientEvents = client.events
         let eventPump = Task.detached {
             for await event in clientEvents {
@@ -422,25 +334,10 @@ final class CompositionRoot {
             })
     }
 
-    /// Builds one M17 connection's worth of plumbing.
-    ///
-    /// The mirror of ``makeIAX2Link(settings:secret:configuration:)``, and the
-    /// differences are the protocol's rather than ours:
-    ///
-    /// - **No secret.** M17 reflectors do not authenticate; the callsign in
-    ///   every frame's SRC field is the whole of the identity. There is no
-    ///   Keychain round trip on this path and nothing to leak.
-    /// - **A module, not a node number.** `settings.module` is the reflector
-    ///   module to link.
-    /// - **No DTMF.** M17 has no in-band signalling equivalent, so `sendDTMF`
-    ///   throws rather than pretending. The connect form hides the keypad in
-    ///   this mode, so an operator should never reach it.
-    /// - **A codec has to be supplied.** `M17Client` takes an injected
-    ///   `VoiceCodec`; ``makeVoiceCodec()`` supplies it, and this is its
-    ///   injection point.
-    ///
-    /// **Not validated on air.** No M17 transmission has ever reached a real
-    /// reflector, so this path is believed correct rather than known to be.
+    /// Builds one M17 connection's worth of plumbing. Unlike IAX2: no secret
+    /// (reflectors do not authenticate), a reflector module instead of a node
+    /// number, no DTMF (`sendDTMF` throws), and an injected codec from
+    /// ``makeVoiceCodec()``.
     static func makeM17Link(
         settings: NodeSettings,
         identity: OperatorIdentity,
@@ -508,46 +405,20 @@ final class CompositionRoot {
 
     /// Builds one EchoLink connection's worth of plumbing.
     ///
-    /// The same shape as the two above, and again the differences are the
-    /// protocol's rather than ours:
-    ///
-    /// - **The proxy arrives as a parameter, not in the settings** (APP-13).
-    ///   FR-3.3 makes a TCP proxy on 8100 the normal path, because EchoLink's
-    ///   UDP audio (5198/5199) does not survive carrier-grade NAT, but which
-    ///   proxy is the operator's station infrastructure rather than a property
-    ///   of the node — a public one is leased for a sitting.
-    /// - **Two addresses, one of which must be a dotted quad.** The proxy
-    ///   protocol resolves no DNS — the peer field is four raw octets — so
-    ///   `settings.peer` is parsed here, and a name that fails to parse becomes
-    ///   an error the operator can read rather than a force-unwrap.
-    /// - **The secret is the operator's account password**, and it is optional:
-    ///   it authenticates to the *directory server*, not the node, so skipping
-    ///   it only costs the directory login (FR-3.4). Contrast IAX2, where the
-    ///   secret is what the node checks.
-    /// - **The account password and the directory server are all or nothing.**
-    ///   The library throws `.directoryLoginIncomplete` when exactly one is
-    ///   present. An operator who typed a password and left the server field
-    ///   alone should get a working unauthenticated session, not a failed
-    ///   connect, so the pairing is resolved here: unless both survive parsing,
-    ///   both go in as `nil`.
-    /// - **No DTMF.** Same as M17: `EchoLinkClient` has no digit path, so
-    ///   `sendDTMF` throws rather than pretending.
-    /// - **A codec has to be supplied**, as with M17. `GSMVoiceCodec` ships
-    ///   inside EchoLinkKit on the vendored `CGSM` target, so it throws only if
-    ///   the encoder or decoder fails to allocate.
+    /// - The proxy is a parameter, not a setting (APP-13, FR-3.3).
+    /// - `settings.peer` must be a dotted quad: the proxy protocol carries raw
+    ///   octets and resolves no DNS.
+    /// - The account password authenticates to the directory server, not the
+    ///   node (FR-3.4). The library throws when only one of it and the server
+    ///   is present, so unless both parse, both go in as `nil` and the session
+    ///   runs unauthenticated rather than failing.
+    /// - No DTMF: `sendDTMF` throws.
     ///
     /// - Parameters:
-    ///   - secret: the operator's EchoLink account password. Empty means "no
-    ///     directory login", which is a supported way to run.
-    ///   - proxy: the proxy to tunnel through, resolved by ``ProxyPicker``.
-    ///     `nil` is a caller that has not sourced one, which cannot be made to
-    ///     work and is reported as such.
-    ///   - configuration: injectable for tests. The fields that belong to the
-    ///     operator — callsign, name, location, watchdog, and the directory
-    ///     pair — are overwritten from `identity`, `transmitTimeout` and
-    ///     `settings` regardless, so what a caller
-    ///     can usefully supply here is the rest: the jitter buffer, the
-    ///     leveller, the tool string, the node-answer timings.
+    ///   - secret: the account password; empty means no directory login.
+    ///   - proxy: resolved by ``ProxyPicker``; `nil` throws.
+    ///   - configuration: for tests. The operator's fields (callsign, name,
+    ///     location, watchdog, directory pair) are overwritten regardless.
     static func makeEchoLinkLink(
         settings: NodeSettings,
         identity: OperatorIdentity,
@@ -563,10 +434,7 @@ final class CompositionRoot {
             throw EchoLinkLinkError.missingProxyHost
         }
 
-        // The all-or-nothing pairing, resolved before it can reach the library.
-        // `EchoLinkPeerAddress(_:)` is failable, so a half-typed server address
-        // lands in the same bucket as an absent one: no login, rather than a
-        // connect that throws.
+        // All or nothing; a server address that fails to parse counts as absent.
         var accountPassword: EchoLinkAccountPassword? =
             secret.isEmpty ? nil : EchoLinkAccountPassword(secret)
         var directoryServer: EchoLinkPeerAddress? =
@@ -639,27 +507,19 @@ final class CompositionRoot {
             })
     }
 
-    /// The Codec 2 3200 conformance the M17 path encodes and decodes with:
-    /// `M17Kit.WeebillVoiceCodec`, the library's pure-Swift Codec 2 (M17-7). See
-    /// docs/CODEC2.md.
-    ///
-    /// Not `private`, so `M17CodecIntegrationTests` can assert the fit against
-    /// the codec that is actually injected rather than against a named type.
+    /// The M17 path's Codec 2 3200: the library's pure-Swift
+    /// `WeebillVoiceCodec` (M17-7). Not `private`, so a test can check the
+    /// codec actually injected.
     static func makeVoiceCodec() throws -> any VoiceCodec {
         return try WeebillVoiceCodec()
     }
 
-    /// The GSM 06.10 conformance EchoLink audio needs. A separate function only
-    /// so the two codec decisions read alike; `GSMVoiceCodec.init` can still
-    /// fail, since the C encoder and decoder are heap-allocated.
+    /// EchoLink's GSM 06.10 codec. Throws if the C state fails to allocate.
     private static func makeGSMVoiceCodec() throws -> any VoiceCodec {
         try GSMVoiceCodec()
     }
 
     /// Builds a link for whichever mode the settings name.
-    ///
-    /// The one place the app turns a mode into a concrete client, and the
-    /// reason ``RadioLink`` stopped being generic — see its doc comment.
     static func makeLink(
         settings: NodeSettings,
         identity: OperatorIdentity,
@@ -683,18 +543,13 @@ final class CompositionRoot {
     }
 }
 
-/// What can go wrong building an EchoLink link, in the app's own vocabulary.
-///
-/// Separate from ``M17LinkError`` rather than folded into it, so error text
-/// does not drift between unrelated mistakes on different forms.
+/// What can go wrong building an EchoLink link.
 enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
-    /// `settings.peer` is not four decimal octets. The EchoLink proxy carries
-    /// the peer as raw address bytes, and nothing in the path resolves DNS.
+    /// `settings.peer` is not four decimal octets.
     case invalidPeerAddress(String)
 
-    /// No proxy was sourced. ``ProxyPicker`` resolves one and stops when it
-    /// cannot; this is the backstop, worth having because the failure without
-    /// it happens inside the transport, as a socket error rather than this one.
+    /// No proxy was sourced. A backstop behind ``ProxyPicker``, which would
+    /// otherwise surface as a socket error.
     case missingProxyHost
 
     /// DTMF was attempted on a mode that has no such thing.
@@ -721,10 +576,9 @@ enum EchoLinkLinkError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// What can go wrong building an M17 link, in the app's own vocabulary.
+/// What can go wrong building an M17 link.
 enum M17LinkError: Error, Equatable, CustomStringConvertible {
-    /// The module is not a single letter. `NodeSettings.validated()` should
-    /// have caught this; this is the backstop.
+    /// The module is not a single letter; a backstop behind validation.
     case invalidModule(String)
 
     /// DTMF was attempted on a mode that has no such thing.
@@ -740,19 +594,12 @@ enum M17LinkError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// The `M17ClientEvent` → ``RadioLinkEvent`` translation, alongside the IAX2
-/// one below and for the same reason.
-///
-/// M17 says things IAX2 has no word for. A reflector module is a shared
-/// channel, so the app is told *who* is transmitting and when they stop —
-/// which the app renders into the vocabulary it already has rather than
-/// growing cases only one mode can ever produce.
+/// The `M17ClientEvent` → ``RadioLinkEvent`` translation.
 extension RadioLinkEvent {
     fileprivate init?(_ event: M17ClientEvent) {
         switch event {
         case .linked:
-            // The codec is not negotiated in M17 — a stream frame carries
-            // Codec2 3200 by definition — so it is named rather than reported.
+            // Not negotiated: an M17 voice stream is Codec 2 3200.
             self = .connected(codec: "Codec2 3200")
         case .transmitting:
             self = .transmitting
@@ -774,18 +621,13 @@ extension RadioLinkEvent {
     }
 }
 
-/// The `IAX2ClientEvent` → ``RadioLinkEvent`` translation. Lives here because
-/// this is the only file permitted to name the left-hand side.
-///
-/// Returns `nil` for events the app has nothing to do with yet, rather than
-/// inventing a case for them — a case nobody displays is a case that rots.
+/// The `IAX2ClientEvent` → ``RadioLinkEvent`` translation; `nil` for events
+/// the app does not use.
 extension RadioLinkEvent {
     fileprivate init?(_ event: IAX2ClientEvent) {
         switch event {
         case .connected(let format):
-            // `MediaFormat.description` names the RFC's codecs and falls back to
-            // the raw bitmask for anything it does not recognise, which is
-            // exactly what someone staring at an unexpected negotiation needs.
+            // Names the RFC's codecs, or the raw bitmask for anything unknown.
             self = .connected(codec: format.map(String.init(describing:)))
         case .transmitting:
             self = .transmitting
@@ -803,32 +645,20 @@ extension RadioLinkEvent {
     }
 }
 
-/// The `EchoLinkClientEvent` → ``RadioLinkEvent`` translation, the third of
-/// three and for the same reason as the other two.
+/// The `EchoLinkClientEvent` → ``RadioLinkEvent`` translation.
 ///
-/// EchoLink is point-to-point like IAX2, but narrates its connect sequence the
-/// way M17 does, so what matters here is what is deliberately not forwarded:
-///
-/// - **`connecting` and `directoryLoggedIn` are `nil`.** Both happen inside
-///   `connect(to:)`, which has not returned yet, so the session is already
-///   showing "Connecting" and there is nothing more to say.
-/// - **`stationInfo` is `nil`, which loses something.** It is the `oNDATA`
-///   free-text description the far node sends, often several lines, and the
-///   only place it could go is ``RadioLinkEvent/remoteStation(callsign:)`` —
-///   which would make the identity from ``nodeAnswered`` worse, not better. It
-///   is dropped until ``RadioLinkEvent`` has somewhere honest to put it.
-/// - **`talkspurtStarted` becomes `receiving`, not a station change.** EchoLink
-///   identifies the *session*, not each over — there is no per-talkspurt
-///   station identity on the audio channel — so the station shown for the
-///   whole session stays the one from ``nodeAnswered``.
+/// - `connecting` and `directoryLoggedIn` happen inside `connect(to:)`, which
+///   the session already shows, so they are dropped.
+/// - `stationInfo`, the far node's free-text description, is dropped:
+///   ``RadioLinkEvent`` has nowhere to put it but the station identity.
+/// - `talkspurtStarted` is only `receiving`: EchoLink identifies the session,
+///   not each over, so the station stays the one from `nodeAnswered`.
 extension RadioLinkEvent {
     fileprivate init?(_ event: EchoLinkClientEvent) {
         switch event {
         case .connected:
-            // Named rather than reported, as in M17: EchoLink negotiates no
-            // codec — GSM 06.10 at 8 kHz is what an audio packet contains by
-            // definition. The node name the event carries is dropped, because
-            // the operator chose the destination and already knows it.
+            // Not negotiated: EchoLink audio is GSM 06.10. The node name is
+            // dropped; the operator chose the destination.
             self = .connected(codec: "GSM 06.10")
         case .transmitting:
             self = .transmitting
@@ -837,13 +667,10 @@ extension RadioLinkEvent {
         case .transmitTimedOut(let timeout):
             self = .transmitWatchdogExpired(timeout)
         case .nodeAnswered(let name):
-            // The far end identifying itself in its SDES, which is as close to
-            // "who am I talking to" as this protocol gets.
+            // The far end's SDES identity.
             self = .remoteStation(callsign: name)
         case .disconnected(let reason):
-            // `EchoLinkDisconnectReason` is already prose the library wrote for
-            // an operator to read — "the node said goodbye" — so it is passed
-            // through rather than re-worded here.
+            // Already operator-facing prose.
             self = .disconnected(reason: reason.description)
         case .connecting, .directoryLoggedIn, .stationInfo:
             return nil
@@ -851,19 +678,13 @@ extension RadioLinkEvent {
     }
 }
 
-/// The real EchoLink station directory (EL-11).
+/// The real EchoLink station directory (EL-11): a directory-only session
+/// through the proxy, which contacts no node and transmits nothing.
 ///
-/// The listing arrives down a directory-server session tunnelled inside the
-/// same proxy connection a QSO would use. `EchoLinkClient` opens one *without*
-/// contacting a node (`SessionMode.directoryOnly`), so browsing transmits
-/// nothing and disturbs no node.
-///
-/// A client is single-session, so this builds one per fetch and disposes of it
-/// even when the fetch throws — public proxies are single-user, so an
-/// abandoned session is one nobody else can use.
+/// One client per fetch, disconnected even when the fetch throws — a public
+/// proxy is single-user, so an abandoned session blocks it for everyone.
 struct EchoLinkStationDirectory: StationDirectory {
-    /// Turns the directory server's host name into the address the library
-    /// takes. Injectable so a test never asks DNS anything.
+    /// Resolves the directory server's name; injectable so tests skip DNS.
     private let resolver: any HostResolver
 
     init(resolver: any HostResolver = SystemHostResolver()) {
@@ -880,18 +701,14 @@ struct EchoLinkStationDirectory: StationDirectory {
             throw missing
         }
 
-        // The operator may have typed a name. The library takes four octets and
-        // resolves nothing, so this is where a name becomes an address — the
-        // same step `RadioSession.connect()` does for the QSO path.
+        // The library takes four octets and resolves nothing.
         let address = try await resolver.ipv4Address(for: settings.directoryServer)
         guard let directoryServer = EchoLinkPeerAddress(address) else {
             throw StationDirectoryError.missingDirectoryServer
         }
 
-        // **`normalisedCallsign`, not `callsign`** (APP-14): matches the
-        // uppercasing `identity.validated()` applies on the QSO path, so the
-        // proxy login and the directory login line authenticate the same way
-        // regardless of the case the operator typed.
+        // `normalisedCallsign` (APP-14): uppercased, as on the QSO path, so
+        // both authenticate the same whatever case was typed.
         var configuration = EchoLinkClient.Configuration(
             callsign: identity.normalisedCallsign)
         configuration.operatorName = identity.operatorName
@@ -904,9 +721,7 @@ struct EchoLinkStationDirectory: StationDirectory {
             configuration: configuration,
             clock: ContinuousClock())
 
-        // The peer goes unused in a directory-only session — no node is
-        // contacted — but a destination has to name one, and `unspecified` says
-        // "none" rather than picking an address nobody meant.
+        // Unused in a directory-only session, but a destination must name one.
         let destination = EchoLinkDestination(
             peer: .unspecified,
             node: settings.node,
@@ -927,23 +742,13 @@ struct EchoLinkStationDirectory: StationDirectory {
     }
 }
 
-/// Wraps IAX-13's `WebTransceiverTokenSource` — the POST to allstarlink.org that
-/// exchanges a portal login for a Web Transceiver token (APP-12, pane 1).
+/// Wraps the library's `WebTransceiverTokenSource`, which exchanges a portal
+/// login for a Web Transceiver token (APP-12).
 ///
-/// The same shape of adapter as ``EchoLinkPublicProxyFinder``, and here for the
-/// same two reasons: `AllStarLinkPortalTokenFetcher` and
-/// `WebTransceiverTokenError` are library types, which only this file may name,
-/// and translating gives the app an error vocabulary of its own.
-///
-/// **The library owns the request.** Nothing here builds a URL, a body or a
-/// header. The endpoint is named `legacy`, and AllStarLink's replacement
-/// project (OQ-10, caveat 2) should arrive as a second conformance to
-/// `WebTransceiverTokenSource` inside the library, injected below — this file
-/// should not have to change at all.
+/// The library owns the request; a replacement endpoint (OQ-10, caveat 2)
+/// would be another conformance injected here, with no change to this file.
 struct AllStarLinkPortalLogin: PortalLogin {
-    /// Injectable so a test can drive the translation without a network. The
-    /// default is the library's real endpoint, which is HTTPS-only and refuses
-    /// anything else before a password is sent.
+    /// Injectable for tests. The default endpoint is HTTPS-only.
     private let source: any WebTransceiverTokenSource
 
     init(source: any WebTransceiverTokenSource = AllStarLinkPortalTokenFetcher()) {
@@ -952,29 +757,21 @@ struct AllStarLinkPortalLogin: PortalLogin {
 
     func token(callsign: String, password: String) async throws -> String {
         do {
-            // `.value` rather than the token type: `WebTransceiverToken` may not
-            // travel above this file, and what the app does with it is store the
-            // string in the Keychain and hand it back as a calling name. Its
-            // `description` is redacted, so this unwrap is the one place that
-            // could leak it — and it goes straight to `SecretStore`.
+            // `.value`, because `WebTransceiverToken` may not leave this file.
+            // Its `description` is redacted, so this unwrap is the one place
+            // that could leak it; the caller files it straight in the Keychain.
             return try await source.token(username: callsign, password: password).value
         } catch let error as WebTransceiverTokenError {
             throw PortalLoginFailure(error)
         }
-        // Anything else — a `URLError` that escaped the library, a cancellation —
-        // propagates, and `PortalLoginController` reports it as `.unreachable`,
-        // which is what an unclassifiable failure to reach a web service is.
+        // Anything else propagates; `PortalLoginController` reports it as
+        // `.unreachable`.
     }
 }
 
 extension PortalLoginFailure {
-    /// The library's five cases in the app's four, as ``PortalLoginFailure``
-    /// documents.
-    ///
-    /// The merge is the app making a decision the library should not: `Invalid
-    /// JSON payload` and `Invalid JSON fields` are the same news to an operator —
-    /// the login service has changed and nothing they type will help — while a
-    /// wrong password is the one case where re-typing is the answer.
+    /// The library's error cases in the app's, merging those that mean the
+    /// same to an operator.
     init(_ error: WebTransceiverTokenError) {
         switch error {
         case .loginFailed:
@@ -986,30 +783,19 @@ extension PortalLoginFailure {
         case .malformedResponse(let detail), .requestFailed(let detail):
             self = .unreachable(detail)
         case .insecureEndpoint:
-            // Only reachable through an injected non-HTTPS endpoint, which the
-            // shipping wiring cannot produce. Reported as a changed endpoint
-            // rather than as unreachable, because it is a configuration fault
-            // and the operator's remedy is the same one: the paste field still
-            // works.
+            // Only reachable with an injected non-HTTPS endpoint. A
+            // configuration fault, with the same remedy: paste a token.
             self = .endpointChanged
         }
     }
 }
 
-/// The real public proxy finder (EL-12).
-///
-/// Wraps `EchoLinkProxySelector`, which fetches echolink.org's list, keeps the
-/// entries advertised as public and ready, sorts them by distance, and probes
-/// them in batches until one answers.
-///
-/// **Why this is a `CompositionRoot` type, not a `NetworkClient` capability.**
-/// Proxy selection produces a host and port for an `EchoLinkDestination`,
-/// meaningless for IAX2 and M17, so the library leaves it below the seam: the
-/// root picks the proxy and fills in the field, and the view never meets an
-/// `EchoLinkPublicProxy`.
+/// The real public proxy finder (EL-12), over the library's
+/// `EchoLinkProxySelector`: fetch the list, keep public and ready entries,
+/// probe the nearest in batches until one answers. EchoLink-only, so not a
+/// `NetworkClient` capability.
 struct EchoLinkPublicProxyFinder: ProxyFinder {
-    /// Injectable so a test can drive the translation without a network. The
-    /// default is the library's real endpoint and a `Network.framework` probe.
+    /// Injectable for tests.
     private let selector: EchoLinkProxySelector
 
     init(selector: EchoLinkProxySelector = EchoLinkProxySelector()) {
@@ -1018,9 +804,7 @@ struct EchoLinkPublicProxyFinder: ProxyFinder {
 
     func fastestProxy(onProgress: @escaping @Sendable (Int) -> Void) async throws -> ProxyCandidate
     {
-        // The library reports each batch it is about to probe; the app counts.
-        // A running total is what the operator can read at a glance, and it
-        // keeps `EchoLinkPublicProxy` from travelling up to the view.
+        // The library reports each batch; the app keeps the running total.
         let probed = ProbeTally()
 
         do {
@@ -1039,10 +823,8 @@ struct EchoLinkPublicProxyFinder: ProxyFinder {
     }
 }
 
-/// A counter the library's progress callback can reach from any task.
-///
-/// `selectFastest(onProgress:)` documents that it calls back "on an arbitrary
-/// task", so the tally it feeds has to be safe to touch from one.
+/// A counter safe to touch from the arbitrary task the progress callback
+/// runs on.
 private final class ProbeTally: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
@@ -1062,10 +844,8 @@ private final class ProbeTally: @unchecked Sendable {
 }
 
 extension ProxyFinderError {
-    /// Translates the library's outcome into the app's.
-    ///
-    /// `probed` is carried from the app's own tally rather than read off the
-    /// error, so the two cases agree about the number the operator is shown.
+    /// Translates the library's outcome; `probed` is the app's tally, so the
+    /// count shown agrees with the progress count.
     fileprivate init(_ error: EchoLinkProxyDirectoryError, probed: Int) {
         switch error {
         case .noProxyAvailable:
@@ -1073,9 +853,7 @@ extension ProxyFinderError {
         case .noProxyAnswered(let libraryProbed):
             self = .noneAnswered(probed: max(libraryProbed, probed))
         default:
-            // Everything else is the list itself failing — a fetch that did not
-            // arrive, or XML that did not parse. The library's own wording is
-            // better than anything this layer could invent about it.
+            // The list itself failed; the library's wording is used as is.
             self = .listUnavailable(detail: "\(error)")
         }
     }
@@ -1090,12 +868,8 @@ extension Duration {
 }
 
 extension DirectoryStation {
-    /// Translates a library station into the app's own.
-    ///
-    /// `status` is carried as the server's own word rather than parsed into a
-    /// pair of booleans, because the listing has more states than the two
-    /// anybody remembers, and inventing an enum here would be guessing at a
-    /// vocabulary the app does not own.
+    /// Translates a library station. `status` stays the server's own word: the
+    /// listing has more states than the app could safely enumerate.
     fileprivate init(_ station: EchoLinkStation) {
         self.init(
             callsign: station.callsign,
