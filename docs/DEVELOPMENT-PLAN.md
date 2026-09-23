@@ -1733,3 +1733,30 @@ and 737 macOS tests, 1 skipped each, as before. Before the tag existed, the app
 code at `107eaea` had already passed both suites against `v0.8.0` through a local
 path dependency, which the check does not apply to. So the version-resolved
 build is the only new thing tested here.
+
+
+### APP-35 — a comment pass over `Sources/`
+**Where:** `currawong`. **Needs:** nothing.
+
+On 2026-09-23 about half the non-blank lines in `Sources/` were comments
+(about 7,800 comment lines to 7,000 of code). Much of that was history: 485
+comment lines cited a task or fault ID, 145 used history wording ("used to", "no
+longer", "on air") and 33 carried a date. At least one claim was false. The
+`CompositionRoot` header said `NetworkClient` had no event stream, no received
+audio and no way in for captured audio, but the library has had all three since
+`v0.3.0` (RC-10).
+
+The rule is in `CLAUDE.md` under "Comments". `scripts/comment-only-diff.py`
+checks that a pass changes nothing but comments.
+
+Three examples went first, to calibrate the density: `RootView.detailColumn`,
+the `CompositionRoot` header, and `RadioSession.newChannel`. The rest goes one
+area at a time, in PRs containing only comment changes.
+
+**Not in this task:** code changes the pass turns up. The first is that the
+link factories in `CompositionRoot` map each client's concrete `events` rather
+than `NetworkClient.radioEvents`, which may make much of ``RadioLinkEvent``
+redundant. That is a design question and gets its own task.
+
+**Done when:** `Sources/` is at or under roughly 30% comment lines, no comment
+retells history, and every PR in the pass passes the comment-only check.

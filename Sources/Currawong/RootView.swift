@@ -356,75 +356,23 @@ struct RootView: View {
         }
     }
 
-    /// The session pane and whichever pane is chosen. **On macOS the picker
-    /// that chooses is in the window toolbar, not in this column** — see below.
+    /// The session pane, with the chosen pane under it.
     ///
-    /// ## Why the picker left the column
+    /// The session pane is rigid (about 620 points), and a `VStack` that cannot
+    /// fit a rigid child centres it, pushing the top of the column off-screen.
+    /// So nothing that must stay reachable goes at the top, and the column
+    /// sets no `minHeight`: it takes the height it is given, and the pane under
+    /// the session pane is what compresses — a directory or settings list,
+    /// both of which scroll. BU-12 is the mechanism; APP-15 and BU-19 are the
+    /// fixes that settled this, and their commits have the history.
     ///
-    /// The session pane is rigid — status, meters, a PTT button with a
-    /// `minHeight`, and since APP-3's sibling work a link button too — so it
-    /// needs something like 620 points and cannot give any of them back. In a
-    /// window shorter than the column, a `VStack` does not shrink the rigid
-    /// child: it **centres** what it could not fit, so the column spills off
-    /// *both* edges. Whatever is first in the stack goes off the top.
-    ///
-    /// That cost an operator the only way out of a pane. The picker sat first,
-    /// went over the top edge, and someone on Reflectors had nothing on screen
-    /// that could take them off it — no back button, twice reported.
-    ///
-    /// It was fixed twice inside the column and regressed both times, because
-    /// the fix was always a number or an alignment holding a rigid column
-    /// against a window that can be any height:
-    ///
-    /// 1. Moving the picker to the top of the stack (it then went off the top
-    ///    instead of the bottom, in M17 only, because the Reflectors pane is
-    ///    taller than Stations).
-    /// 2. `alignment: .top` on the stack's frame, plus `minHeight: 620` — which
-    ///    held until `SessionLinkControl` added a button row to the session
-    ///    pane and nobody re-measured the 620. The button only renders once
-    ///    there is a `lastConnectedName`, so a fresh launch fit and a launch
-    ///    that had connected to anything did not. That is the worst shape a
-    ///    layout bug can take: invisible until the app has been used.
-    ///
-    /// **The toolbar is not a third number.** A toolbar item cannot be laid out
-    /// off-screen by the column's overflow, at any window height, with any
-    /// future session-pane content — so the class of bug is gone rather than
-    /// this instance of it. It is also where macOS puts a view switcher.
-    ///
-    /// iPad keeps the inline picker: it uses this same split layout, but its
-    /// windows do not get short enough to overflow, and `.principal` in a
-    /// toolbar there competes with the navigation title.
-    ///
-    /// ## What is left in the column
-    ///
-    /// The column is still not a scroll view, and that is deliberate: the
-    /// status panel and the button that ends a transmission must not be
-    /// scrollable away while one is running.
-    ///
-    /// ## Why there is no `minHeight` any more
-    ///
-    /// There was one — 620 points, "what the session pane and a usable amount
-    /// of the tallest pane need" — and it was the BU-12 shape all over again on
-    /// an **iPad mini in landscape**, where the column has around 650 points to
-    /// work with and connecting adds the meters, the PTT button and the link
-    /// button at once. A `minHeight` larger than the window does not scroll and
-    /// does not clip at the bottom: the parent **centres** what it could not
-    /// fit, so the overflow is split between both edges and the status panel —
-    /// the LCD, the first thing in the pane — goes off the top. The operator
-    /// loses the display exactly when a link comes up, which is when they are
-    /// looking at it.
-    ///
-    /// A number cannot be right here, because the column has to hold two panes
-    /// on a Mac window and one on an iPad mini. So the column now takes what it
-    /// is given and lets the stack distribute it: the session pane is rigid and
-    /// keeps its size (the PTT button's own `minHeight` is the floor that
-    /// matters, and it is 190), and what compresses is whichever pane is under
-    /// it — which is a directory or a settings list, both of which scroll.
-    /// Nothing load-bearing is in the part that gives.
-    ///
-    /// The `.session` pane is the other half of the same fix: connected, there
-    /// *is* no pane under the session pane, so on the display where the height
-    /// was tightest the column is holding one thing.
+    /// - On macOS the pane picker is in the window toolbar, which the column's
+    ///   overflow cannot push off-screen at any window height. iPad keeps it
+    ///   inline: its windows are not short enough to overflow.
+    /// - The column is not a scroll view, so the status panel and the button
+    ///   that ends a transmission cannot be scrolled away mid-transmission.
+    /// - The `.session` pane leaves nothing under the session pane, for the
+    ///   displays where the height is tightest.
     private var detailColumn: some View {
         VStack(spacing: 0) {
             #if !os(macOS)
@@ -440,22 +388,11 @@ struct RootView: View {
                 .padding(20)
                 .paneColumn()
 
-            // `.session` is the radio with the column to itself: no divider and
-            // no pane under it, so the meters and the PTT button get the height
-            // a directory would otherwise have taken.
-            //
-            // **Written as one branch below the session pane, not two branches
-            // around it.** The obvious shape — `if .session { pane } else {
-            // pane; Divider(); content }` — puts ``SessionPane`` in two arms of
-            // a conditional, which is two view identities to SwiftUI, so moving
-            // the picker between Radio and anything else would tear the pane
-            // down and build it again. ``PushToTalkButton``'s
-            // `onDisappear { onRelease(.viewDisappeared) }` would fire on the
-            // way past: **changing pane while keyed would unkey the radio**,
-            // with the button still on screen the whole time. Safe, and wrong —
-            // the tab layout unkeys on a tab change because the button really
-            // does leave, and here it does not. One position in the stack keeps
-            // one identity.
+            // One branch below the session pane, not two around it: putting
+            // ``SessionPane`` in both arms of an `if` gives it two identities,
+            // so changing pane would rebuild it, fire ``PushToTalkButton``'s
+            // `onDisappear`, and unkey the radio with the button still on
+            // screen.
             if effectiveDetailPane != .session {
                 Divider()
 

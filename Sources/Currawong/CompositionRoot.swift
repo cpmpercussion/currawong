@@ -8,67 +8,33 @@ import RadioCore
 
 /// The one object in Currawong allowed to name a concrete network.
 ///
-/// `RadioCore.NetworkClient` is the boundary between the app and the protocol
-/// libraries: views and view models talk to `connect(to:)`, `startTransmit()`,
-/// `stopTransmit()`, `disconnect()` and `state`, and know nothing about RFC
-/// 5456. Somebody, though, has to decide *which* client is on the other side of
-/// that protocol and build it — and this is that somebody. It is the single
-/// documented exception to the rule, and it is why `import IAX2Kit`,
-/// `import M17Kit` and `import EchoLinkKit` appear in this file and nowhere
-/// else.
+/// Views and view models see ``RadioSession``, ``RadioLink`` and
+/// ``RadioLinkEvent``, never a protocol library. This file is the documented
+/// exception: it is the only place `IAX2Kit`, `M17Kit` and `EchoLinkKit` are
+/// imported, and ``makeLink(settings:identity:credentials:)`` is where
+/// `settings.mode` chooses an `IAX2Client`, `M17Client` or `EchoLinkClient`.
+/// All three factories return the same non-generic ``RadioLink``.
 ///
-/// ## Three modes
+/// ## Why the factories name concrete clients
 ///
-/// `settings.mode` chooses between an `IAX2Client`, an `M17Client` and an
-/// `EchoLinkClient`, and ``makeLink(settings:identity:credentials:)`` is the switch. Nothing
-/// above this file knows there is more than one library: all three factories
-/// return the same non-generic ``RadioLink``, which is exactly why that type
-/// stopped being generic — see its doc comment.
+/// Each factory maps its client's own `events` stream into ``RadioLinkEvent``,
+/// and wires DTMF sending to the client's `send(dtmf:)`. `NetworkClient` has
+/// generic equivalents for events, received audio and captured audio
+/// (`radioEvents`, `receivedAudio`, `send(pcm:)`), which the factories do not
+/// yet use. Sending DTMF (FR-1.5) is still not on the protocol, so that one
+/// genuinely needs the concrete type.
 ///
-/// The third one arriving without any change to ``RadioLink`` or
-/// ``RadioLinkEvent`` is the evidence that the seam is in the right place. What
-/// it did cost is below: two operator details that only EchoLink transmits, and
-/// one pairing rule the library enforces by throwing.
+/// ## Also owned here
 ///
-/// ## What this file has to do that `NetworkClient` should arguably do for it
-///
-/// `NetworkClient` covers connecting and keying, and stops there. It has no
-/// event stream, no received-audio stream and no way to hand captured audio
-/// back — but an app needs all three, and `IAX2Client` has all three on its
-/// concrete type. So the translation happens here, into the app's own
-/// ``RadioLinkEvent`` and ``RadioLink``, and everything above this file stays
-/// protocol-agnostic. Three specific gaps, reported rather than papered over:
-///
-/// 1. **No event stream.** `IAX2Client.events` carries the SF-1 watchdog
-///    expiry, which the UI is required to show. Reaching it means naming the
-///    concrete type.
-/// 2. **No received audio.** `IAX2Client.receivedAudio` is the only way to get
-///    decoded PCM out.
-/// 3. **No way in for captured audio.** `IAX2Client.send(pcm:)` is not on the
-///    protocol, so the microphone cannot be wired to a generic client.
-/// 4. **No DTMF.** `IAX2Client.send(dtmf:)` is not on the protocol either, and
-///    FR-1.5 is not optional for a client that has to command a node.
-///
-/// A `NetworkClient` with an associated event enum, a `receivedAudio` stream,
-/// a `send(pcm:)` and a `send(dtmf:)` requirement would let ``RadioSession``
-/// build its own link and delete most of this file. Until then, this is the
-/// containment.
-///
-/// ## What this file also owns
-///
-/// The **PTT input controllers** (PT-2, PT-3, PT-4). They are not protocol
-/// knowledge, but they are the other thing with a lifetime as long as the
-/// process and a wire that has to be connected exactly once: each takes a weak
-/// ``PTTSink``, and the session is it. Assembling that here is what makes SF-2
-/// real — before it, `BLEPTTController` computed correct press and release
-/// edges and delivered them to a `nil` sink.
+/// The PTT input controllers (PT-2, PT-3, PT-4), which live as long as the
+/// process and must be wired exactly once, each to a weak ``PTTSink`` — the
+/// session. That wiring is what delivers SF-2's release edges.
 ///
 /// ## Client lifetime
 ///
-/// One client per connection, not one per app. `IAX2Client.disconnect()` shuts
-/// its client down permanently — the streams finish and a later `connect(to:)`
-/// throws `clientShutDown` — so reconnecting means a new client. That is why
-/// this type hands ``RadioSession`` a *factory* rather than a client.
+/// One client per connection. `NetworkClient.disconnect()` is terminal — it
+/// finishes the client's streams for good — so reconnecting needs a new client,
+/// and ``RadioSession`` is handed a factory rather than a client.
 @MainActor
 final class CompositionRoot {
     /// The view model everything else in the app is built on.
