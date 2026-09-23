@@ -4,17 +4,10 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-/// **There are three states here, not two.**
-///
-/// On air, not keyed, and *nobody knows*. A `Bool` would force stale into one
-/// of the other two, and whichever is picked is an assertion the view has no
-/// grounds for — "not keyed" is the worse pick, since a stale activity's
-/// likeliest cause is an app that died mid-over, and that reading is the one
-/// that gets an operator to stop checking.
-///
-/// So `unknown` renders as itself, in every one of the five places the
-/// activity is drawn: expanded, compact leading, compact trailing, minimal,
-/// and the lock screen.
+/// **Three states, not two:** on air, not keyed, and unknown. A `Bool` would
+/// force a stale activity — most likely an app that died mid-over — to claim
+/// one of the others, and "not keyed" would stop the operator checking. So
+/// `unknown` renders as itself in all five presentations.
 enum TransmitActivityPresentation: Equatable {
     /// The client is keyed. The only state that may be red.
     case onAir
@@ -22,8 +15,8 @@ enum TransmitActivityPresentation: Equatable {
     /// The client is not keyed, and the app is here to say so.
     case notKeyed
 
-    /// The app has stopped updating this — `ActivityKit`'s `isStale`. It is not
-    /// a transmit state and must not be rendered as one.
+    /// ActivityKit's `isStale`: the app has stopped updating this. Not a
+    /// transmit state, and never rendered as one.
     case unknown
 
     init(state: TransmitActivityState, isStale: Bool) {
@@ -44,9 +37,8 @@ enum TransmitActivityPresentation: Equatable {
         }
     }
 
-    /// **Red means "your voice is going out" and nothing else may borrow it.**
-    /// `unknown` gets a caution colour rather than a calm one — it is not
-    /// reassurance, it is an instruction to go and look.
+    /// Red means on air and nothing else. `unknown` gets a caution colour: an
+    /// instruction to look, not reassurance.
     var accent: Color {
         switch self {
         case .onAir: return .red
@@ -73,9 +65,7 @@ enum TransmitActivityPresentation: Equatable {
         }
     }
 
-    /// The compact trailing glyph, which is the whole of the activity on a
-    /// phone doing something else. `nil` where there is nothing worth two
-    /// characters.
+    /// The compact trailing glyph; `nil` where there is nothing worth showing.
     var badge: String? {
         switch self {
         case .onAir: return "TX"
@@ -84,29 +74,17 @@ enum TransmitActivityPresentation: Equatable {
         }
     }
 
-    /// Whether the watchdog countdown means anything. It does not if nothing is
-    /// keyed, and it does not if the app has stopped driving this — a leash
-    /// counting down against a transmission nobody can confirm is worse than no
-    /// number at all.
+    /// Whether to show the watchdog countdown: only when on air and not stale.
     var showsWatchdog: Bool { self == .onAir }
 }
 
 /// **SF-4.** Transmit state on a locked iPhone.
 ///
-/// This view decides nothing about the radio: every judgement about *transmit*
-/// is made in the app, in ``RadioSession/desiredActivity`` and
-/// ``TransmitStatusPresentation``, and arrives as ``TransmitActivityState``. A
-/// widget extension is a separate process a unit test cannot drive, so
-/// anything decided here would be an untested rule about when the banner is
-/// red, which SF-4 cannot tolerate.
-///
-/// The one thing it must judge is `context.isStale` — the one piece of
-/// information the app cannot supply, meaning the app has stopped updating
-/// this. That is the app-termination case: a Live Activity outlives its
-/// process, so a Currawong killed mid-over leaves this on the lock screen with
-/// nobody behind it. The app clears the leftover at its next launch
-/// (`TransmitActivityPresenting.endOrphans()`); until then, this is what
-/// stands between the operator and a display that lies.
+/// Decides nothing about transmit: that is made in the app
+/// (``RadioSession/desiredActivity``, ``TransmitStatusPresentation``), where it
+/// is tested, and arrives as ``TransmitActivityState``. The one judgement here
+/// is `context.isStale` — an app killed mid-over leaves the activity up until
+/// its next launch ends it, and stale must not read as either state.
 struct TransmitActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TransmitActivityAttributes.self) { context in
@@ -132,9 +110,7 @@ struct TransmitActivityWidget: Widget {
                     if let deadline = context.state.watchdogDeadline,
                         presentation.showsWatchdog
                     {
-                        // SF-1's leash, counting down. Rendered from the date
-                        // rather than pushed as an update every second, so a
-                        // running clock costs no ActivityKit budget at all.
+                        // SF-1 countdown, rendered from the date: no updates.
                         Text(timerInterval: Date()...deadline, countsDown: true)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -161,11 +137,7 @@ struct TransmitActivityWidget: Widget {
         }
     }
 
-    /// What the operator is told when the app has stopped driving this.
-    ///
-    /// Deliberately does **not** say "transmitting" or "not transmitting":
-    /// nobody knows which, and guessing either way is the failure this whole
-    /// requirement is about. It says the state is unknown and where to find out.
+    /// Shown when stale. Claims neither state — nobody knows which.
     static let staleDetail = "Currawong is no longer updating this. Open the app to check."
 
     /// The app's own sentence, except when the app is the thing that has stopped.
@@ -176,10 +148,7 @@ struct TransmitActivityWidget: Widget {
         presentation == .unknown ? staleDetail : state.detail
     }
 
-    /// Red **only** while genuinely on air. Both other states get the dark
-    /// ground and say what they mean in the foreground — red is the colour that
-    /// means "you are transmitting", and it may not be shown by a view that does
-    /// not know.
+    /// Red only while on air; the other states use the dark ground.
     private static func background(for presentation: TransmitActivityPresentation) -> Color {
         presentation == .onAir ? .red : Color(white: 0.12)
     }
@@ -201,10 +170,7 @@ struct LockScreenView: View {
                     .monospaced()
                 Spacer()
                 if presentation == .onAir {
-                    // Elapsed on the *hold*, not the key-down: a route-change
-                    // recovery keys down again under a button that was never
-                    // released, and a clock that restarted there would tell the
-                    // operator their over is younger than it is.
+                    // Elapsed on the hold, not the key-down; see `holdBegan`.
                     Text(timerInterval: state.holdBegan...Date.distantFuture, countsDown: false)
                         .font(.headline.monospacedDigit())
                 }
@@ -237,8 +203,7 @@ struct LockScreenView: View {
         .accessibilityLabel(accessibilityDescription)
     }
 
-    /// Spoken aloud, and the wording matters more here than on screen: this is
-    /// what an operator hears when the phone is in a pocket.
+    /// What VoiceOver reads — all an operator gets with the phone in a pocket.
     private var accessibilityDescription: String {
         if presentation == .unknown {
             return "Transmit state unknown. \(TransmitActivityWidget.staleDetail)"

@@ -5,53 +5,32 @@
 import ActivityKit
 import Foundation
 
-/// **SF-4.** The real ``TransmitActivityPresenting``, over `ActivityKit`.
+/// **SF-4.** The real ``TransmitActivityPresenting``, over ActivityKit.
 ///
-/// Nothing here decides anything: it starts, updates and ends the one activity
-/// the controller asks for. That is deliberate — this file cannot be run by a
-/// test (there is no ActivityKit on macOS and no lock screen in a simulator test
-/// run), so the less judgement it holds, the more of APP-3 is covered by
-/// ``TransmitActivityControllerTests`` and by the six end-path tests in
-/// ``RadioSessionActivityTests``.
+/// Decides nothing: no test can run it, so the judgement lives in
+/// ``TransmitActivityController`` where tests can reach it.
 ///
-/// ## Why the deployment floor is 16.2, not 16.1
-///
-/// ActivityKit itself arrived in 16.1, but the floor is 16.2 because this file
-/// calls three things that landed there, all about the activity not lying:
-///
-/// * `ActivityContent`, the only way to set a **stale date**. A Live Activity
-///   outlives its process, so with no stale date a Currawong killed mid-over
-///   leaves a red TRANSMITTING banner with nothing behind it, indefinitely.
-/// * `update(_:)` taking that content, so the stale date moves with each
-///   key-down instead of being fixed at the start of the over.
-/// * `end(_:dismissalPolicy:)`, so an ended activity is **dismissed** rather
-///   than left on the lock screen showing its final state.
-///
-/// The 16.1-only API set would meet the letter of SF-4 and lose its point.
+/// The iOS floor is 16.2 for three APIs used here: `ActivityContent` (the only
+/// way to set a stale date, so an app killed mid-over does not leave a red
+/// banner up indefinitely), `update(_:)` taking it (so the stale date moves
+/// with each key-down), and `end(_:dismissalPolicy:)` (so an ended activity is
+/// dismissed rather than left showing its final state).
 @MainActor
 final class ActivityKitPresenter: TransmitActivityPresenting {
 
     /// The activity this process started, if any.
     private var activity: Activity<TransmitActivityAttributes>?
 
-    /// How long past the watchdog deadline the shown state may still be
-    /// believed.
-    ///
-    /// Once the watchdog has fired the library has unkeyed and the app has
-    /// ended the activity, so anything still on screen after this is an app that
-    /// is no longer running. The grace is for the round trip, not for the
-    /// operator.
+    /// How long past the watchdog deadline the shown state may be believed.
+    /// Past it, the app that should have ended the activity is not running.
     private static let staleGrace: TimeInterval = 5
 
-    /// How long a state that is not on air may be believed. A route-change
-    /// recovery either keys back down or gives up within
-    /// `RadioSession.routeSettleNanoseconds`; anything longer than this and
-    /// nobody is driving.
+    /// How long a not-on-air state may be believed: a route-change recovery
+    /// resolves within `RadioSession.routeSettleNanoseconds`.
     private static let unkeyedStaleWindow: TimeInterval = 10
 
     func start(_ request: TransmitActivityRequest) async {
-        // The operator can turn Live Activities off for the app, or for the
-        // device. Asking anyway throws, and a thrown error here is not news.
+        // Live Activities may be turned off for the app or the device.
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         let attributes = TransmitActivityAttributes(
@@ -62,9 +41,8 @@ final class ActivityKitPresenter: TransmitActivityPresenting {
                 content: Self.content(for: request.state),
                 pushType: nil)  // PD-2: no push entitlement, no `voip` mode.
         } catch {
-            // Fail *closed*: no activity is the safe failure, because the app's
-            // own transmit banner is still on screen and the operator has not
-            // been told something false.
+            // No activity is the safe failure: nothing false is shown, and the
+            // in-app banner still is.
             activity = nil
         }
     }
@@ -79,8 +57,7 @@ final class ActivityKitPresenter: TransmitActivityPresenting {
     }
 
     func endOrphans() async {
-        // Not `self.activity` — the point is the activities this process did
-        // *not* start, left behind by one that was terminated mid-over.
+        // Every activity, including ones a terminated process left behind.
         for orphan in Activity<TransmitActivityAttributes>.activities {
             await orphan.end(nil, dismissalPolicy: .immediate)
         }
