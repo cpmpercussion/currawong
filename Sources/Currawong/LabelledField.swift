@@ -6,11 +6,9 @@ import SwiftUI
 /// something quite different on macOS; laying it out by hand is the cheapest way
 /// to have one screen rather than two.
 ///
-/// It lived inside ``ConnectFormView`` as a private type until the settings
-/// screen (APP-12) needed the same rows. Promoted rather than copied: two
-/// spellings of one field layout is how two screens in one app come to look like
-/// two apps — and unlike `paneColumn()` in `RootView`, which is deliberately
-/// file-scoped because it is a layout decision about panes, this is a control.
+/// Shared with the settings screen (APP-12) rather than kept private to
+/// ``ConnectFormView``: two spellings of one field layout is how two screens in
+/// one app come to look like two apps.
 struct LabelledField<Content: View>: View {
     let label: String
     let systemImage: String
@@ -28,11 +26,10 @@ struct LabelledField<Content: View>: View {
 
             // A `Label` above a `TextField` is a visual association and not an
             // accessible one — SwiftUI gives the field its *placeholder* and
-            // nothing else, so VoiceOver announced "node.example.org, text
-            // field" with no way to know it was the host. Found while writing
-            // the on-air UI test (BU-8), which could not find a field called
-            // "Host" either, for exactly the same reason: if a screen reader
-            // cannot name the controls, nothing else can either.
+            // nothing else, so without this VoiceOver announces "node.example.org,
+            // text field" with no way to know it is the host (BU-8). If a screen
+            // reader cannot name the controls, a UI test looking for a field by
+            // name cannot either.
             content
                 .accessibilityLabel(label)
         }

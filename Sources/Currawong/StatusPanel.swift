@@ -5,33 +5,25 @@ import SwiftUI
 /// What the link is doing, in one box — laid out like a radio's front panel.
 ///
 /// **The destination is the headline**, the way a VFO frequency is the biggest
-/// thing on a rig and the mode is a small box beside it. That was not true of
-/// the first version: it led with the *connection state*, so the panel said
-/// "Connected" in bold without ever saying connected to what, while the answer
-/// sat in the channel list beside it — and in the compact layout the channel
-/// list is a different tab, so the answer was nowhere.
+/// thing on a rig and the mode is a small box beside it — the connection state
+/// on its own ("Connected") says nothing about connected to *what*, and in the
+/// compact layout the channel list that would answer it is a different tab.
 ///
-/// ## What is not here any more
+/// The transmit watchdog is not shown here: it is a *setting* (APP-12 moved it
+/// to the settings screen), and a number that cannot change while it is being
+/// read belongs there, not echoed on a status panel. The live form of SF-1 that
+/// would help an operator — seconds remaining before it unkeys — belongs on the
+/// transmit banner instead, while it is counting; ``ActivityKitPresenter``
+/// already computes that deadline for the Live Activity.
 ///
-/// This box used to be the pane split's answer to "where did the diagnostics
-/// go", and carried every loose line from the old single column. Two of them
-/// have since stopped earning the space:
+/// The codec rides on the address line while connected, rather than holding a
+/// line of its own: worth knowing once, on first contact with an unfamiliar
+/// node, and stale the moment the link drops.
 ///
-/// * **The transmit watchdog** is a *setting*, not a state — APP-12 moved it to
-///   the settings screen, and echoing it here only restated a number that
-///   cannot change while it is being read. The form of SF-1 that would help an
-///   operator is the live one, seconds remaining before it unkeys, and that
-///   belongs on the transmit banner where it is only shown while it is
-///   counting. ``ActivityKitPresenter`` already computes that deadline for the
-///   Live Activity; the banner does not show it yet.
-/// * **The codec** is worth knowing exactly once, on first contact with an
-///   unfamiliar node, and is stale the moment the link drops. So it rides on
-///   the address line while connected instead of holding a line of its own.
-///
-/// What stayed are the two *events* — why the last transmission stopped, why
-/// the link went away. Those are transient, they answer a question the operator
-/// is actually asking at the moment they appear, and neither is visible from
-/// anywhere else in the app.
+/// The two *events* that remain — why the last transmission stopped, why the
+/// link went away — are transient, answer a question the operator is actually
+/// asking at the moment they appear, and are not visible anywhere else in the
+/// app.
 struct StatusPanel: View {
     @ObservedObject var session: RadioSession
 

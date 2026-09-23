@@ -5,27 +5,19 @@ import SwiftUI
 /// The pane that is about *the radio right now*: what the link is doing, what
 /// stopped the last transmission, and the button that keys the transmitter.
 ///
-/// ## Why these things and nothing else
-///
-/// Everything here is either a safety message or the PTT button, and the two
-/// belong together because of what SF-3 and PT-1 need from the layout: the
-/// operator must be able to see that they are keyed, see why they stopped being
-/// keyed, and reach the control that stops it — without navigating. The connect
-/// form, the keypad and the station browser are all things you do *between*
-/// transmissions, so they live in other panes; this one is the one you look at
-/// while talking.
+/// Everything here is either a safety message or the PTT button — SF-3 and
+/// PT-1 need the operator to see that they are keyed, see why they stopped
+/// being keyed, and reach the control that stops it, without navigating. The
+/// connect form, the keypad and the station browser are things you do
+/// *between* transmissions, so they live in other panes; this one is the one
+/// you look at while talking.
 ///
 /// ## APP-18: the controls the state actually has
 ///
-/// This pane used to show all of it in every state, which made it the *union*
-/// of two radios rather than either one — and made the column rigid and tall
-/// enough to overflow a short window, which is the root cause APP-15 worked
-/// around by moving the pane picker to the toolbar.
-///
-/// It is now organised the way a rig is. **The status panel never hides**: one
-/// region that is always there and always current, anchored at the top, so a
-/// state change reads as the controls around the display changing rather than
-/// as the whole thing jumping. Everything else earns its place:
+/// Organised the way a rig is. **The status panel never hides**: one region
+/// that is always there and always current, anchored at the top, so a state
+/// change reads as the controls around the display changing rather than as
+/// the whole thing jumping. Everything else earns its place:
 ///
 /// * **Disconnected** — no level meters and no PTT button. A large slab reading
 ///   "Connect to a node first" is a control that advertises itself and then
@@ -36,9 +28,8 @@ import SwiftUI
 ///   the latter, the layout would change twice for one action, and the second
 ///   change would land while the operator was watching for the link to come up.
 ///
-/// The accessory row went into the status panel as ``AccessoryIndicator``. Its
-/// configuration was already on the settings screen (APP-12); what is left is a
-/// light, which is what it always was.
+/// The accessory row lives in the status panel as ``AccessoryIndicator``;
+/// configuration is on the settings screen (APP-12).
 ///
 /// ## What is deliberately not here
 ///
@@ -94,13 +85,11 @@ struct SessionPane: View {
             //
             // **A link that drops while the operator is keyed takes the PTT
             // button out of the hierarchy under a held finger.**
-            // ``PushToTalkButton`` ends with
-            // `.onDisappear { onRelease(.viewDisappeared) }`, which was written
-            // as a backstop for the tab layout and is load-bearing here: it is
-            // the only thing that unkeys in that case, because the gesture that
-            // would have reported the release is torn down with the button.
-            // `SessionPaneStateTests` drops the link while keyed and asserts
-            // the release.
+            // ``PushToTalkButton``'s `.onDisappear { onRelease(.viewDisappeared) }`
+            // is load-bearing here: it is the only thing that unkeys in that
+            // case, because the gesture that would have reported the release
+            // is torn down with the button. `SessionPaneStateTests` drops the
+            // link while keyed and asserts the release.
             if showsTransmitControls {
                 LevelMetersView(session: session)
 
@@ -176,12 +165,11 @@ struct SessionLinkButton: View {
     let action: () -> Void
 
     var body: some View {
-        // Prominent for the affirmative action only. Choosing a channel and then
-        // hunting for the way to call it was the complaint this answers — a
-        // bordered button under a large PTT slab did not read as the next step.
-        // Disconnect stays bordered: it is findable because it is red and in a
-        // fixed place, and a second filled slab under the PTT would compete with
-        // it for the glance SF-3 wants spent on the transmit state.
+        // Prominent for the affirmative action only, so the next step after
+        // choosing a channel reads as a next step. Disconnect stays bordered:
+        // it is findable because it is red and in a fixed place, and a second
+        // filled slab under the PTT would compete with it for the glance SF-3
+        // wants spent on the transmit state.
         //
         // Written as a branch over the whole button rather than a conditional
         // modifier, because `buttonStyle` takes different concrete types and

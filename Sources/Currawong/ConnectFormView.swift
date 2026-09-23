@@ -5,42 +5,26 @@ import SwiftUI
 /// The connect screen: where the node lives, who we are, and the one control
 /// that opens and closes the connection.
 ///
-/// This edits *one channel* — the draft `RadioSession` holds — and the list of
-/// them is `ChannelListView`'s job. **The draft is a working copy** (BU-9): what
-/// is typed here reaches the channel list when Save is pressed, and otherwise
-/// waits, including across a quit. Connecting will call whatever the form says,
-/// and will add it to the list if it is not there yet, but will not rewrite a
-/// channel that is.
+/// Edits *one channel* — the draft `RadioSession` holds. **The draft is a
+/// working copy** (BU-9): Save writes it to the channel list, and otherwise it
+/// waits, including across a quit. Connecting calls whatever the form says and
+/// adds it to the list if it is not there yet, without rewriting a channel that
+/// is.
 ///
-/// The one thing that would have been painful to change later, and so was never
-/// deferred, is *where the secret goes*: it is in the Keychain from the first
-/// commit, so there is never a migration out of `UserDefaults` to write.
+/// Shows only the fields the current `RadioMode` uses (`usesNodeNumber` /
+/// `usesModule` / `usesProxy`) — a visible field that does nothing sends the
+/// operator looking in the wrong place when the connection fails. In EchoLink,
+/// `host` and `port` are the **proxy's**, not the node's; the labels say so.
 ///
-/// ## Three modes, three sets of live fields
-///
-/// The form shows the third of `NodeSettings` the mode actually uses, per
-/// `RadioMode.usesNodeNumber` / `usesModule` / `usesProxy`. A field that is
-/// visible but does nothing is worse than an absent one: the operator fills it
-/// in, the connection fails somewhere else, and the field they typed into is
-/// the first place they will go looking.
-///
-/// EchoLink is where that matters most, because two of the fields it shares
-/// with the other modes *mean something different*: `host` and `port` are the
-/// **proxy's**, not the node's, and the node is named separately by callsign
-/// and by literal address. The labels say so rather than leaving the operator
-/// to infer it from a failed connection.
-///
-/// Fields lock while a connection is up. Editing the host under a live call
-/// would either do nothing (confusing) or silently apply to the next call
-/// (worse).
+/// Fields lock while a connection is up, so an edit cannot apply silently to
+/// the call already in progress.
 struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
-    /// Whether an EchoLink account password is stored (APP-12). The form no
-    /// longer edits it — the settings screen does — but it still says whether one
-    /// is set, because an EchoLink connection without it succeeds at every step
-    /// and is then unreachable.
+    /// Whether an EchoLink account password is stored (APP-12). Edited on the
+    /// settings screen, not here; shown because an EchoLink connection without
+    /// one succeeds at every step and is then unreachable.
     let isEchoLinkAccountConfigured: Bool
 
     /// The Web Transceiver token (APP-11). **Not part of ``settings``** and not
@@ -58,10 +42,9 @@ struct ConnectFormView: View {
 
     /// **BU-9.** Whether this channel differs from what is stored under it.
     ///
-    /// Drives both the Save button and the line above it. The line matters as
-    /// much as the button: the app deliberately no longer writes an edit back on
-    /// its own, so an operator has to be able to see that what they are looking
-    /// at is not what the channel list holds.
+    /// Drives the Save button and the notice above it: the app never writes an
+    /// edit back on its own, so the notice is the only way an operator can see
+    /// that what they are looking at is not what the channel list holds.
     let hasUnsavedChanges: Bool
 
     /// Whether the draft is somewhere not in the channel list yet, which changes
@@ -105,18 +88,11 @@ struct ConnectFormView: View {
 
             unsavedChangesNotice
 
-            // **APP-23: Save, and only Save.** There were two Connect buttons —
-            // this one and ``SessionLinkButton`` under the PTT slab — and one of
-            // them had to go. This one did, for the reason `SessionLinkControl`
-            // already gives from the other side: the session pane is the screen
-            // an operator watches while talking, and a control that places or
-            // ends a call belongs where they are looking. Since APP-16 the
-            // status panel above that button names the destination, its address
-            // and its mode, so it is not a blind second entry point either.
-            //
-            // What is left here is the question only this form can answer —
-            // "keep this" — kept separate from "go there" because BU-9 is what
-            // happens when one is quietly answered by the other.
+            // **APP-23.** Save only — connecting is ``SessionLinkButton``'s job,
+            // on the session pane where the operator is watching while talking
+            // (see `SessionLinkControl`). This is the only place that answers
+            // "keep this", kept separate from "go there" because BU-9 is what
+            // happens when one quietly answers the other.
             Button("Save", action: saveAction)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -132,20 +108,14 @@ struct ConnectFormView: View {
                 settings.port = port
             }
         }
-        // There used to be a second `onChange` here mirroring `settings.port`
-        // back into `portText`, because sourcing a proxy wrote a port into the
-        // channel behind the form's back. Nothing does that any more (APP-13):
-        // the proxy is not a channel field, and the only writer of `settings.port`
-        // is the field above.
+        // The only writer of `settings.port` is the field above: the proxy is
+        // not a channel field (APP-13), so nothing else can move it out from
+        // under this.
     }
 
     /// **BU-9.** Says that the form and the channel list disagree, and which way
-    /// round.
-    ///
-    /// Worth a whole line because the previous behaviour was the opposite fault:
-    /// an edit was applied to the channel by connecting or by switching away, so
-    /// nobody had to be told anything and a channel could be repointed by
-    /// accident. Now the edit waits, which is only safe if it is visible.
+    /// round — visible because the edit waits rather than applying itself, and
+    /// that is only safe if the operator can see it has not yet.
     @ViewBuilder
     private var unsavedChangesNotice: some View {
         if hasUnsavedChanges {
@@ -163,11 +133,10 @@ struct ConnectFormView: View {
 
     /// What the Connect button is doing before it connects.
     ///
-    /// The same two lines live in ``proxyStatusRow``, which is inside a
-    /// disclosure group that is collapsed on the common path — so on the path
-    /// that matters, pressing Connect with no proxy set, neither of them would
-    /// be seen. This is the copy that is always visible, and it is only drawn
-    /// while there is something to say.
+    /// ``proxyStatusRow`` says the same thing but sits inside a collapsed
+    /// disclosure group, so this is the copy that stays visible on the path
+    /// that matters — pressing Connect with no proxy set. Drawn only while
+    /// there is something to say.
     @ViewBuilder
     private var proxySourcingStatus: some View {
         if settings.mode.usesProxy {
@@ -261,13 +230,10 @@ struct ConnectFormView: View {
             .textFieldStyle(.roundedBorder)
             // A channel name is usually a callsign, a reflector or a node —
             // `M17-CBR A`, `VK1RGI` — and autocorrect on any of those is wrong.
-            // This was the last field in the form without it.
             //
-            // It is **not** the fix for the panel that hangs under this field on
-            // launch: that is AppKit's own one-time-code AutoFill panel, shown
-            // empty, and it is unaffected by this modifier. See BU-11 in
-            // `docs/BRINGUP.md` for the diagnosis and for why there is nothing
-            // here to fix.
+            // **Not** the fix for the panel that hangs under this field on
+            // launch: that is AppKit's own one-time-code AutoFill panel,
+            // unaffected by this modifier. See BU-11 in `docs/BRINGUP.md`.
             .autocorrectionDisabled()
         }
     }
@@ -300,26 +266,17 @@ struct ConnectFormView: View {
 
     /// **EchoLink.** Sign in, choose a station, and leave the plumbing alone.
     ///
-    /// The other two modes ask for a destination and a callsign. EchoLink asks
-    /// for a proxy host, a proxy port, a proxy password, a node callsign, a node
-    /// address, a directory server, an account password, a name and a location —
-    /// and an operator meeting that form has no way to tell that six of the nine
-    /// are the same every time and two of them are filled in by pressing a
-    /// button.
+    /// Ordered by how often it changes rather than by protocol layer:
     ///
-    /// So it is ordered by *how often it changes* rather than by protocol layer:
-    ///
-    /// 1. **Your account.** Callsign and password. These are the operator, not
-    ///    the channel — the Keychain has always known that, filing an EchoLink
-    ///    secret under `echolink:<callsign>` and sharing it across every channel
-    ///    with that callsign — but the form used to present them last, below the
-    ///    plumbing, as though they were per-destination settings.
-    /// 2. **Where to.** The station, which is the only part that really varies,
-    ///    and which the Stations pane fills in.
-    /// 3. **How to get there.** The proxy and the directory server, folded away.
-    ///    Neither is a field any more — the proxy is app-wide and sourced by the
-    ///    app (APP-13), the directory server has one sensible value — so this is a
-    ///    drawer to look in when something is wrong rather than a form to fill in.
+    /// 1. **Your account.** Callsign and password — the operator, not the
+    ///    channel. The Keychain files the secret under `echolink:<callsign>`,
+    ///    shared by every channel with that callsign.
+    /// 2. **Where to.** The station, the only part that really varies; the
+    ///    Stations pane fills it in.
+    /// 3. **How to get there.** The proxy and the directory server, folded
+    ///    away — the proxy is app-wide and sourced automatically (APP-13), the
+    ///    directory server has one sensible value — so this is a drawer to
+    ///    check when something is wrong, not a form to fill in.
     @ViewBuilder
     private var echoLinkFields: some View {
         Text("Your EchoLink account")
@@ -391,34 +348,27 @@ struct ConnectFormView: View {
     }
 
     /// **AllStarLink.** Fill in the host by asking the directory rather than by
-    /// knowing it.
+    /// knowing it — a node's address can be dynamic, so AllStarLink publishes
+    /// where it last registered and the app asks rather than requiring the
+    /// operator to carry it around.
     ///
-    /// A node number is what everybody quotes on the air; the address behind it
-    /// is not something an operator carries around, and for a node that
-    /// re-registers on a dynamic address it is not something they can carry
-    /// around. AllStarLink publishes the mapping, so the app asks.
-    ///
-    /// **The field stays editable.** A private node is not in the directory at
-    /// all and its owner gives you the address directly, so the lookup is an
-    /// offer rather than a gate.
-    ///
-    /// It fills in the channel name too, from the node's callsign, when the
-    /// operator has not named the channel themselves — see the closure below.
+    /// **The field stays editable**: a private node is not in the directory at
+    /// all, so the lookup is an offer rather than a gate. Also fills in the
+    /// channel name from the node's callsign, when the operator has not named
+    /// it themselves.
     @ViewBuilder
     private var nodeLookupRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button {
                     nodeLocator.find(node: settings.node) { registration in
-                        // Host, port and — if the operator has not named the
-                        // channel — its name. The rules are the registration's;
-                        // see `NodeRegistration.applied(to:)`.
+                        // Host, port and — if unnamed — the channel name; the
+                        // rules are the registration's, see
+                        // `NodeRegistration.applied(to:)`.
                         settings = registration.applied(to: settings)
-                        // The port additionally goes through `portText`: the
-                        // field is bound to the text and its `onChange` writes
-                        // the number back, so the assignment above would be
-                        // overwritten by the stale text. Same trap the proxy
-                        // finder documents.
+                        // Also updates `portText` directly: it is bound to the
+                        // field, whose `onChange` would otherwise overwrite the
+                        // assignment above with stale text.
                         portText = String(registration.port)
                     }
                 } label: {
@@ -446,11 +396,10 @@ struct ConnectFormView: View {
                     .foregroundStyle(found.isActive ? Color.green : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // The counterpart to the reflector list's dashboard link, and
-                // shown for the same reason: the lookup answers where to dial,
-                // and the node's own page answers everything else — what it is
-                // linked to, who keyed it last. Only after a successful lookup,
-                // so it never offers a page for a number that is not a node.
+                // Shown only after a successful lookup, so it never offers a
+                // page for a number that is not a node. The lookup answers
+                // where to dial; the node's own page answers everything else —
+                // what it is linked to, who keyed it last.
                 if let dashboard = found.dashboard {
                     Link(destination: dashboard) {
                         Label("Node page — connections, last heard", systemImage: "safari")
@@ -549,11 +498,10 @@ struct ConnectFormView: View {
     @ViewBuilder
     private var webTransceiverFields: some View {
         LabelledField(label: "Portal token", systemImage: "key") {
-            // A plain TextField, unlike the node secret's SecureField, and it is
-            // a considered difference rather than an oversight: 12 characters of
-            // hex cannot be typed blind, the mistakes people make with it are
-            // *visible* ones (a truncated paste, an upper-cased autocorrection),
-            // and it is still stored in the Keychain exactly as the secret is.
+            // A plain TextField, not a SecureField: 12 hex characters cannot be
+            // typed blind, mistakes here are visible (a truncated paste, an
+            // upper-cased autocorrection), and it is stored in the Keychain
+            // exactly as the secret is.
             TextField("1b59df18107e", text: $webTransceiverToken)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
@@ -566,9 +514,9 @@ struct ConnectFormView: View {
         if !webTransceiverToken.isEmpty
             && !NodeSettings.isPlausibleWebTransceiverToken(webTransceiverToken)
         {
-            // A warning, not a refusal. The endpoint that issues these is named
-            // `legacy` and a successor is expected, so the app must not be the
-            // thing that decides a token is invalid — the node decides.
+            // A warning, not a refusal: the issuing endpoint is named `legacy`
+            // and a successor is expected, so the app must not be the thing
+            // that decides a token is invalid — the node decides.
             Label(
                 "That does not look like a token: they are \(NodeSettings.webTransceiverTokenLength)"
                     + " lowercase hex characters, like 1b59df18107e. Connecting anyway is fine if "
@@ -624,24 +572,15 @@ struct ConnectFormView: View {
     /// **EchoLink.** Which proxy this session goes through — status, not a form
     /// (EL-12, APP-13).
     ///
-    /// A phone cannot reach an EchoLink node directly, so a proxy is mandatory,
-    /// and the public ones are a list of strangers' machines that each carry one
-    /// user at a time. Choosing well means knowing which are near and which are
-    /// free right now — neither of which an operator can tell by looking at a
-    /// list, and both of which a probe answers in a second or two. So the app
-    /// does the choosing, at the moment it needs one, and there is nothing here
-    /// to fill in: connecting and refreshing the directory both source a proxy on
-    /// their own.
+    /// A phone cannot reach an EchoLink node directly, and public proxies each
+    /// carry one user at a time, so the app probes and picks one automatically
+    /// — nothing here to fill in. Shown anyway: an operator is entitled to know
+    /// whose machine is carrying their traffic, and a proxy that has gone away
+    /// mid-sitting is diagnosed here and replaced with one button.
     ///
-    /// What is left is worth showing rather than hiding, which is why this is not
-    /// simply gone: an operator is entitled to know whose machine is carrying
-    /// their traffic, and a proxy that has gone away mid-sitting is diagnosed
-    /// here and replaced with one button.
-    ///
-    /// **Finding nothing is an ordinary outcome, not an error.** Every public
-    /// proxy being taken is a normal state of the world, so the failure is
-    /// phrased as contention and the button stays right there to be pressed
-    /// again, rather than raising an alert that has to be dismissed first.
+    /// **Finding nothing is ordinary, not an error.** Every public proxy being
+    /// taken is a normal state of the world, so the failure reads as contention
+    /// and the button stays pressable, rather than raising a dismissable alert.
     @ViewBuilder
     private var proxyStatusRow: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -703,9 +642,8 @@ struct ConnectFormView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         } else if !proxyPicker.isSearching, proxyPicker.failure == nil {
-            // Said plainly, because "no proxy yet" used to mean "fill this in"
-            // and now means "nothing to do". An operator who has read the old
-            // form needs to be told that pressing Connect is the whole step.
+            // Pressing Connect is the whole step — nothing here needs filling
+            // in.
             Text("None yet — one is found when you connect or refresh the directory.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -719,12 +657,9 @@ struct ConnectFormView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        // Carried across from the CLI, which prints the same thing, because
-        // it is an obligation rather than a nicety: a public proxy is
-        // somebody else's machine, it serves one user at a time, and
-        // echolink.org asks that they be used briefly. An operator who does
-        // not know that cannot honour it. It also now names the setting that
-        // answers it, which is a screen away rather than nowhere.
+        // An obligation, not a nicety: a public proxy is somebody else's
+        // machine, one user at a time, and echolink.org asks that they be used
+        // briefly. Names the Settings screen that answers it.
         Text(
             "Public proxies are other operators' machines, one user at a time, and this app lets "
             + "one go as soon as you disconnect. Use them briefly — for sustained operating, set "
@@ -831,8 +766,8 @@ struct ConnectFormView: View {
                 }
 
                 LabelledField(label: "Secret", systemImage: "key") {
-                    // SecureField, and the value is written to the Keychain on
-                    // connect — never to UserDefaults, and never to a log.
+                    // SecureField; written to the Keychain on connect, never to
+                    // UserDefaults or a log.
                     SecureField("stored in the Keychain", text: $secret)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -841,10 +776,10 @@ struct ConnectFormView: View {
             }
 
         case .m17:
-            // M17 reflectors do not authenticate — the callsign in every frame
-            // is the whole of the identity — so there is no account and nothing
-            // to put in the Keychain. Offering an empty secret field in that
-            // mode would imply a security property M17 does not have.
+            // M17 reflectors are unauthenticated — the callsign in every frame
+            // is the whole identity — so there is no account and nothing to put
+            // in the Keychain. An empty secret field here would imply a
+            // security property M17 does not have.
             Label(
                 "M17 reflectors are unauthenticated. Your callsign identifies you.",
                 systemImage: "info.circle")
@@ -853,14 +788,11 @@ struct ConnectFormView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
         case .echoLink:
-            // The password moved to the settings screen (APP-12). It was never a
-            // property of a channel — the Keychain has always filed it under
-            // `echolink:<callsign>`, shared by every EchoLink channel with that
-            // callsign — and a form that asked for it per channel implied
-            // otherwise. What is left here is whether it is set, because that is
-            // the thing an operator needs to know from *this* screen: an
-            // EchoLink connection with no account password succeeds at every
-            // step and is then unreachable.
+            // Edited on the settings screen (APP-12), not per channel: the
+            // Keychain files it under `echolink:<callsign>`, shared by every
+            // channel with that callsign. Shown here only as whether it is
+            // set — a connection with none succeeds at every step and is then
+            // unreachable.
             Label(
                 isEchoLinkAccountConfigured
                     ? "Account password stored. Change it in Settings."
@@ -884,10 +816,9 @@ struct ConnectFormView: View {
                     .autocorrectionDisabled()
             }
 
-            // App-wide like the callsign, and for the same reason — they are
-            // facts about the operator. Only EchoLink transmits them, so only
-            // this form offers them, but what they edit is the one stored value
-            // rather than a field of this channel.
+            // App-wide like the callsign — facts about the operator, not the
+            // channel. Only EchoLink transmits them, so only this form offers
+            // them.
             Text(
                 "Both are shown to the far end and in the directory listing, and both may be "
                 + "empty. Like your callsign, they are yours rather than this channel's.")

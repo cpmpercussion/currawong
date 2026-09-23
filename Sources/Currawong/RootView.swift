@@ -6,19 +6,14 @@ import SwiftUI
 /// The app's one root: the transmit banner, the pane container, and the four
 /// session-lifetime handlers that must exist exactly once.
 ///
-/// ## What this view is for now
-///
-/// It used to *be* the app — one scrolling column with everything in it. It is
-/// now a shell around panes (``SessionPane``, ``ChannelListView``,
+/// A shell around panes (``SessionPane``, ``ChannelListView``,
 /// ``ConnectFormView``, ``DTMFKeypadView``, ``StationBrowserView``,
-/// ``SettingsView``), and what is left here is the part that cannot be moved
-/// into any one of them:
+/// ``SettingsView``); what is left here is the part that cannot be moved into
+/// any one of them:
 ///
-/// * **``TransmitBanner``, outside the pane container and always present.**
-///   SF-4. It is a sibling
-///   of the `TabView`/`NavigationSplitView`, not a child, so that no tab, no
-///   column and no scroll offset can hide it. This is the single most important
-///   structural fact about this file.
+/// * **``TransmitBanner``, outside the pane container and always present**
+///   (SF-4). A sibling of the `TabView`/`NavigationSplitView`, not a child, so
+///   that no tab, no column and no scroll offset can hide it.
 /// * **The release paths this view owns.** `scenePhase` leaving `.active`
 ///   (backgrounded, or merely covered by the control centre — both unkey) and
 ///   `onDisappear` (the view leaving the hierarchy). The PTT button's own
@@ -40,16 +35,14 @@ import SwiftUI
 /// phone case, and `#if os(macOS)` says so honestly rather than relying on what
 /// AppKit reports.
 ///
-/// ### The tab layout releases the key when you leave the Session tab
-///
+/// **The tab layout releases the key when you leave the Session tab.**
 /// ``PushToTalkButton`` carries `onDisappear { onRelease(.viewDisappeared) }`,
 /// because its gesture is torn down with it and `@GestureState` would never
-/// reset. In a `TabView` that means: **switch tabs while keyed and you unkey.**
-/// That is deliberate, and it is the safe direction — a transmitter keyed by a
-/// button the operator can no longer see is the SF-3 failure this app is built
-/// to avoid. The split layout does not have the question, because the PTT
-/// button is in the detail column's fixed header and is never navigated away
-/// from.
+/// reset — so in a `TabView`, switching tabs while keyed unkeys. That is the
+/// safe direction: a transmitter keyed by a button the operator can no longer
+/// see is the SF-3 failure this app is built to avoid. The split layout does
+/// not have the question — the PTT button is in the detail column's fixed
+/// header and is never navigated away from.
 struct RootView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var accessory: BLEPTTController
@@ -85,11 +78,11 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // SF-4: above the pane container, never inside it — and **APP-23:
-            // always in it**. Inserting the banner at key-down moved every
-            // control below it down the screen, the PTT button under the
-            // operator's finger included. The strip is permanent now and says
-            // which state it is in by colour and wording.
+            // SF-4: above the pane container, never inside it, and **APP-23:
+            // permanent** rather than inserted at key-down — inserting it
+            // there moves every control below it, the PTT button under the
+            // operator's finger included. Says which state it is in by colour
+            // and wording.
             TransmitBanner(
                 isTransmitting: status.isTransmitting,
                 source: session.activeSource,
@@ -112,9 +105,7 @@ struct RootView: View {
             session.setForeground(phase == .active)
 
             // **BU-9.** The app going away is the last chance to keep what the
-            // operator typed, and it used to be a chance nobody took: this hook
-            // called `setForeground(_:)` and nothing else, so a corrected host
-            // went with the process. Stashing rather than saving is the point —
+            // operator typed. Stashing rather than saving is the point —
             // quitting is not the operator asking for the channel to be
             // rewritten, so the edit comes back next launch with the stored
             // channel still describing where it actually goes.
@@ -165,17 +156,12 @@ struct RootView: View {
 
     /// iPhone. Five tabs, two of which are mode-dependent.
     ///
-    /// **There is a `selection` binding, and it needs a guard.** This used to
-    /// have none, on the grounds that the Keypad and directory tabs come and go
-    /// with the mode and a selection pointing at a departed tab is a blank
-    /// screen. That reasoning still holds — what changed is that choosing a
-    /// station or reflector now has to *take* the operator to the connect
-    /// screen, and a tab layout cannot be driven without a binding.
-    ///
-    /// So the hazard is handled rather than avoided: ``effectiveTab`` resolves
-    /// the stored selection against the tabs the current mode actually has, on
-    /// read, exactly as ``effectiveDetailPane`` does for the split layout. The
-    /// worst case of changing mode is still landing back on Channels.
+    /// The Keypad and directory tabs come and go with the mode, so a selection
+    /// pointing at a departed tab would be a blank screen. ``effectiveTab``
+    /// resolves the stored selection against the tabs the current mode
+    /// actually has, on read, exactly as ``effectiveDetailPane`` does for the
+    /// split layout — the worst case of changing mode is landing back on
+    /// Channels.
     private var tabLayout: some View {
         TabView(selection: tabSelection) {
             channelsPane
@@ -261,29 +247,23 @@ struct RootView: View {
     }
 
     /// The channel list, with the connect form under it while there is no link.
+    /// The form gets its own `ScrollView` so a keyboard covering half the
+    /// screen cannot make the Connect button unreachable.
     ///
-    /// The list takes the space and the form takes what it needs, because the
-    /// list is what the operator is reading and the form is the handful of
-    /// fields underneath it. The form gets its own `ScrollView` so that a
-    /// keyboard covering half the screen cannot make the Connect button
-    /// unreachable.
-    ///
-    /// **APP-18: no form once a link is up or on its way.** It is
+    /// **APP-18: no form once a link is up or on its way** —
     /// `isEditable: session.connection == .disconnected`, so while connected it
     /// is a read-only wall of fields, and the one thing in it worth reading —
-    /// where the radio is pointed — is on the status panel (APP-16). What the
-    /// tab gets instead is the whole screen for the channel list, which is what
-    /// this tab is for.
+    /// where the radio is pointed — is on the status panel instead (APP-16).
+    /// The tab gets the whole screen for the channel list instead.
     private var channelsPane: some View {
         NavigationStack {
             ChannelListView(
                 session: session,
                 onChoose: { id in
-                    // Choosing takes the operator to the radio. It is what they
-                    // came to the list to do, and the alternative — landing back
-                    // on the list with a link coming up somewhere off-screen —
-                    // is how an operator ends up talking to a node they cannot
-                    // see the state of.
+                    // Choosing takes the operator to the radio, rather than
+                    // landing back on the list with a link coming up
+                    // off-screen — which is how an operator ends up talking to
+                    // a node they cannot see the state of.
                     Task { await switchChannel(to: id) }
                     selectedTab = .session
                 },
@@ -298,16 +278,10 @@ struct RootView: View {
 
     /// The connect form, pushed. **APP-23.**
     ///
-    /// It used to be the bottom half of the Channels tab, with the list capped
-    /// at 320 points above it — which gave the list a third of the screen when
-    /// it is the thing the operator is reading, and gave the form two thirds of
-    /// one when it is a form they need all of. Neither half was the size it
-    /// wanted, in either state.
-    ///
-    /// A push is the iPhone idiom for list-then-detail, and it is what makes the
-    /// two sizes independent: the list gets the tab, the form gets a screen.
-    /// The split layout does not need this and does not have it — its detail
-    /// column *is* the pushed screen, permanently.
+    /// A push is the iPhone idiom for list-then-detail, and it is what makes
+    /// the list's and the form's sizes independent: the list gets the tab, the
+    /// form gets a screen. The split layout does not need this and does not
+    /// have it — its detail column *is* the pushed screen, permanently.
     private var channelDetails: some View {
         ScrollView {
             connectForm
@@ -333,16 +307,13 @@ struct RootView: View {
         NavigationSplitView {
             // **APP-20.** The list brings its own insets for everything that is
             // not a `List` row; the top padding is the column's, because a
-            // sidebar's first element sits under the window's title bar area and
-            // only this side knows that.
+            // sidebar's first element sits under the window's title bar area
+            // and only this side knows that.
             //
-            // **BU-12: the top alignment.** Written while the app was still
-            // taller than its window, and held back for it — under that overflow
-            // it moved the "Channels" header off the top edge instead of merely
-            // down the column, which was worse. With the cause gone (a
-            // `fixedSize` in `ChannelListView`; the note there says why) an empty
-            // list sits at the top of the column, where a sidebar's contents
-            // belong, rather than centred in it.
+            // Top-aligned (BU-12) so an empty list sits at the top of the
+            // column, where a sidebar's contents belong, rather than centred
+            // in it — see the `fixedSize` note in `ChannelListView` for why an
+            // empty list needs that at all.
             // No `onInspect` here: the details are the Connect pane, on screen
             // beside this list already, so an ⓘ would push what is visible.
             ChannelListView(
@@ -453,14 +424,10 @@ struct RootView: View {
                     .padding(20)
                     .paneColumn()
             }
-        // **APP-20: the same column as every other pane.** These two were
-        // inserted raw, so they ran flush into both edges of the detail column
-        // while the connect form, the keypad and the settings screen sat in a
-        // padded, width-capped column — and unbounded, the reflector rows' module
-        // chips pushed the list wider than the column, which clipped the Refresh
-        // button off the right-hand side. `paneColumn()` is what the other three
-        // already use, so this is one column width for the whole app rather than
-        // a number chosen here.
+        // **APP-20.** `paneColumn()` gives these the same padded, width-capped
+        // column as the connect form, the keypad and the settings screen —
+        // unbounded, the reflector rows' module chips push the list wider than
+        // the column and clip the Refresh button off the right edge.
         case .stations:
             StationBrowserView(
                 session: session, browser: browser, proxyPicker: proxyPicker,
@@ -507,12 +474,9 @@ struct RootView: View {
 
     /// What the session pane's link button does, per state.
     ///
-    /// The reconnect path goes back through ``connectOrDisconnect()`` rather
-    /// than calling `session.connect()`, so that a channel needing a proxy gets
-    /// one sourced the same way the form's button would. What it adds is the
-    /// line before it: the draft is pointed back at the channel the last call
-    /// was placed to, because the operator may have selected a different one
-    /// while disconnected and "Reconnect to VK1RGI" must call VK1RGI.
+    /// Goes back through ``connectOrDisconnect()`` rather than calling
+    /// `session.connect()`, so a channel needing a proxy gets one sourced the
+    /// same way the form's button would.
     private func sessionLinkAction() async {
         switch session.connection {
         case .connected, .connecting:
@@ -525,9 +489,7 @@ struct RootView: View {
         case .disconnected:
             // The channel the button names is the selected one, which is also
             // the one the status panel above it is showing — so this is the
-            // ordinary connect, not a restore. It used to call
-            // `restoreLastConnectedChannel()` first, which silently changed the
-            // selection out from under the operator. See `SessionLinkControl`.
+            // ordinary connect, not a restore. See `SessionLinkControl`.
             await connectOrDisconnect()
         }
     }
@@ -550,37 +512,31 @@ struct RootView: View {
             nodeLocator: nodeLocator)
     }
 
-    /// The Connect button's action: find a proxy first if this channel needs
-    /// one, then place or drop the call.
-    ///
-    /// Only on the way *out*. `toggleConnection` is one button for two verbs,
-    /// and hanging up does not need a proxy — sourcing one there would be a
-    /// second or two of probing strangers' machines in front of the one action
-    /// an operator may be in a hurry to complete.
-    ///
-    /// A search that finds nothing stops here rather than falling through to
-    /// `connect()`. Without the guard the call would go on to fail validation
-    /// with "enter the proxy's host name", which is both wrong — the app was
-    /// looking for one and every public proxy was busy — and the opposite of
-    /// useful, since it names a field the operator was never meant to fill in.
     /// **APP-23.** What a tap on a channel row does: go there.
     ///
-    /// ``RadioSession/switchChannel(to:)`` does the hanging up and the
-    /// selecting, and answers whether a call was up. The dialling is here
-    /// because it is here that a proxy gets sourced — the same reason
-    /// ``sessionLinkAction()`` goes back through ``connectOrDisconnect()``
-    /// rather than calling `session.connect()`.
+    /// ``RadioSession/switchChannel(to:)`` hangs up and selects, and answers
+    /// whether a call was up; the dialling is here because this is where a
+    /// proxy gets sourced (see ``connectOrDisconnect()``), the same reason
+    /// ``sessionLinkAction()`` goes back through it rather than calling
+    /// `session.connect()`.
     ///
-    /// The link state is preserved rather than forced: connected to one channel
-    /// and tapping another leaves the operator connected to the new one, while
-    /// tapping one from a standing start only selects it. A single tap in a
-    /// list must not place a call.
+    /// The link state is preserved rather than forced: connected to one
+    /// channel and tapping another leaves the operator connected to the new
+    /// one; tapping one from a standing start only selects it. A single tap
+    /// in a list must not place a call.
     private func switchChannel(to id: UUID) async {
         if await session.switchChannel(to: id) {
             await connectOrDisconnect()
         }
     }
 
+    /// Finds a proxy first if this channel needs one, then places or drops the
+    /// call. Only on the way *out* — hanging up does not need a proxy.
+    ///
+    /// A search that finds nothing stops here rather than falling through to
+    /// `connect()`, which would otherwise fail validation with "enter the
+    /// proxy's host name" — wrong (every public proxy was busy) and useless
+    /// (it names a field the operator was never meant to fill in).
     private func connectOrDisconnect() async {
         var proxy: EchoLinkProxyRoute?
         if session.connection == .disconnected, session.settings.mode.usesProxy {
@@ -598,14 +554,12 @@ struct RootView: View {
         await session.toggleConnection(proxy: proxy)
     }
 
-    /// **APP-12.** The settings screen — the operator, the two stored accounts,
-    /// and the PTT accessory, which used to be the whole of this destination.
+    /// **APP-12.** The settings screen — the operator, the two stored
+    /// accounts, and the PTT accessory.
     ///
-    /// It used to be handed an `isTransmitting` to draw its own "on air" strip,
-    /// which was always `false`: the root's ``TransmitBanner`` is above this view
-    /// and still on screen, so a second copy inside it would be two banners
-    /// saying the same thing. The parameter existed for the accessory *sheet*,
-    /// which covered the banner and which APP-18 removed, so it went with it.
+    /// Draws no "on air" strip of its own: the root's ``TransmitBanner`` is
+    /// above this view and still on screen, so a second copy here would be two
+    /// banners saying the same thing.
     private var settingsPane: some View {
         SettingsView(
             session: session,
@@ -633,9 +587,8 @@ struct RootView: View {
 }
 
 /// One reading measure, centred, in every pane that is a column of text and
-/// controls. Was two `frame` calls repeated at each site before the split;
-/// naming it keeps the panes the same width as each other, which is what makes
-/// switching between them look like one app.
+/// controls — keeps the panes the same width as each other, which is what
+/// makes switching between them look like one app.
 ///
 /// Deliberately `private` — file scope, not the app's vocabulary. A shared
 /// helper on `View` is the kind of thing two files independently invent under
