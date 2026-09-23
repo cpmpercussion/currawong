@@ -90,6 +90,15 @@ packages:
   # reproduce across three input devices. Additive API again — three new
   # `AudioPipelineError` cases, none of which this app switches over — so once
   # more no code beside the bump.
+  #
+  # **v0.8.1 is the floor** (APP-34), and it is a build fix, not a behaviour
+  # one. The library's `CGSM` target carried `unsafeFlags(["-w"])` from `v0.3.0`
+  # to `v0.8.0`, and SwiftPM refuses `unsafeFlags` in a dependency resolved by
+  # version. Under Xcode 27.0 this project fails before compiling any app code:
+  # *"The package product 'EchoLinkKit-product' cannot be used as a dependency
+  # of this target because it uses unsafe build flags."* Earlier Xcodes built it
+  # anyway. The library's EL-16 removed the flag, and there is no API change,
+  # so no code beside the bump.
   # `from:` accepts any 0.x above it — the library is 0.x, so its own
   # changelog warns the API may change in any release; `Currawong.xcodeproj/…/Package.resolved` is what actually
   # pins the build, and it is generated, so a fresh `make generate` resolves
@@ -109,7 +118,7 @@ packages:
   #     path: ../swift-hamvoip
   HamVoIP:
     url: https://github.com/cpmpercussion/swift-hamvoip
-    from: 0.8.0
+    from: 0.8.1
 
 settings:
   base:

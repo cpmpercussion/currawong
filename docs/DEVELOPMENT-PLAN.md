@@ -1702,3 +1702,34 @@ distinguish from one that is.
 **Also under this task:** `APP-25` item 5 gains the rule against writing "no
 account required", with the two statements that replace it.
 
+
+### APP-34 — take library v0.8.1, so the app builds under Xcode 27 ✅ DONE 2026-09-23
+**Where:** `currawong`. **Needs:** swift-hamvoip `EL-16`, released as `v0.8.1`.
+
+Found on 2026-09-23, when `make build` on `107eaea` failed before compiling any
+app code:
+
+```
+error: The package product 'EchoLinkKit-product' cannot be used as a dependency
+of this target because it uses unsafe build flags.
+```
+
+The library's `CGSM` target (vendored libgsm, EL-8) carried `unsafeFlags(["-w"])`
+in every release from `v0.3.0` to `v0.8.0`. SwiftPM refuses `unsafeFlags` in a
+dependency resolved by version, which is how `project.yml` names the library.
+This project built against those tags until Xcode 27.0 was installed on
+2026-09-15. Nobody rebuilt under an older Xcode afterwards to confirm the
+upgrade is the cause, but nothing else changed. The library's EL-16 removed the
+flag. **Xcode Cloud hits the same error** as soon as it builds with Xcode 27,
+whether or not a local build has been tried.
+
+The fix is only the floor bump plus `make resolved`: there is no API change, so
+no code changes with it. The floor is `from: 0.8.1`, resolved and pinned at
+`260a505`.
+
+**Done when:** a fresh `make generate` resolves `0.8.1`, and the device build and
+both test destinations pass under Xcode 27.0. ✅ All three: 731 simulator tests
+and 737 macOS tests, 1 skipped each, as before. Before the tag existed, the app
+code at `107eaea` had already passed both suites against `v0.8.0` through a local
+path dependency, which the check does not apply to. So the version-resolved
+build is the only new thing tested here.
