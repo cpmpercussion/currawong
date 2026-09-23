@@ -3,46 +3,20 @@
 import SwiftUI
 
 /// **APP-12.** The app-level settings screen: who you are, how long you may
-/// transmit, the two accounts that are yours rather than a channel's, and the PTT
-/// accessory.
+/// transmit, the two accounts that are yours rather than a channel's, and the
+/// PTT accessory.
 ///
-/// ## Why these things are together
-///
-/// Everything here is app-wide. Each of the three was previously somewhere that
-/// implied otherwise:
-///
-/// * **The callsign** was on every connect form, where it looks like a field of
-///   the channel in front of you. It is not, and never was.
-/// * **The EchoLink account password** was typed on the connect form too, while
-///   the Keychain had always filed it under `echolink:<callsign>` — one password
-///   shared by every EchoLink channel with that callsign. The form was the wrong
-///   shape for the thing it was editing.
-/// * **The Web Transceiver token** is issued by allstarlink.org to an operator
-///   and works on every WT-enabled node, so it belongs beside the callsign it
-///   stands for and not with any one node.
-/// * **The transmit watchdog** (SF-1) was a field of every connect form, so the
-///   answer to "how long will it let me talk?" depended on which channel was
-///   selected — for the one setting in the app whose whole job is to stop a stuck
-///   microphone. See ``TransmitTimeout``.
-/// * **The PTT accessory** was reachable only from a row on the session pane,
-///   which meant accessory setup was something found mid-session — a poor moment
-///   to be pairing a fob.
-/// * **A private EchoLink proxy** (APP-13) was three fields of every channel,
-///   inside a collapsed drawer on the connect screen. A proxy is the machine an
-///   operator's traffic leaves through — one for the whole station, set up once —
-///   so asking for it per destination put the most durable setting in the app in
-///   its least durable place. It is also tricky enough to set up that it deserves
-///   a screen where an operator is *expecting* to configure something, rather
-///   than one they are on because they want to talk to somebody.
-///
-/// The connect form keeps the callsign field, because it is the field an operator
-/// filling in their first channel must not have to go looking for. Both edit the
-/// same app-wide value; there is one source of truth and two doors to it.
-///
-/// ## EchoLink's wording
+/// Everything here is app-wide, not per channel: the callsign and the two
+/// credentials (EchoLink password, Web Transceiver token) are facts about the
+/// operator, not the destination; the watchdog (SF-1, ``TransmitTimeout``) must
+/// answer "how long will it let me talk?" the same regardless of which channel
+/// is selected; the EchoLink proxy (APP-13) is the operator's station
+/// infrastructure, set up once, not a per-destination field. The connect form
+/// keeps the callsign field too, so an operator filling in their first channel
+/// does not have to go looking for it — both edit the same app-wide value.
 ///
 /// OQ-1b: "EchoLink" is nominative use only. The pane says what the account is
-/// for and no more — no logo, no styling, nothing that suggests the app is an
+/// for and no more — no logo, no styling, nothing implying the app is an
 /// EchoLink product.
 struct SettingsView: View {
     @ObservedObject var session: RadioSession
@@ -58,8 +32,8 @@ struct SettingsView: View {
     /// Likewise the EchoLink password.
     @State private var echoLinkPasswordText = ""
 
-    /// The private proxy, as typed. Committed together, on the button, for the
-    /// reason ``RadioSession/setEchoLinkProxy(_:password:)`` takes both: a host
+    /// The private proxy, as typed. Committed together, on the button:
+    /// ``RadioSession/setEchoLinkProxy(_:password:)`` takes both, since a host
     /// stored without its password is a proxy that refuses every session.
     @State private var proxyHostText = ""
     @State private var proxyPortText = ""
@@ -70,9 +44,8 @@ struct SettingsView: View {
     @State private var proxyComplaint: String?
 
     /// The watchdog timeout as typed. Committed on every keystroke that parses,
-    /// unlike the two credentials above: it is one number rather than a pasted
-    /// string, there is nothing to half-type, and a safety limit that only takes
-    /// effect if you remember to press something is not one.
+    /// unlike the two credentials above: a safety limit that only takes effect
+    /// if you remember to press something is not one.
     @State private var timeoutText = ""
 
     var body: some View {
@@ -103,9 +76,8 @@ struct SettingsView: View {
             proxyPasswordText = session.echoLinkProxyPassword
         }
         .onChange(of: timeoutText) { newValue in
-            // An unparseable value is left alone rather than reset, so a field
-            // being cleared to retype it does not flick back to 180 under the
-            // operator's fingers. `TransmitTimeout.parse` clamps what it accepts.
+            // Unparseable is left alone, not reset, so clearing the field to
+            // retype it does not flick back to the default mid-edit.
             if let timeout = TransmitTimeout.parse(newValue) {
                 session.transmitTimeout = timeout
             }
@@ -131,10 +103,8 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.characters)
                     #endif
                     .autocorrectionDisabled()
-                    // BU-9: `stashDraft()`, not `saveDraft()`. The callsign is
-                    // app-wide and this persists it, and the settings screen has
-                    // no business overwriting whichever channel happens to be
-                    // selected — which is exactly what the old call did.
+                    // BU-9: `stashDraft()`, not `saveDraft()` — this screen must
+                    // not overwrite whichever channel happens to be selected.
                     .onSubmit { session.stashDraft() }
             }
 
@@ -149,15 +119,10 @@ struct SettingsView: View {
 
     // MARK: - Safety
 
-    /// **SF-1.** The transmit watchdog, which used to be a field of every connect
-    /// form.
-    ///
-    /// It is here for the same reason the callsign is: it was on a per-channel
-    /// screen while being the operator's own setting. The watchdog is the one
-    /// control in the app that exists to stop something bad rather than to make
-    /// something work, and an operator who cannot answer "how long will it let me
-    /// talk?" without opening a particular channel does not really have the
-    /// setting at all. See ``TransmitTimeout``.
+    /// **SF-1.** The transmit watchdog. App-wide, like the callsign: the one
+    /// control here that exists to stop something bad rather than make
+    /// something work, so an operator must be able to answer "how long will it
+    /// let me talk?" without opening a particular channel. See ``TransmitTimeout``.
     private var safetySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Safety")
@@ -171,9 +136,8 @@ struct SettingsView: View {
                     #endif
             }
 
-            // SF-1 is enforced in the library, not here, and it is not optional —
-            // the field sets the number, it cannot switch the watchdog off. Worth
-            // saying, so nobody goes looking for the switch.
+            // SF-1 is enforced in the library, not here, and is not optional:
+            // this field sets the number, it cannot switch the watchdog off.
             Text(
                 "The longest a single transmission may last before Currawong unkeys for you, on "
                 + "every channel. Between \(Int(TransmitTimeout.range.lowerBound)) and "
@@ -196,10 +160,9 @@ struct SettingsView: View {
 
     /// Pane 1: portal login → token.
     ///
-    /// The paste field is present whether or not logging in is available, and it
-    /// is not a fallback — it is how a token got here before this screen existed,
-    /// and it is what still works if allstarlink.org replaces its login service
-    /// (OQ-10). The button is what may be missing; see
+    /// The paste field is present whether or not logging in is available, and is
+    /// not a fallback: it is what still works if allstarlink.org replaces its
+    /// login service (OQ-10). The button is what may be missing; see
     /// ``PortalLoginController/isAvailable``.
     private var portalSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -219,9 +182,8 @@ struct SettingsView: View {
                 loginControls
             } else {
                 // Not the shipping wiring — `CompositionRoot` supplies a live
-                // login. This is what a preview or a build with the login
-                // deliberately withheld shows, and it says what still works
-                // rather than promising anything.
+                // login. Shown by a preview, or a build with the login
+                // deliberately withheld.
                 Label(
                     "Logging in is not available in this build. Paste a token below instead — "
                     + "`hamvoip-cli wt-token` prints one.",
@@ -232,9 +194,8 @@ struct SettingsView: View {
             }
 
             LabelledField(label: "Token", systemImage: "key") {
-                // Not a SecureField, for the reason the connect form gives: the
-                // mistakes people make with 12 characters of hex are visible
-                // ones, and hiding them would make a truncated paste
+                // Not a SecureField: mistakes with 12 characters of hex are
+                // visible ones, and hiding them would make a truncated paste
                 // undiagnosable. Stored in the Keychain either way.
                 TextField("1b59df18107e", text: $tokenText)
                     .textFieldStyle(.roundedBorder)
@@ -384,15 +345,10 @@ struct SettingsView: View {
 
     /// **APP-13.** The operator's own proxy, if they run one.
     ///
-    /// Its own section rather than part of the account above, because they are
-    /// two unrelated things that happen to share a network: one is who you are to
-    /// echolink.org, the other is which machine your packets leave through. An
-    /// operator with an account and no proxy is the ordinary case.
-    ///
-    /// **Empty is a working configuration and the copy has to say so**, or this
-    /// reads as three more fields to fill in before EchoLink works — which is
-    /// precisely the impression the connect form used to give and the reason this
-    /// moved. Nothing here is required.
+    /// Its own section, not part of the account above: one is who you are to
+    /// echolink.org, the other is which machine your packets leave through, and
+    /// an operator with an account and no proxy is the ordinary case. Empty is
+    /// a working configuration, and the copy says so — nothing here is required.
     private var proxySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Your own proxy")
@@ -437,10 +393,8 @@ struct SettingsView: View {
                     .disabled(!proxyHasChanges)
 
                 if session.echoLinkProxy.isConfigured {
-                    // Clearing is a button rather than "empty the field and
-                    // save", because emptying a field is not obviously an
-                    // instruction, and going back to public proxies is a thing an
-                    // operator does deliberately.
+                    // Its own button, not "empty the field and save": emptying
+                    // a field is not obviously an instruction.
                     Button("Use public proxies") {
                         proxyHostText = ""
                         proxyPasswordText = ""
@@ -487,8 +441,7 @@ struct SettingsView: View {
     }
 
     /// Commits the three fields, and re-reads them from the session afterwards so
-    /// the screen shows what was actually stored — trimmed, and with an empty
-    /// port turned into 8100 — rather than what was typed.
+    /// the screen shows what was actually stored, not what was typed.
     private func saveProxy() {
         let port =
             UInt16(proxyPortText.trimmingCharacters(in: .whitespaces))

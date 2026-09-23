@@ -4,42 +4,35 @@ import Foundation
 
 /// Reads the M17 Project's published reflector host file.
 ///
-/// <https://m17-project.github.io/hostfiles/M17Hosts.json> — a JSON file the
-/// M17 Project publishes so that clients can offer a reflector list instead of
-/// asking an operator to remember host names. The data behind it is DVRef's,
-/// republished; the metadata block in the file says so.
+/// <https://m17-project.github.io/hostfiles/M17Hosts.json> — lets clients offer
+/// a reflector list instead of asking an operator to remember host names.
 ///
 /// ## Two shapes in one array
 ///
-/// The `reflectors` array holds two kinds of entry, and the difference is not
-/// signalled by a type field — it has to be read off the shape of `modules`:
+/// The `reflectors` array holds two kinds of entry, told apart by the shape of
+/// `modules` rather than a type field:
 ///
 /// - **Native M17 reflectors** (`M17-…`) carry `modules` as an array of letter
 ///   strings, plus `port` and `encrypted`.
 /// - **URF reflectors** (`URF…`) are multiprotocol bridges. Their `modules` is
-///   an array of objects with a per-module `mode`, and they carry **no `port`
-///   at all** — the M17 port is the default 17000.
+///   an array of objects with a per-module `mode`, and they carry no `port` —
+///   the M17 port is the default 17000.
 ///
-/// Decoding therefore tries the string form and falls back to the object form,
-/// rather than trusting the designator prefix, which is a naming convention and
-/// not a guarantee.
+/// Decoding tries the string form and falls back to the object form, rather
+/// than trusting the designator prefix, which is a naming convention and not a
+/// guarantee.
 ///
-/// ## Which URF modules are usable, and which are not
+/// A URF module has a `mode`: `M17`, `All` (transcoding — the far end may be on
+/// another mode, but the reflector converts), or something we cannot speak,
+/// such as `DMR`. Only `M17` and `All` are offered; linking a DMR module from
+/// an M17 client would fail, or worse, succeed into silence.
 ///
-/// A URF module has a `mode`: `M17`, `All`, or something we cannot speak such
-/// as `DMR` or `D-Star (DCS)`. Only `M17` and `All` modules are offered. Linking
-/// a DMR module from an M17 client would be a connection that either fails or,
-/// worse, succeeds into silence.
-///
-/// ## Encryption is parsed and discarded, deliberately
-///
-/// Entries carry an `encrypted` array of module letters. It is not decoded here.
-/// On most reflectors it lists all twenty-six letters, which reads as "encryption
-/// is permitted" rather than "this traffic is encrypted" — so surfacing it would
-/// put a scary word on nearly every row while telling the operator nothing about
-/// the call they are about to make. The truthful place for this is the library,
-/// which reports `playability == .encrypted` for a stream it actually cannot
-/// decode. FR-2.5 forbids an encryption UI in any case.
+/// Entries carry an `encrypted` array of module letters, not decoded here: on
+/// most reflectors it lists all twenty-six letters, which reads as "encryption
+/// is permitted" rather than "this traffic is encrypted", so surfacing it would
+/// put a scary word on nearly every row and tell the operator nothing true. The
+/// library reports `playability == .encrypted` for a stream it actually cannot
+/// decode instead. FR-2.5 forbids an encryption UI regardless.
 enum M17HostFile {
     /// Where the published list lives.
     static let url = URL(string: "https://m17-project.github.io/hostfiles/M17Hosts.json")!
@@ -56,18 +49,13 @@ enum M17HostFile {
 
     /// The URL schemes a dashboard link may use.
     ///
-    /// **A filter, not a formality.** Every other field in this file becomes
-    /// text on a row; this one becomes something the operator can tap, and the
-    /// file is fetched from a third party. Handing an arbitrary string to the
-    /// system opener is handing a stranger the choice of which app to launch —
-    /// a `mailto:` or a custom scheme belonging to some other application would
-    /// go through as readily as a web page. So a dashboard is a web page or it
-    /// is nothing.
-    ///
-    /// `http` is here alongside `https` because roughly half the published
-    /// dashboards are plain HTTP and dropping them would quietly remove the
-    /// link from half the list. App Transport Security does not object: the URL
-    /// is handed to the browser, and nothing in this app connects to it.
+    /// A filter, not a formality: this field is fetched from a third party and
+    /// becomes something the operator can tap, and handing an arbitrary string
+    /// to the system opener lets a `mailto:` or another app's custom scheme go
+    /// through as readily as a web page. So a dashboard is a web page or
+    /// nothing. `http` stays alongside `https` because roughly half the
+    /// published dashboards are plain HTTP; App Transport Security does not
+    /// object since the URL goes to the browser, not a connection this app makes.
     private static let dashboardSchemes: Set<String> = ["http", "https"]
 
     /// A tappable dashboard link from the listing's `url` field, if it is one.
@@ -226,10 +214,8 @@ struct HostFileReflectorDirectory: ReflectorDirectory {
     init(
         url: URL = M17HostFile.url,
         load: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
-            // Not `.shared`: the reflector list is a hundred kilobytes that
-            // changes daily, and the shared cache would happily serve a copy
-            // from last week to an operator who pressed Refresh precisely
-            // because they did not want one.
+            // Not `.shared`: an operator pressing Refresh wants the current
+            // file, not a cached one from last week.
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForRequest = 15
             configuration.waitsForConnectivity = false

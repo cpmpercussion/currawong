@@ -7,17 +7,15 @@ import Foundation
 /// Exchanges an allstarlink.org portal login for a Web Transceiver token, in the
 /// app's own vocabulary.
 ///
-/// The library has this behind its own seam (`WebTransceiverTokenSource`,
-/// IAX-13). This protocol exists for the same reason ``ProxyFinder`` and
-/// ``NodeLookup`` do: a library type may only be named in
-/// `CompositionRoot.swift`, and a view model that named one would put RFC 5456's
-/// neighbourhood into the settings screen. It also means every test here runs
-/// without a network.
+/// Mirrors the library's own seam (`WebTransceiverTokenSource`), for the same
+/// reason as ``ProxyFinder`` and ``NodeLookup``: a library type may only be
+/// named in `CompositionRoot.swift`. Also lets every test here run without a
+/// network.
 ///
-/// The token is returned as a `String` rather than a type of its own because
-/// that is all the app does with it: store it in the Keychain, and hand it to
-/// the library as the calling name (APP-11). ``NodeSettings/isPlausibleWebTransceiverToken(_:)``
-/// is the shape check, and it is advisory.
+/// The token is a plain `String`, since that is all the app does with one:
+/// store it in the Keychain and hand it to the library as the calling name
+/// (APP-11). ``NodeSettings/isPlausibleWebTransceiverToken(_:)`` is the shape
+/// check, and it is advisory.
 protocol PortalLogin: Sendable {
     /// - Parameters:
     ///   - callsign: portal logins are callsign/password.
@@ -30,36 +28,24 @@ protocol PortalLogin: Sendable {
 
 /// Why a portal login failed, in the terms the operator can act on.
 ///
-/// Four cases from the library's five, and the merge is deliberate: `Invalid
-/// JSON payload` and `Invalid JSON fields` are the same news to an operator —
-/// the login endpoint has changed and nothing they type will help — while
-/// "wrong password" is the only one where re-typing is the answer. Keeping them
-/// apart in the library and merging them here is the right place for each
-/// decision: the library reports what the endpoint said, and the app decides
-/// what to do about it.
+/// Merges library cases the operator would read as identical news: `Invalid
+/// JSON payload` and `Invalid JSON fields` both mean the login endpoint has
+/// changed and nothing they type will help, where "wrong password" is the one
+/// case where re-typing is the answer.
 ///
-/// The mapping the `CompositionRoot` adapter owes, written down here so it is a
-/// decision rather than an improvisation on the day:
-///
-/// | Library (`WebTransceiverTokenError`) | Here |
-/// |---|---|
-/// | `.loginFailed` | ``wrongPassword`` |
-/// | `.invalidJSONPayload`, `.invalidJSONFields` | ``endpointChanged`` |
-/// | `.rejected(message:)` | ``refused(_:)`` with the message |
-/// | `.malformedResponse`, `.requestFailed` | ``unreachable(_:)`` |
+/// The mapping from the library's `WebTransceiverTokenError` is the
+/// `PortalLoginFailure.init(_:)` extension in `CompositionRoot`, the one file
+/// that may name the library type.
 enum PortalLoginFailure: Error, Equatable, CustomStringConvertible {
     /// The callsign and password were not accepted. The one case worth
     /// re-prompting for.
     case wrongPassword
 
-    /// The endpoint did not recognise a request that has not changed, so the
-    /// endpoint has (OQ-10 caveat 2 — AllStarLink has a replacement project
-    /// open). Nothing the operator types will fix it.
+    /// The endpoint no longer recognises a request that has not changed
+    /// (OQ-10 caveat 2). Nothing the operator types will fix it.
     case endpointChanged
 
-    /// The portal refused for a reason we have not seen before, carried
-    /// verbatim: an uninterpretable message is still the most useful thing to
-    /// show somebody.
+    /// The portal refused for a reason not seen before, carried verbatim.
     case refused(String)
 
     /// The portal could not be reached, or answered with something that was not
@@ -92,27 +78,14 @@ enum PortalLoginFailure: Error, Equatable, CustomStringConvertible {
 
 /// The state of "log in to the portal and get a token" (APP-12, pane 1).
 ///
-/// A controller rather than logic in the view, on the same grounds as
-/// ``ProxyPicker``: it is a network round trip that must survive the pane being
-/// scrolled away from, and its outcome is a credential that has to reach the
-/// Keychain rather than a `@State` variable.
+/// A controller rather than view logic, on the same grounds as ``ProxyPicker``:
+/// a network round trip that must survive the pane being scrolled away from,
+/// whose outcome is a credential that belongs in the Keychain, not `@State`.
 ///
-/// ## The password is not kept
-///
-/// It is cleared on success, and cleared again when the portal says the login
-/// failed. Retaining it would buy a silent re-fetch — and the token is stable
-/// across calls, so there is nothing to re-fetch: a token that has stopped
-/// working is a token the portal has changed its mind about, and asking again is
-/// then the honest thing to do. So the app holds one credential where it could
-/// have held two, and the one it holds is the one that is not a login to a web
-/// account the operator uses elsewhere.
-///
-/// AllStarLink have since confirmed *why* the token is stable, which is worth
-/// having on the record because this decision rests on it: it changes only when
-/// the operator changes their portal password (community thread 24925,
-/// 2026-08-18). So the re-prompt above is honest — the one event that
-/// invalidates a token is an event the operator performed and can be asked
-/// about.
+/// The password is cleared on success and cleared again on failure, never
+/// retained: the token is stable across calls (it changes only when the
+/// operator changes their portal password), so there is nothing to silently
+/// re-fetch, and re-prompting only asks about an event the operator caused.
 @MainActor
 final class PortalLoginController: ObservableObject {
     /// Typed into the password field. Cleared by the controller; see the note
@@ -129,12 +102,9 @@ final class PortalLoginController: ObservableObject {
     /// showing the token twice.
     @Published private(set) var didSucceed = false
 
-    /// Whether logging in is possible at all.
-    ///
-    /// `false` when no ``PortalLogin`` was supplied, which is how the app ships
-    /// until its library dependency carries IAX-13 — see `CompositionRoot`. The
-    /// pane then offers only the paste field, rather than a button that cannot
-    /// work.
+    /// Whether logging in is possible at all. `false` when no ``PortalLogin``
+    /// was supplied, in which case the pane offers only the paste field rather
+    /// than a button that cannot work.
     var isAvailable: Bool { login != nil }
 
     private let login: (any PortalLogin)?
