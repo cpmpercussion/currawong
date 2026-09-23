@@ -110,11 +110,10 @@ struct PushToTalkButton: View {
                 }
             }
         }
-        // **A touch target on iOS, a pointer target on macOS.** 190 points was
-        // chosen for a thumb, and a Mac has no thumbs — it cost most of a short
-        // window's detail column for a control a mouse hits at any size. The
-        // button stays full-width in both, which is the part that makes it
-        // findable without looking; only the height differs.
+        // **A touch target on iOS, a pointer target on macOS.** 190 points is
+        // sized for a thumb; a Mac has no thumbs and a mouse hits a control at
+        // any size, so only the height differs. Full-width in both, which is
+        // what makes the button findable without looking.
         #if os(macOS)
             .frame(minHeight: 120)
         #else
@@ -124,13 +123,11 @@ struct PushToTalkButton: View {
         .accessibilityLabel("Push to talk")
         .accessibilityValue(isTransmitting ? "Transmitting" : "Not transmitting")
         .accessibilityHint("Press and hold to transmit. Release to stop.")
-        // **Not belt and braces any more.** If this view leaves the hierarchy
-        // while the finger is still down, the gesture is torn down with it and
-        // `@GestureState` never gets to reset, so the release has to come from
-        // here. That used to mean one thing — switching tabs while keyed, in the
-        // compact layout — and since APP-18 it means another: the button is on
-        // screen only while there is a link, so **a link that drops under a held
-        // finger takes this button away**, and this line is what unkeys.
+        // If this view leaves the hierarchy while the finger is still down, the
+        // gesture is torn down with it and `@GestureState` never gets to reset,
+        // so the release has to come from here. The button is on screen only
+        // while there is a link, so **a link that drops under a held finger
+        // takes this button away**, and this line is what unkeys.
         //
         // It fires whether or not anything was keyed, which is harmless:
         // `endTransmit(reason:)` records a stop reason only when something was

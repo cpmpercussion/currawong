@@ -130,10 +130,9 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
 
     func probeForLiveness(_ id: UUID) {
         // On the queue like every sibling method: `peripherals` and the
-        // peripheral's own state are mutated by the delegate callbacks on this
-        // queue, and this used to be the one method that read them from the
-        // caller's thread — an unsynchronized dictionary read under a reconnect
-        // burst, which is exactly when probes are issued most.
+        // peripheral's own state are mutated by the delegate callbacks here,
+        // and reading them off the caller's thread is an unsynchronized
+        // dictionary access.
         queue.async { [weak self] in
             guard let self, let peripheral = self.peripherals[id],
                 peripheral.state == .connected
@@ -153,20 +152,13 @@ final class CoreBluetoothCentral: NSObject, BLECentral, @unchecked Sendable {
                 }
             }
         }
-        // **Nothing readable *yet*, and that is not a failure.**
-        //
-        // Characteristic discovery arrives service by service, and the caller
-        // probes as each one is subscribed — so the first probe of a rebuild runs
-        // before the readable characteristic has been discovered at all. Treating
-        // that as "the link is dead" made this method the cause of the fault it
-        // was written to detect: measured 2026-08-22, a probe 24 ms too early
-        // reported failure, the controller rebuilt a link that was about to be
-        // fine, and the whole thing looped.
-        //
-        // So: say nothing. A later subscription will probe again, and the
-        // controller treats a deadline that expires with no read ever issued as
-        // exactly this silence rather than as a dead link. Only a *read that
-        // was attempted and failed* is evidence about the link.
+        // **Nothing readable *yet*, and that is not a failure.** Characteristic
+        // discovery arrives service by service, so the first probe of a rebuild
+        // can run before any readable characteristic has been discovered. Say
+        // nothing: a later subscription will probe again, and the controller
+        // treats a deadline that expires with no read ever issued as silence
+        // rather than a dead link. Only a read that was attempted and failed is
+        // evidence about the link.
     }
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID) {
