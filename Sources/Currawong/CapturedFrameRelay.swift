@@ -2,29 +2,16 @@
 
 import Foundation
 
-/// The hand-off between the microphone tap and the network client.
+/// The hand-off from the real-time capture thread to the network client. The
+/// clients are actors, and awaiting on the audio thread causes dropouts, so the
+/// tap hands the frame over and returns, and an ordinary task picks it up.
 ///
-/// `AudioIO.startCapture(onFrame:)` calls back synchronously on a real-time
-/// audio thread, fifty times a second. `NetworkClient` implementations are
-/// actors, so getting a frame to one means `await`, and awaiting on a
-/// real-time thread is the textbook way to manufacture dropouts that get
-/// blamed on the network. So the tap hands the frame over and returns, and an
-/// ordinary task picks it up.
-///
-/// The policy is bounded, dropping the oldest, and counting what it dropped.
-/// Unbounded would grow without limit behind a stalled consumer, and the
-/// audio it accumulated would be worthless anyway — speech two seconds late is
-/// not speech. Dropping the oldest keeps the audio the other operator is
-/// actually waiting for. ``droppedFrameCount`` exists so a dropout is a number
-/// somebody can read rather than a mystery.
-///
-/// Duplicated in the library's CLI rather than shared, because it is not part
-/// of the library's public surface; a third caller should move it into
-/// `RadioCore`.
+/// Bounded, dropping the oldest and counting drops: late speech is worthless,
+/// and a count makes a dropout visible. The library's CLI has its own copy
+/// (`AudioFrameBridge`); a third caller should move it into `RadioCore`.
 final class CapturedFrameRelay: @unchecked Sendable {
-    /// Frames buffered before the oldest is dropped: half a second at 20 ms.
-    /// Long enough to ride out a scheduling hiccup, short enough that a real
-    /// stall is heard as a gap rather than as growing delay.
+    /// Half a second at 20 ms: rides out a scheduling hiccup, while a real
+    /// stall is heard as a gap rather than growing delay.
     static let defaultCapacity = 25
 
     /// Captured frames, oldest first, exactly as the tap produced them.
@@ -43,8 +30,7 @@ final class CapturedFrameRelay: @unchecked Sendable {
         self.continuation = escaped
     }
 
-    /// Hands one captured frame to the consumer. Called on the audio thread —
-    /// takes a short uncontended lock and never awaits.
+    /// Hands one frame over. Called on the audio thread; never awaits.
     func submit(_ frame: [Int16]) {
         let result = continuation.yield(frame)
         lock.lock()
@@ -53,16 +39,14 @@ final class CapturedFrameRelay: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Frames discarded because the consumer could not keep up. Anything but
-    /// zero on a live contact is lost transmit audio.
+    /// Frames dropped because the consumer fell behind: lost transmit audio.
     var droppedFrameCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return dropped
     }
 
-    /// Frames the tap has produced. Zero is the difference between "no audio"
-    /// and "no microphone".
+    /// Frames the tap has produced; zero means no microphone, not silence.
     var submittedFrameCount: Int {
         lock.lock()
         defer { lock.unlock() }
