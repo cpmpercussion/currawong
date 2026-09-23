@@ -6,14 +6,12 @@ import Foundation
 ///
 /// **Why the app does this and the library does not.** The EchoLink proxy's
 /// `OPEN` frame carries four raw octets, so nothing below `EchoLinkDestination`
-/// resolves a name — and `docs/CLI.md` is explicit that this is deliberate:
-/// baking a third party's server into a protocol library "would be a guess
-/// about infrastructure rather than about the protocol". That is the right call
-/// for a library. It is the wrong one for a phone, where it becomes "know an IP
-/// address off the top of your head", and the addresses behind
-/// `servers.echolink.org` are cloud-hosted and do change.
-///
-/// So the app resolves, and hands the library the octets it asked for.
+/// resolves a name — deliberately, since baking a third party's server into a
+/// protocol library would be a guess about infrastructure rather than the
+/// protocol (`docs/CLI.md`). That is the right call for a library and the
+/// wrong one for a phone, where the alternative is "know an IP address off the
+/// top of your head" for cloud-hosted addresses that do change. So the app
+/// resolves, and hands the library the octets it asked for.
 protocol HostResolver: Sendable {
     /// The IPv4 address for `host`.
     ///
@@ -47,11 +45,10 @@ enum HostResolverError: Error, Equatable, CustomStringConvertible {
 
 /// Resolves through the system resolver.
 ///
-/// `getaddrinfo` rather than `Network.framework`: PD-1 governs how the app moves
-/// *packets*, and this opens no connection — it is a name lookup, the system
-/// resolver is the thing that does it, and `NWConnection` would mean standing up
-/// a whole connection to a port nobody wants to talk to just to read the address
-/// back out of it.
+/// `getaddrinfo` rather than `Network.framework`: PD-1 governs how the app
+/// moves *packets*, and this opens no connection — it is a name lookup, and
+/// `NWConnection` would mean standing up a whole connection to a port nobody
+/// wants to talk to just to read the address back out of it.
 struct SystemHostResolver: HostResolver {
     init() {}
 
