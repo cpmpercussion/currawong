@@ -5,11 +5,10 @@ import SwiftUI
 /// **FR-1.5.** The AllStarLink node commands, as a sheet you can read while
 /// connected.
 ///
-/// The keypad sends digits; it has never said what any of them *mean*. Node
+/// The keypad sends digits but does not say what any of them *mean*. Node
 /// control is a small command language — `*3` plus a node number links you to
-/// that node, `*1` unlinks — and it is exactly the kind of thing nobody
-/// remembers between sessions. Everything here is reference text: no view in
-/// this file sends anything.
+/// that node, `*1` unlinks. Everything here is reference text: no view in this
+/// file sends anything.
 ///
 /// ## Where these came from, and why they may still be wrong for your node
 ///

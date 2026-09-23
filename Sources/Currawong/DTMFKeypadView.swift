@@ -39,24 +39,19 @@ enum DTMF {
 ///
 /// This is how an AllStar node is actually operated: node commands are digit
 /// strings (`*3` plus a node number to connect, `*1` plus one to disconnect,
-/// status and identification commands), and the node answers with its own digits
-/// and usually a spoken confirmation. Without a keypad the app can hold a
-/// conversation and do nothing else.
+/// status and identification commands), and the node answers with its own
+/// digits and usually a spoken confirmation.
 ///
-/// ## Pressing a key cannot put you on air
+/// **Pressing a key cannot put you on air.** DTMF is signalling: it travels as
+/// its own reliable frame and does not need PTT, so ``RadioSession/sendDTMF(_:)``
+/// deliberately does not key the transmitter. The UI says so, because a grid of
+/// buttons next to a PTT button invites the assumption that they are the same
+/// kind of thing.
 ///
-/// DTMF is signalling: it travels as its own reliable frame and does not need
-/// PTT, so ``RadioSession/sendDTMF(_:)`` deliberately does not key the
-/// transmitter. The UI says so, because a grid of buttons next to a PTT button
-/// invites the assumption that they are the same kind of thing.
-///
-/// ## Why both logs
-///
-/// "Did that digit go out?" and "did the node hear it?" are different questions
-/// with different fixes — the first is the app or the link, the second is the
-/// node's configuration or its DTMF decoder. Showing the two streams separately
-/// is what makes them separable at all, and it is the reason to keep a log
-/// rather than flash the last key pressed.
+/// Sent and heard are logged separately rather than as one flashed digit: "did
+/// that digit go out?" and "did the node hear it?" are different questions with
+/// different fixes — the app or the link for one, the node's configuration or
+/// its DTMF decoder for the other.
 struct DTMFKeypadView: View {
     let isEnabled: Bool
     let sent: String

@@ -5,11 +5,10 @@ import Foundation
 /// The split layout's secondary panes: the one the operator is looking at, and
 /// the ones the picker offers to go to.
 ///
-/// A pure value for the same reason ``SessionPaneLayout`` is one — this decision
-/// used to be three computed properties inside ``RootView``, and the part of it
-/// that matters is not "which panes exist" but *which one you land on when the
-/// set changes underneath you*. That happens on every connect, every disconnect
-/// and every mode change, and it is not visible from any one of the three.
+/// A pure value for the same reason ``SessionPaneLayout`` is one: the part that
+/// matters is not "which panes exist" but *which one you land on when the set
+/// changes underneath you* — which happens on every connect, disconnect and
+/// mode change.
 ///
 /// ## `connect` and `session` are complements
 ///
@@ -18,13 +17,9 @@ import Foundation
 /// status, meters, PTT, and nothing under them. Neither state has a use for the
 /// other's pane, so exactly one of the two is ever in the picker, and because
 /// `session` sorts before every optional pane it is also what a connect falls
-/// back *to*.
-///
-/// That fallback is the whole point of the type. Before it there was no
-/// `session` pane at all: connecting took `connect` out of the picker and the
-/// column landed on the first thing left, which in M17 is the reflector
-/// directory — so linking to a reflector left the operator looking at a list of
-/// reflectors, with the radio squeezed into the top half of an iPad's column.
+/// back *to* — without it, connecting to a reflector would take `connect` out
+/// of the picker and land the column on the first thing left, the reflector
+/// directory, squeezing the radio into the top half of an iPad's column.
 struct DetailPaneSet: Equatable {
     /// The panes the picker offers, in the order it offers them.
     let panes: [DetailPane]
@@ -61,11 +56,10 @@ struct DetailPaneSet: Equatable {
     /// is showing and the column moves to the radio; disconnect and the form is
     /// showing again.
     ///
-    /// The fallback is the first pane there is, which is `connect` or `session`
-    /// — whichever of the pair this state has — because that pair is always
-    /// present and is the pane the state is about. ``panes`` is never empty, so
-    /// the picker never has nothing to select; `setup` is the last resort only
-    /// because a total is safer than a `!`.
+    /// The fallback is `connect` or `session`, whichever this state has —
+    /// always present, and the pane the state is about. ``panes`` is never
+    /// empty; `setup` is the last resort only because a total function is
+    /// safer than a `!`.
     func resolving(_ chosen: DetailPane) -> DetailPane {
         panes.contains(chosen) ? chosen : (panes.first ?? .setup)
     }

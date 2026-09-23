@@ -5,28 +5,23 @@ import SwiftUI
 /// **APP-4.** The saved channels, and the one that is current.
 ///
 /// A channel is a place the operator can go back to — a node, a reflector
-/// module, an EchoLink station — and the point of the list is that reaching one
-/// again costs a tap rather than re-typing a host and a node number.
-/// `ConnectFormView` edits whichever of these is selected;
-/// this decides which that is.
+/// module, an EchoLink station — reachable with a tap rather than re-typing a
+/// host and a node number. `ConnectFormView` edits whichever of these is
+/// selected; this decides which that is.
 ///
-/// ## What a live link refuses, and what it no longer does
+/// ## What a live link refuses
 ///
 /// `RadioSession.select(_:)`, `newChannel(_:)` and `deleteChannel(_:)` all
 /// return early unless the connection is `.disconnected`, because changing the
 /// destination under a live call would leave the screen describing one node
-/// while the audio came from another. That is the backstop; this view is the
-/// part the operator sees, and it **says so** rather than presenting live
-/// controls that silently do nothing — a tap that produces no effect and no
-/// explanation is the worst of the three possible behaviours.
+/// while the audio came from another. That is the backstop; this view **says
+/// so** rather than presenting live controls that silently do nothing.
 ///
-/// **APP-23: choosing a channel is no longer one of the refused things.** The
-/// whole list used to grey out mid-call, which made the ordinary radio gesture —
-/// tap another channel to go there — into disconnect, choose, connect. A tap now
+/// **APP-23: choosing a channel is not one of the refused things.** A tap
 /// calls ``onChoose``, which hangs up on the way, so the selection still only
 /// moves while disconnected and the invariant above is untouched. What stays
-/// locked is everything that changes what the list *contains*: adding, editing,
-/// deleting, reordering. None of those is "take me there now".
+/// locked is everything that changes what the list *contains*: adding,
+/// editing, deleting, reordering.
 ///
 /// ## One list, two platforms
 ///
@@ -41,11 +36,9 @@ struct ChannelListView: View {
 
     /// **APP-23.** What a tap on a row means: *go to this channel*.
     ///
-    /// Not `session.select(_:)` any more, and the difference is the whole of
-    /// the change. Selecting is refused while a link is up — rightly, see the
-    /// note above — so the list used to grey itself out and tell the operator
-    /// to disconnect first. Going somewhere is a sequence that includes hanging
-    /// up, and only ``RootView`` knows the whole of it, because dialling an
+    /// Not `session.select(_:)`: selecting is refused while a link is up (see
+    /// the note above), but going somewhere is a sequence that includes
+    /// hanging up, and only ``RootView`` knows the whole of it — dialling an
     /// EchoLink channel needs a proxy sourced first.
     let onChoose: (UUID) -> Void
 
@@ -63,11 +56,11 @@ struct ChannelListView: View {
     /// Whether the session will accept a change to the *list* — adding,
     /// deleting, reordering, editing.
     ///
-    /// **Choosing a channel is no longer one of these (APP-23).** A tap on a row
-    /// goes there, hanging up on the way if it has to, so the rows themselves
-    /// stay live while a call is up. What is still refused is everything that
-    /// changes what the list contains, because none of those is "take me there
-    /// now" and all of them would edit the channel under a live call.
+    /// **Choosing a channel is not one of these (APP-23).** A tap on a row goes
+    /// there, hanging up on the way if it has to, so the rows themselves stay
+    /// live while a call is up; what is refused is everything that changes what
+    /// the list contains, because all of that would edit the channel under a
+    /// live call.
     private var isMutable: Bool { session.connection == .disconnected }
 
     var body: some View {
@@ -77,12 +70,11 @@ struct ChannelListView: View {
 
             if !isMutable {
                 // No `.fixedSize(horizontal: false, vertical: true)` here or in
-                // the empty state, and that is BU-12's fix — see the note below.
+                // the empty state — BU-12, see the note below.
                 //
-                // **APP-23: switching is no longer in this list.** Tapping a row
-                // now hangs up and dials the new channel, so the label names
-                // only what is still refused — the operations that change what
-                // the list contains.
+                // **APP-23.** Tapping a row hangs up and dials the new channel,
+                // so the label names only what is still refused — the
+                // operations that change what the list contains.
                 Label(
                     "Disconnect to add, edit or delete channels.",
                     systemImage: "lock")
@@ -140,9 +132,9 @@ struct ChannelListView: View {
                 row(for: channel)
             }
             .buttonStyle(.plain)
-            // **No `.disabled(!isMutable)` (APP-23).** This is the tap that now
-            // hangs up and redials, so a live call is the state it is most for,
-            // not the state it is refused in.
+            // **No `.disabled(!isMutable)` (APP-23).** This tap hangs up and
+            // redials, so a live call is the state it is most for, not the
+            // state it is refused in.
             .contextMenu { menu(for: channel) }
 
             if onInspect != nil {
@@ -164,14 +156,12 @@ struct ChannelListView: View {
             channel: channel,
             // **APP-19: the highlight follows the form, not the stored
             // selection.** The two can differ — a directory browse and
-            // `Add channel` both point the form at a channel that is not in this
-            // list — and when they do, no row is highlighted, which is the
-            // honest answer: what the form is describing is not one of these
-            // yet. Highlighting the channel the operator has just left made
-            // `Add channel` look like it had done nothing.
+            // `Add channel` both point the form at a channel that is not in
+            // this list — and when they do, no row is highlighted: what the
+            // form is describing is not one of these yet.
             isSelected: channel.id == session.settings.id,
-            // BU-9: the row shows the *stored* channel, and an edit no longer
-            // reaches it on its own — so where the two disagree the list has to
+            // BU-9: the row shows the *stored* channel, and an edit does not
+            // reach it on its own — so where the two disagree the list has to
             // say so, or the operator is reading a description of somewhere
             // they are not about to call.
             hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
@@ -219,11 +209,10 @@ struct ChannelListView: View {
             #endif
 
             Button {
-                // **APP-23.** The provisional row is still what `+` produces
-                // (APP-22); what is new is that where the details live behind
-                // navigation, the button also opens them. A button that adds a
-                // blank row and leaves the operator on the list has put them
-                // one undiscoverable tap away from the fields it exists to let
+                // **APP-23.** `+` produces the provisional row (APP-22) and,
+                // where the details live behind navigation, also opens them —
+                // leaving the operator on the list would put them one
+                // undiscoverable tap away from the fields it exists to let
                 // them fill in.
                 let id = session.newChannel()
                 if let id { onInspect?(id) }
@@ -240,23 +229,19 @@ struct ChannelListView: View {
     ///
     /// ## **BU-12.** Why neither text carries `fixedSize`
     ///
-    /// It used to, on the caption here and on the lock label above — the usual
-    /// spelling of "wrap, do not truncate". In a `NavigationSplitView` sidebar
-    /// that made the **whole app taller than its window**: the split view
-    /// measures its sidebar's height against an **unspecified width**, wrapping
-    /// text asked for its height at no width answers with one word per line, and
-    /// `fixedSize` turns that answer into a *minimum* the layout must satisfy.
-    /// This view is 67 points tall on its own and demanded **1237.5** in the
-    /// sidebar; the app was laid out at 1249.5 points in an 866-point window and
-    /// macOS centred the overflow, which put the status panel above the top edge
-    /// of the window on a first launch. `WindowSizingTests` is the regression,
-    /// and it carries a canary for the platform behaviour.
+    /// In a `NavigationSplitView` sidebar, `fixedSize` on wrapping text is a
+    /// trap: the split view measures the sidebar's height against an
+    /// **unspecified width**, wrapping text asked for its height at no width
+    /// answers with one word per line, and `fixedSize` turns that answer into a
+    /// *minimum* the layout must satisfy — inflating the sidebar's demanded
+    /// height until macOS centres the overflow and pushes the status panel
+    /// above the window's top edge. `WindowSizingTests` carries a canary for
+    /// the platform behaviour.
     ///
-    /// Nothing is truncated by their absence: a sidebar proposes a real width
-    /// and hundreds of points of height, so both texts wrap exactly as before —
-    /// the difference is only in what they *demand* when asked to measure
-    /// themselves at no width at all. **If a `fixedSize` is ever wanted in this
-    /// view, measure the sidebar's height before and after.**
+    /// Nothing is truncated by leaving it off: a sidebar proposes a real width
+    /// and hundreds of points of height, so both texts wrap exactly as they
+    /// would with it. **If a `fixedSize` is ever wanted in this view, measure
+    /// the sidebar's height before and after.**
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No saved channels")
@@ -273,40 +258,21 @@ struct ChannelListView: View {
 
     /// ## BU-9 item 3: the menu this builds is not the defect
     ///
-    /// The bring-up report has right-click → Delete greyed out for ever on any
-    /// channel a launch has connected to, **after** the link is fully down. That
-    /// was measured through an XCUITest, and the menu it measured was the wrong
-    /// one.
+    /// `ChannelListContextMenuTests` drives a real connect/disconnect through
+    /// the session and inspects the `NSMenu` the platform actually displays for
+    /// a row. SwiftUI **rebuilds** this menu on every read of `view.menu`, and
+    /// the row hands out a fresh, live one the moment `isMutable` is true again
+    /// — Delete does not stay stuck disabled in the row's subtree.
     ///
-    /// `ChannelListContextMenuTests` looks at the `NSMenu` the platform actually
-    /// displays for a row, driving a real connect and disconnect through the
-    /// session. What it finds:
-    ///
-    /// - SwiftUI **rebuilds** this menu on every read of the row's `view.menu`.
-    ///   A menu read while the list was locked carries `isEnabled == false` and a
-    ///   `nil` action, and keeps them for ever — but the row hands out a fresh,
-    ///   live one the moment `isMutable` is true again.
-    /// - After a connect/disconnect cycle, Delete is enabled on the connected
-    ///   channel *and* on a row that merely sat in the list while it was locked,
-    ///   and sending its action deletes the channel. So the `.disabled` below
-    ///   does not leave `isEnabled = false` behind in the row's subtree, which is
-    ///   what the four earlier attempts were all trying to fix.
-    ///
-    /// So nothing here changed. What did change is the test's query:
+    /// The report's symptom came from an unscoped test query instead:
     /// `app.menuItems["Delete"]` is not scoped to the context menu, and every
-    /// SwiftUI app on macOS has an always-greyed `Edit ▸ Delete` in the menu bar.
-    /// An unscoped query finds *that* — existing, disabled, and clicking
-    /// nothing — whether or not the row's menu ever opened. A modal alert left
-    /// standing after the session (`handleLinkLoss` presents one, and so does a
-    /// failed connect) is enough to stop the menu opening while leaving every
-    /// other symptom the report lists intact: "Not connected", no lock label, the
-    /// row enabled.
+    /// SwiftUI app on macOS has an always-greyed `Edit ▸ Delete` in the menu
+    /// bar, which such a query finds regardless of whether the row's own menu
+    /// ever opened.
     ///
-    /// **Unconfirmed end to end.** The scoped-query UI tests
+    /// **Unconfirmed end to end** — the scoped-query UI tests
     /// (`ChannelDeleteAfterConnectUITests`) that would settle it have not been
-    /// run: this machine's UI-test automation grant has lapsed. Until somebody
-    /// runs them, item 3's cause is the best-supported explanation rather than a
-    /// closed one, and the ⚠️ belongs on the *report*, not on this view.
+    /// run, so this is the best-supported explanation rather than a closed one.
     private var list: some View {
         List {
             ForEach(session.channels.channels) { channel in
@@ -327,13 +293,11 @@ struct ChannelListView: View {
             // **APP-22: the row for a channel that is not in the list yet.**
             //
             // `Add channel` points the form at a new channel and writes nothing
-            // (APP-19) — which was right about storage and left the operator with
-            // no sign that anything had happened, since the row it used to create
-            // was the only feedback the button had. So the draft appears here, at
-            // the bottom, marked "Not saved", and **Save or Connect is still what
-            // puts it in storage**. Quit without either and it is gone, exactly
-            // as a reflector picked out of the directory is: nothing can leave a
-            // permanent hostless row behind. The maintainer's call, 2026-08-21.
+            // (APP-19), so the draft appears here, at the bottom, marked "Not
+            // saved" — **Save or Connect is still what puts it in storage**.
+            // Quit without either and it is gone, exactly as a reflector picked
+            // out of the directory is: nothing can leave a permanent hostless
+            // row behind.
             //
             // Outside the `ForEach` on purpose: `onDelete` and `onMove` above
             // work in offsets into the *stored* array, and a row inside that

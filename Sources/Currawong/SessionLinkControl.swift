@@ -19,27 +19,12 @@ import Foundation
 ///
 /// ## Why this dials the *selected* channel
 ///
-/// It used to offer only "Reconnect", to the last channel a call was placed to
-/// this run, and it restored that channel before dialling. The reasoning was
-/// that a plain Connect here would be a second entry point to a form's worth of
-/// fields the operator could not see from this pane, so the button should never
-/// start a call to somewhere they had not looked at.
-///
-/// **APP-16 removed that premise.** The status panel immediately above this
-/// button now names the destination, its address and its mode, so the operator
-/// can see exactly where a call would go without leaving the pane.
-///
-/// What the old behaviour cost, meanwhile, was worse than what it bought:
-/// selecting a channel in the list moved the panel and left the button naming
-/// the previous one, so the pane showed `M17-432 H` above a button reading
-/// `Reconnect to M17-CBR A` — and pressing it dialled the second. A control that
-/// keys a transmitter must not disagree with the thing above it about where.
-///
-/// So the button follows the selection. The word still distinguishes the two
-/// cases, because returning to where you just were is worth knowing: **the same
-/// channel says "Reconnect", a different one says "Connect"**, and both dial
-/// what the panel is showing.
-///
+/// The status panel immediately above this button names the destination, its
+/// address and its mode (APP-16), so the button follows the same selection: a
+/// control that keys a transmitter must not disagree with the thing above it
+/// about where. The word still distinguishes returning to where you just were
+/// from going somewhere new — **the same channel says "Reconnect", a different
+/// one says "Connect"** — and both dial what the panel is showing.
 struct SessionLinkControl: Equatable {
     let title: String
     let systemImage: String
