@@ -2952,3 +2952,36 @@ here.
 **Related:** `BU-24` (same exception, fatal instead of hanging), `BU-23` (the
 mid-over device-change window), `BU-13` (the starve when engine and Q2L rates
 disagree — the same 16000 Hz that appears above).
+
+---
+
+### BU-26 — a wait that outlives its own deadline reports a stall as a fault ✅ FIXED 2026-09-23
+
+**`main` went red on the `APP-34` merge** (run 35844629340) in
+`BLEPTTControllerTests.testEscalationGivesUpAfterTheBound`, with `timed out
+waiting for: rebuild started`. The same commit was green on its pull request,
+which is `BU-20`'s expected pairing, since PRs skip the iOS-simulator step.
+
+**The controller did the right thing.** Its log reads the whole ladder in order:
+attempt 1/3, attempt 2/3 at t=60.391, attempt 3/3, then "gave up after 3
+attempts", which is exactly the behaviour under test. The disconnect the test was
+waiting for is made in the same synchronous step that logs attempt 2/3. The
+next line anything on the main actor logged was at **t=82.354, twenty-two
+seconds later**. What the process was doing in that gap was not recorded, so
+this does not say *why* the runner stalled. It says only that it did, for longer
+than the 20 s budget `BU-20` set on a 14 s measurement.
+
+**The fault is in `waitUntil`, and it is independent of the stall's length.** The
+loop was `while Date() < deadline { if predicate() return; sleep }`. A sleep that
+returns past the deadline ends the loop without reading the predicate, so a
+condition that had held for twenty-two seconds was reported as never arriving.
+No timeout survives a stall longer than itself, and raising it again would only
+move the line.
+
+**Fix:** read the predicate once more after the deadline, before failing.
+`BU15FirstOverTests.waitUntilHandled` had the same loop and gets the same change.
+A genuine timeout still fails. A stalled runner whose condition holds no longer
+does. The on-air UI tests carry similar loops, but they do not run in CI and are
+left as they are.
+
+**Related:** `BU-20` (the same stall family, and the 20 s default).

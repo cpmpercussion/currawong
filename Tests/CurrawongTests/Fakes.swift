@@ -1121,6 +1121,19 @@ final class SessionHarness {
 /// fifteen more seconds before it says so. That is the right way round: a
 /// five-second budget was reporting a scheduling stall as a product fault, and
 /// the diagnosis of a red `main` is worth more than the seconds.
+///
+/// ## Why the predicate is read once more after the deadline
+///
+/// Because no timeout survives a stall longer than itself, and **twenty-two
+/// seconds** has been measured too: `main`, run 35844629340,
+/// `testEscalationGivesUpAfterTheBound`. The controller logged its second
+/// rebuild at t=60.391 and made the disconnect it was waiting for in the same
+/// synchronous step; the main actor next ran at t=82.354. The poll's sleep came
+/// back past the deadline, the loop ended without looking, and a condition that
+/// had held for twenty-two seconds was reported as never arriving. A stall is
+/// still a stall, but it is not this test's business — the question is whether
+/// the condition holds, so it is asked one last time before failing. See
+/// `BU-26`.
 @MainActor
 func waitUntil(
     _ description: String,
@@ -1134,5 +1147,6 @@ func waitUntil(
         if predicate() { return }
         try? await Task.sleep(nanoseconds: 1_000_000)
     }
+    if predicate() { return }
     XCTFail("timed out waiting for: \(description)", file: file, line: line)
 }
