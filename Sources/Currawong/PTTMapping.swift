@@ -154,9 +154,7 @@ struct PTTLearner: Equatable {
     private(set) var release: BLESignal?
 
     /// Every distinct signal seen, in order of first arrival, with how many
-    /// times it arrived. Shown in the learn-mode UI so an operator whose
-    /// accessory is chattering can see that it is, rather than staring at a
-    /// screen that says nothing is happening.
+    /// times it arrived. Shown in the learn-mode UI.
     private(set) var observed: [ObservedSignal] = []
 
     init(accessoryID: UUID, accessoryName: String?) {

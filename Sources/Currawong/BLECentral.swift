@@ -117,9 +117,7 @@ enum BLECentralEvent: Sendable, Equatable {
     ///
     /// Exists so the caller can bound the wait for an answer from the moment a
     /// read was *attempted*. Arming a deadline for a probe that silently could
-    /// not run reads discovery latency as link death — the Q2L's Classic half
-    /// connecting fires a route change while its BLE half is mid-discovery, and
-    /// that combination tore down a healthy link on a one-second clock.
+    /// not run reads discovery latency as link death instead.
     case probeIssued(id: UUID)
 
     /// **A liveness probe's read answered.** The link demonstrably carries
@@ -130,14 +128,13 @@ enum BLECentralEvent: Sendable, Equatable {
     /// without a characteristic to attribute it to.
     ///
     /// Exists so that "this link is dead" is an *event* rather than the absence
-    /// of one. Waiting a few seconds to see whether a notification turns up
-    /// measures how recently the operator pressed the button, not whether the
-    /// link works — that mistake was made and measured. A read either answers or
-    /// fails, and both answers arrive on their own.
+    /// of one: waiting to see whether a notification turns up measures how
+    /// recently the operator pressed the button, not whether the link works. A
+    /// read either answers or fails, and both arrive on their own.
     ///
     /// Emitted only for the read a probe issued. A characteristic that errors
     /// with no probe outstanding is not evidence of anything the caller asked
-    /// about, and reporting it as a probe failure force-rebuilt healthy links.
+    /// about.
     case probeFailed(id: UUID, reason: String?)
 }
 
@@ -190,18 +187,15 @@ protocol BLECentral: AnyObject, Sendable {
     /// answer as a notification is how a probe could key the radio.
     ///
     /// This exists because **nothing else on this seam is evidence.**
-    /// `.connected` is not: a link was observed reporting connected while
-    /// delivering nothing. A successful subscribe is not either: five in a row
-    /// reported success over a dead link. And waiting for a *notification* is not
-    /// evidence of anything within a useful time, because a PTT button is
-    /// legitimately silent for minutes — which is the flaw this call fixes.
+    /// `.connected` and a successful subscribe can both be reported over a link
+    /// that delivers nothing, and waiting for a *notification* is not evidence
+    /// within a useful time either, because a PTT button is legitimately silent
+    /// for minutes.
     ///
     /// **A no-op when there is nothing readable yet, or the peripheral is not
     /// connected — and silence must not be read as failure.** Characteristic
     /// discovery arrives service by service, so an early probe genuinely cannot
-    /// run; reporting that as a dead link once made this call the cause of the
-    /// fault it exists to detect. Only a read that was attempted and failed is
-    /// evidence, and that is what ``BLECentralEvent/probeFailed(id:reason:)``
-    /// means.
+    /// run. Only a read that was attempted and failed is evidence, and that is
+    /// what ``BLECentralEvent/probeFailed(id:reason:)`` means.
     func probeForLiveness(_ id: UUID)
 }

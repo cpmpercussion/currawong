@@ -14,21 +14,18 @@ import Foundation
 /// ## SF-2
 ///
 /// One rule, stated once, in ``handle(_:)``: **the first thing done with a
-/// disconnection is to stop transmitting.** Not "if the accessory was what
-/// keyed us" — unconditionally, synchronously, before the reconnection logic,
-/// before the published state changes, before anything is awaited. An accessory
-/// that goes out of range while the operator is talking is the failure this
-/// requirement exists for, and the reconnect that follows must never be able to
-/// delay the unkey.
+/// disconnection is to stop transmitting** — unconditionally, synchronously,
+/// before the reconnection logic, before the published state changes, before
+/// anything is awaited. The reconnect that follows must never be able to delay
+/// the unkey.
 ///
 /// ## No press survives a reconnection
 ///
 /// ``isAccessoryKeyed`` is cleared on every disconnection, so a reconnect
 /// starts from "button up" no matter what the accessory was doing when the link
 /// dropped. A device that re-sends its state on connect will send the press
-/// payload and key the radio — deliberately, because that is a genuine press
-/// edge arriving on a live link — but nothing in this class *assumes* a press
-/// across the gap.
+/// payload and key the radio — deliberately, that is a genuine press edge on a
+/// live link — but nothing here *assumes* a press across the gap.
 @MainActor
 final class BLEPTTController: ObservableObject {
 
@@ -69,11 +66,10 @@ final class BLEPTTController: ObservableObject {
     /// How many failed connection attempts in a row before the controller stops
     /// trying and puts a "Try again" button on screen.
     ///
-    /// Retrying is not free — it holds the radio awake — and a `didFailToConnect`
-    /// is unusual: CoreBluetooth's `connect` has no timeout and simply pends
-    /// until the accessory reappears, which is the behaviour that covers "left
-    /// it in the car". This bound is for the case where connecting fails
-    /// outright and instantly, which without a cap is a busy loop.
+    /// CoreBluetooth's `connect` has no timeout and simply pends until the
+    /// accessory reappears — the behaviour that covers "left it in the car" —
+    /// so a `didFailToConnect` means connecting failed outright and instantly,
+    /// which without a cap is a busy loop.
     static let maximumConsecutiveFailures = 5
 
     // MARK: - Published state
@@ -103,19 +99,15 @@ final class BLEPTTController: ObservableObject {
 
     /// **Whether anything has actually arrived on this link since it came up.**
     ///
-    /// The honest answer to "is the button going to work?", and the reason it
-    /// exists is that every other answer the app can give is unreliable.
-    /// Measured on a phone, 2026-08-22: after the audio route moves to HFP the
-    /// accessory's notifications stop, and `CBPeripheral` still reports
-    /// connected, no disconnection is delivered, and a re-subscribe *reports
-    /// success* while delivering nothing. So `.connected` is not evidence, and a
-    /// successful subscribe is not evidence. **Only arriving data is evidence.**
+    /// `CBPeripheral` can report `.connected`, and a re-subscribe can report
+    /// success, over a link whose accessory has stopped delivering — after the
+    /// audio route moves to HFP, for instance. So neither is evidence; **only
+    /// arriving data is evidence.**
     ///
     /// False from the moment a link is established or rebuilt until the first
-    /// notification arrives. The UI must not promise a working button while this
-    /// is false — saying "Accessory ready" over a dead button is worse than
-    /// saying nothing, because it sends the operator on air believing they can
-    /// key.
+    /// notification arrives. The UI must not promise a working button while
+    /// this is false — saying "Accessory ready" over a dead button sends the
+    /// operator on air believing they can key.
     @Published private(set) var isButtonVerified = false
 
     /// The last notification seen from the connected accessory, whether or not
@@ -123,9 +115,7 @@ final class BLEPTTController: ObservableObject {
     /// stopped working can see whether anything is arriving at all.
     @Published private(set) var lastSignal: BLESignal?
 
-    /// Characteristics currently subscribed to. Diagnostic only — the mapping
-    /// is what matters — but "subscribed to seven characteristics and none of
-    /// them said anything" is a useful thing for an operator to be able to see.
+    /// Characteristics currently subscribed to. Diagnostic only.
     @Published private(set) var subscribedPaths: [BLECharacteristicPath] = []
 
     /// Why the link last went away, when the central said.
@@ -150,13 +140,11 @@ final class BLEPTTController: ObservableObject {
     /// **Whether a rebuild is safe right now**, asked of whoever knows what is on
     /// air — ``RadioSession`` in the app, via the composition root.
     ///
-    /// A rebuild disconnects, and `SF-2` makes a disconnection unkey
-    /// unconditionally. This controller can see whether the *accessory* is
-    /// holding the key; it cannot see the on-screen button. An escalation fires
-    /// on a timer, by which time the operator may have keyed up some other way,
-    /// so the question has to be re-asked rather than assumed. Absent, the answer
-    /// is taken as yes: a controller with nothing wired to it has no radio to
-    /// drop.
+    /// A rebuild disconnects, and SF-2 makes a disconnection unkey
+    /// unconditionally. This controller can see only whether the *accessory* is
+    /// holding the key, not the on-screen button, so the question is re-asked
+    /// every time rather than assumed still true. Absent, the answer is taken
+    /// as yes: a controller with nothing wired to it has no radio to drop.
     var isRebuildSafe: (@MainActor () -> Bool)?
 
     // MARK: - Private state
@@ -175,47 +163,31 @@ final class BLEPTTController: ObservableObject {
     /// into one reconnect instead of one per change.
     private var lastRepairAt: Date?
 
-    /// **How long to wait for a probe's answer, and why a wait is unavoidable.**
+    /// **How long to wait for a probe's answer.**
     ///
-    /// A read that succeeds calls back quickly — 205 ms, measured on the device.
-    /// A read on a **dead** link calls back not at all: CoreBluetooth does not
-    /// time reads out, so there is no failure event to wait for. Silence *is* the
-    /// negative answer, and silence can only be recognised by deciding how long
-    /// is long enough.
-    ///
-    /// So this is not one of the timing guesses that were removed from this class.
-    /// Those inferred behaviour from durations — how long a route takes to settle,
-    /// how long before an operator would have pressed the button. This one bounds
-    /// a wait for an answer that may never come, which is a different thing and
-    /// genuinely required.
-    ///
-    /// **Short on purpose.** It was ten seconds when it was only a backstop
-    /// against a seam that misbehaved, and with probe-first that became the
-    /// recovery time for a dead link: "red LED, no button, then it gets sorted
-    /// after a while", and the while was the backstop. A second is comfortably
-    /// more than a healthy read needs and turns a dead link's cost into roughly a
-    /// second plus a rebuild — better than the 1.6-2.6 s that an unconditional
-    /// rebuild cost after *every* over, healthy or not.
+    /// CoreBluetooth does not time reads out, so a read on a dead link calls
+    /// back not at all — silence *is* the negative answer, and silence can only
+    /// be recognised by deciding how long is long enough. Short on purpose: a
+    /// second is comfortably more than a healthy read needs, so a dead link
+    /// costs roughly a second plus a rebuild rather than the length of an
+    /// unconditional rebuild on every over, healthy or not.
     private let probeDeadline: @Sendable () async -> Void
 
     /// Whether a rebuild is between its disconnect and its answer.
     ///
-    /// **This replaced a four-second cooldown**, and the difference is the point:
-    /// a route-change burst is coalesced because a rebuild is already happening,
-    /// not because a clock says too little time has passed. Every timing constant
-    /// in this class was a guess, and each one produced its own failure — a quiet
-    /// period that suppressed the repair for the event that causes the damage, and
-    /// a verify window that measured how recently the operator pressed the button.
+    /// A route-change burst is coalesced by this flag, not by a clock: it fires
+    /// once because a rebuild is already happening, not because too little time
+    /// has passed.
     private var isRebuildInFlight = false
 
     /// Whether the current check or rebuild has actually issued a read.
     ///
     /// The deadline needs the distinction: a probe that was issued and never
     /// answered is a dead link, but a probe that could not run — nothing
-    /// readable discovered yet — is silence, and silence is not evidence.
-    /// Treating the two alike is how the Q2L's Classic half connecting (a route
-    /// change fired while its BLE half was still mid-discovery) got a healthy
-    /// link torn down on a one-second clock.
+    /// readable discovered yet — is silence, and silence is not evidence. An
+    /// accessory whose two radio halves connect independently can fire a route
+    /// change while BLE discovery is still in progress; without this flag that
+    /// tears down a healthy link on the deadline.
     private var hasProbeBeenIssued = false
 
     /// Repairs attempted since the link last produced anything, so escalation is
@@ -227,12 +199,10 @@ final class BLEPTTController: ObservableObject {
 
     /// How many rebuilds to try before giving up and leaving it to the operator.
     ///
-    /// Small on purpose. Each attempt costs the accessory a reconnection and
-    /// buys, on the observed evidence, a little better than even odds; a long
-    /// ladder would mostly be a way of hiding that the link is not coming back.
-    /// Giving up is not a failure to act — `isButtonVerified` drives an honest
-    /// indicator and a **Reconnect** button, which is a better answer than
-    /// retrying invisibly forever.
+    /// Small on purpose: each attempt costs the accessory a reconnection, and a
+    /// long ladder would mostly hide that the link is not coming back. Giving up
+    /// is not a failure to act — `isButtonVerified` drives an honest indicator
+    /// and a **Reconnect** button, which beats retrying invisibly forever.
     static let maximumRepairAttempts = 3
 
 
@@ -265,12 +235,9 @@ final class BLEPTTController: ObservableObject {
     // MARK: - Lifecycle
 
     /// Brings the Bluetooth stack up and reconnects the learned accessory, if
-    /// there is one.
-    ///
-    /// **Does nothing when nothing has been learned.** Constructing a
-    /// `CBCentralManager` is what triggers the Bluetooth permission prompt, and
-    /// an operator who has never asked for an accessory should never be asked
-    /// for Bluetooth. Called at launch by the composition root.
+    /// there is one. Does nothing when nothing has been learned: constructing a
+    /// `CBCentralManager` triggers the Bluetooth permission prompt, and an
+    /// operator who never asked for an accessory should never see it.
     func activateIfConfigured() {
         guard mapping != nil else { return }
         activate()
@@ -432,69 +399,39 @@ final class BLEPTTController: ObservableObject {
     // MARK: - Repairing a link that has gone quiet (BU-14)
 
     /// **The audio route changed while nothing was transmitting.** Reconnect the
-    /// accessory, because its subscription has probably stopped delivering and
-    /// nothing else will ever say so.
+    /// accessory (BU-14): after the audio session takes the route to HFP, an
+    /// accessory's notifications can stop arriving with **nothing reporting
+    /// it** — the peripheral stays connected, no disconnection is delivered, and
+    /// the button is simply dead until the link is rebuilt. See the Bluetooth
+    /// audio document under `docs` for detail.
     ///
-    /// ## Why this exists
+    /// A bare re-subscribe is not a fix: it can report success — completes
+    /// without error, ``subscribedPaths`` fills in — while delivering nothing.
+    /// Neither `.connected` nor a successful subscribe is evidence the link
+    /// works; only arriving data is, and a PTT button is legitimately silent for
+    /// minutes, so silence cannot be the trigger either. A full reconnect is the
+    /// reliable repair, so this acts on the *observable* signal — the route
+    /// change — rather than the cheap one.
     ///
-    /// Measured on a phone against a TIDRADIO Q2L, 2026-08-22: the accessory's
-    /// notifications stop arriving immediately after the audio session takes the
-    /// route to HFP, and **nothing reports it**. The peripheral stays connected,
-    /// no disconnection is delivered, ``linkState`` goes on saying `.connected`,
-    /// and the button is simply dead until the link is rebuilt. Full detail in
-    /// the Bluetooth audio document under `docs`.
-    ///
-    /// ## Why a reconnect and not a re-subscribe
-    ///
-    /// A bare re-subscribe was tried first and **revived the link once in six
-    /// attempts** — and, worse, *reported success every time*: the subscribe
-    /// completed without error and ``subscribedPaths`` filled in, with no data
-    /// ever following. So neither `.connected` nor a successful subscribe can be
-    /// used as evidence that this link works. Only arriving data is evidence, and
-    /// a PTT button is legitimately silent for minutes, so silence cannot be a
-    /// trigger either.
-    ///
-    /// A reconnect, by contrast, worked every time it was tried. So this does the
-    /// reliable thing on a signal that is *observable* — the route change —
-    /// rather than the cheap thing on a signal that is not.
-    ///
-    /// ## Why this is safe against SF-2
-    ///
-    /// A reconnect means a disconnection, and a disconnection unkeys
-    /// unconditionally — that is SF-2 and it is not negotiable. So this must
-    /// never run while the operator is transmitting, or the repair becomes a way
-    /// of dropping them mid-over.
-    ///
-    /// **The guard for that is not here.** ``RadioSession`` owns transmit state
-    /// and calls this only when it is idle: no transmission, no hold, no resume
-    /// in flight. This class adds only what it can see for itself — that the
-    /// accessory is not the thing currently keyed. Keeping the decision in the
-    /// class that knows the answer is what lets SF-2 stay unconditional; nothing
-    /// here suppresses it.
-    ///
-    /// Repairing between overs is also the right *moment*: the button is needed
-    /// for the **next** press, not this one.
+    /// **Safe against SF-2** only because ``RadioSession`` calls this exclusively
+    /// when idle — no transmission, no hold, no resume in flight. A reconnect
+    /// means a disconnection, and a disconnection unkeys unconditionally; this
+    /// class adds only what it can see for itself, that the accessory is not the
+    /// thing currently keyed. Keeping the idle decision in the class that knows
+    /// the answer is what lets SF-2 stay unconditional.
     func audioRouteDidChange() {
         checkLink(reason: "route changed")
     }
 
-    /// **Ask before rebuilding.** Probe the link; rebuild only if the probe fails.
-    ///
-    /// Until the probe worked, this could not be the order: a rebuild was the only
-    /// way to *maybe* fix a link, so the repair rebuilt unconditionally on every
-    /// route change and probed afterwards to confirm. That cost the operator a
-    /// dead button for the length of a reconnection after **every over** —
-    /// measured 2026-08-22 at 1.6 s and 2.6 s from disconnect to reconnected,
-    /// which is exactly the window a quick reply lands in.
-    ///
-    /// Now that a probe answers or fails on its own, the cheap question comes
-    /// first and the expensive answer only when it is needed.
+    /// **Ask before rebuilding.** Probe the link; rebuild only if the probe fails
+    /// — an unconditional rebuild on every route change costs the operator a
+    /// dead button for a full reconnection after every over, healthy or not.
     ///
     /// **``isButtonVerified`` is deliberately not cleared here.** A check is a
     /// silent health question, and flipping the indicator to "untested" after
-    /// every over would make it flicker on a link that is fine — the churn is
-    /// itself a fault. It is cleared when a rebuild actually starts, which is when
-    /// the claim really has stopped being true.
+    /// every over would make it flicker on a link that is fine. It is cleared
+    /// when a rebuild actually starts, which is when the claim really has
+    /// stopped being true.
     private func checkLink(reason: String) {
         guard mapping != nil, learner == nil, linkState.isConnected,
             !isAccessoryKeyed, let id = wantedAccessory
@@ -522,19 +459,17 @@ final class BLEPTTController: ObservableObject {
     /// **The operator asked for the link to be rebuilt.** Ignores the cooldown,
     /// because a person pressing a button has better information than a timer.
     func reconnectAccessory() {
-        // A keyed claim the accessory can no longer withdraw is let go of
-        // first. Every ordinary clear path needs an event from the link — a
-        // release, a disconnection — and a link that died silently mid-press
-        // (the BU-14 signature) delivers neither, so without this the claim
-        // held the `!isAccessoryKeyed` guard closed forever and the one button
-        // meant to fix a dead link was the one thing it disabled. Fail-safe:
-        // this can only ever *unkey* the radio.
+        // A keyed claim the accessory can no longer withdraw is let go of first.
+        // Every ordinary clear path needs an event from the link — a release, a
+        // disconnection — and a link that died silently mid-press delivers
+        // neither, so without this the claim held the `!isAccessoryKeyed` guard
+        // closed forever and disabled the one button meant to fix a dead link.
+        // Fail-safe: this can only ever *unkey* the radio.
         if isAccessoryKeyed {
             isAccessoryKeyed = false
             sink?.pttReleased(from: .accessory, reason: .accessoryReleased)
         }
-        // A fresh budget: the operator pressing a button is new information, and
-        // whatever exhausted the automatic attempts may since have changed.
+        // A fresh budget: the operator pressing a button is new information.
         repairAttempts = 0
         isRebuildInFlight = false
         repair(reason: "operator asked", force: true)
@@ -558,15 +493,10 @@ final class BLEPTTController: ObservableObject {
 
     /// Rebuild the link now.
     ///
-    /// **Leading edge, not trailing.** An earlier version waited 1.5 s for the
-    /// route to go quiet before repairing, which put that wait on the critical
-    /// path: the operator pressed the button and found it dead for 1.5 s plus a
-    /// 1.2 s reconnect. Reported as "when it works it feels slow", and the
-    /// complaint was right — the wait bought nothing that a cooldown does not.
-    ///
-    /// So: repair on the *first* change of a burst, and coalesce the rest by
-    /// noticing that a rebuild is already in flight. Same coalescing, none of the
-    /// latency — and no constant to tune wrongly.
+    /// Repairs on the *first* change of a burst, and coalesces the rest by
+    /// noticing that a rebuild is already in flight — not by waiting for the
+    /// burst to go quiet first, which puts a dead button on the operator's
+    /// critical path for nothing a coalesce doesn't already buy.
     private func repair(reason: String, force: Bool) {
         // No accessory in use, or no link to repair: nothing to do. In
         // particular this must not fire during learn mode, where the operator is
@@ -596,10 +526,9 @@ final class BLEPTTController: ObservableObject {
         isRebuildInFlight = true
         hasProbeBeenIssued = false
 
-        // A deadline armed for an earlier check dies here. The rebuild takes a
-        // measured 1.6–2.6 s and the deadline fires at one, so a stale one left
-        // running would expire mid-rebuild — falsely clearing the in-flight
-        // flag, or worse, issuing a second disconnect into the link being
+        // A deadline armed for an earlier check dies here rather than running
+        // on into the rebuild, where its expiry would falsely clear the
+        // in-flight flag or issue a second disconnect into the link being
         // rebuilt. The rebuild's own deadline is armed when its probe actually
         // goes out, after the new link subscribes.
         escalationTask?.cancel()
@@ -612,13 +541,9 @@ final class BLEPTTController: ObservableObject {
         // Disconnect only. The `.disconnected` event drives the reconnect
         // through `handle(_:)`, which is the same path a real link drop takes —
         // so there is exactly one reconnection routine, not two.
-        // **No deadline armed here.** A rebuild has not issued a probe — probes
-        // go out when the new link finishes subscribing, which is after the
-        // reconnection. Arming it here started the clock about a second before
-        // the probe existed, so the deadline expired 2 ms after reconnect and
-        // escalated into a link that was still being built. Three rebuilds in
-        // four seconds, each killing what the last one made. Measured
-        // 2026-08-22; invisible while the wait was ten seconds, fatal at one.
+        // No deadline armed here: a rebuild has not issued a probe yet — probes
+        // go out only once the new link finishes subscribing, after the
+        // reconnection completes.
         central?.disconnect(id)
     }
 
@@ -660,9 +585,7 @@ final class BLEPTTController: ObservableObject {
             guard !Task.isCancelled, let self, self.isRebuildInFlight else { return }
             guard self.hasProbeBeenIssued else {
                 // No read ever went out — nothing readable had been discovered
-                // when the probe ran. That is silence, not evidence: acting on
-                // it tore down a healthy link whose Classic half had just fired
-                // a route change while its BLE half was mid-discovery. The
+                // when the probe ran. That is silence, not evidence, so the
                 // check simply ends; a later route change is free to ask again.
                 Diagnostics.route(
                     "accessory probe could not run before the deadline; "
@@ -750,23 +673,16 @@ final class BLEPTTController: ObservableObject {
         case .subscribed(let id, let paths):
             guard id == wantedAccessory else { return }
             subscribedPaths = paths
-            // "Subscribed to seven characteristics and none of them said
-            // anything" is a different fault from "subscribe never completed",
-            // and on 2026-08-22 there was no way to tell them apart while a
-            // re-learn sat there receiving nothing.
             Diagnostics.route(
                 "accessory subscribed to \(paths.count): "
                     + paths.map { "\($0.service)/\($0.characteristic)" }
                         .joined(separator: " "))
 
-            // **Make the link prove itself.** A rebuild is only worth anything if
-            // the new link carries data, and neither this event nor `.connected`
-            // shows that — both were observed reporting success over a dead link.
-            //
-            // Not while learning: the read's value arrives as a notification, and
-            // in learn mode the state machine would latch it as the operator's
-            // press. That is a real trap and it cost a session to diagnose once
-            // already.
+            // Make the link prove itself: a rebuild is only worth anything if the
+            // new link carries data, and neither this event nor `.connected`
+            // shows that. Not while learning — the read's value arrives as a
+            // notification, and the learner would latch it as the operator's
+            // press.
             if repairAttempts > 0, learner == nil {
                 Diagnostics.route("accessory liveness probe: reading the link")
                 central?.probeForLiveness(id)
@@ -791,12 +707,10 @@ final class BLEPTTController: ObservableObject {
                 "accessory probe answered "
                     + "\(signal.path.service)/\(signal.path.characteristic) "
                     + "= \(signal.payloadDescription)")
-            // The answer resolves the check whatever the verification state.
-            // When this was gated on `isButtonVerified`, a probe's answer on an
-            // already-verified link was swallowed, the deadline was never
-            // cancelled, and every post-over route change tore down a healthy
-            // link one second after it had answered (measured on device
-            // 2026-08-22, three overs in a row).
+            // The answer resolves the check whatever the verification state —
+            // gating this on `isButtonVerified` leaves an already-verified
+            // link's deadline armed, and a later route change tears it down a
+            // second after it last answered.
             //
             // And that is *all* it does. The answer travels the read path,
             // which the accessory keeps serving even while it suppresses
@@ -827,8 +741,8 @@ final class BLEPTTController: ObservableObject {
             }
             // And only the button's own signals verify the *button* — the
             // accessory serves other traffic even while it suppresses the
-            // button's notifications in HFP call mode (Mac cross-test,
-            // 2026-08-22), so a battery level proves the link, not the button.
+            // button's notifications in HFP call mode, so a battery level
+            // proves the link, not the button.
             if !isButtonVerified, isButtonSignal(signal) {
                 isButtonVerified = true
                 // Restores the full budget for the next time the link dies.
@@ -880,9 +794,9 @@ final class BLEPTTController: ObservableObject {
             // release that is swallowed can leave a microphone open.
             let wasKeyed = isAccessoryKeyed
             isAccessoryKeyed = false
-            // Logged with what it found, because the Q2L sends its release
-            // twice ~1 ms apart: a second line saying `wasKeyed=false` is the
-            // duplicate being absorbed, not a fault.
+            // Logged with what it found: some accessories send a release twice
+            // milliseconds apart, and a second line saying `wasKeyed=false` is
+            // the duplicate being absorbed, not a fault.
             Diagnostics.keying("accessory RELEASE edge (wasKeyed=\(wasKeyed))")
             sink?.pttReleased(from: .accessory, reason: .accessoryReleased)
         }

@@ -7,18 +7,10 @@ import SwiftUI
 ///
 /// A pure value like ``SessionLinkControl`` and ``TransmitStatusPresentation``,
 /// and for the same reason: which of these an operator is looking at is a
-/// decision worth testing without a view.
-///
-/// ## Why this replaced a row
-///
-/// It used to be ``AccessoryStatusRow`` at the bottom of the session pane — an
-/// icon, two lines of text and a chevron into the accessory screen. The row's
-/// own rationale was right and is kept here: *"is my PTT fob still connected?"*
-/// is asked from the screen the operator is looking at **while transmitting**,
-/// not from the screen that configures it. What did not belong on that screen
-/// was the way *in* to the configuration, which APP-12 had already given to
-/// Settings, and the vertical space — a full row for a thing that is a light on
-/// a front panel.
+/// decision worth testing without a view. It lives in the status panel rather
+/// than the settings screen because *"is my PTT fob still connected?"* is asked
+/// from the screen the operator is looking at **while transmitting**, not from
+/// the screen that configures it (APP-12 owns that one).
 ///
 /// ## Three states, not two
 ///
@@ -74,10 +66,9 @@ struct AccessoryIndicator: Equatable {
     ///     since it came up. **A connected link is not a working button** — see
     ///     `BLEPTTController.isButtonVerified` — and this indicator must not
     ///     claim otherwise, because an operator who believes they can key and
-    ///     cannot is worse off than one who knows they cannot. No default, and
-    ///     deliberately not the once-default `true`: a call site that forgot
-    ///     the question would have compiled cleanly into "Accessory ready" over
-    ///     an unproven button, which is the exact lie the parameter removes.
+    ///     cannot is worse off than one who knows they cannot. No default: a
+    ///     call site that forgot the question would compile cleanly into
+    ///     "Accessory ready" over an unproven button.
     init(
         linkState: BLEPTTController.LinkState,
         isAccessoryConfigured: Bool,
@@ -111,10 +102,10 @@ struct AccessoryIndicator: Equatable {
 
         switch linkState {
         case .connected where !isButtonVerified:
-            // Connected, and that is all that can honestly be said: nothing has
-            // arrived on this link yet, and after BU-14 a connection is no
-            // evidence at all. "Untested" rather than a warning, because most of
-            // the time the first press proves it and all is well.
+            // Connected, and that is all that can honestly be said: a
+            // connection is not evidence the button works (BU-14). "Untested"
+            // rather than a warning, because most of the time the first press
+            // proves it and all is well.
             systemImage = "dot.circle"
             title = "Accessory untested"
             emphasis = .working

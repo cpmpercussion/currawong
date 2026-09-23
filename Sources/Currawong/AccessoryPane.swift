@@ -22,12 +22,9 @@ import SwiftUI
 ///
 /// ## A section of the settings screen, not a sheet
 ///
-/// This is the screen's content with no navigation chrome of its own, and
-/// nothing wraps it any more. There used to be an `AccessoryView` around it — a
-/// `NavigationStack`, a title and a Done button — for the row at the bottom of
-/// the session pane to present on iPhone. APP-12 moved the configuration to the
-/// settings screen, which embeds this directly, and APP-18 removed the row; the
-/// wrapper had no caller left. Both layouts now reach it the same way.
+/// This is the screen's content with no navigation chrome of its own — no
+/// `NavigationStack`, no title, no Done button. The settings screen (APP-12)
+/// embeds it directly, on both layouts.
 struct AccessoryPane: View {
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
@@ -157,9 +154,8 @@ struct AccessoryPane: View {
             }
 
             if accessory.linkState.isConnected, !accessory.isButtonVerified {
-                // The operator's way out of BU-14's dead end. Connected and
-                // silent is exactly the state that used to read as "ready" and
-                // leave them with no button and nothing to press.
+                // The operator's way out when a connection is silent (BU-14):
+                // connected is not proof the button works.
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Connected, but nothing has been heard from the button yet.")
                         .font(.caption)
