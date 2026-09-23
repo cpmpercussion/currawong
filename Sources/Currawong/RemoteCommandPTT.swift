@@ -3,59 +3,39 @@
 import Combine
 import Foundation
 
-/// What a remote-control button asked for.
-///
-/// Three cases rather than one because `MPRemoteCommandCenter` has three
-/// commands and different accessories send different ones: a one-button headset
-/// sends toggle, a media remote with separate transport keys sends play and
-/// pause. Where the app is given separate edges it uses them; where it is given
-/// a toggle it toggles.
+/// What a remote-control button asked for: a one-button headset sends toggle,
+/// a media remote sends play and pause.
 enum RemoteCommandEvent: Sendable, Equatable {
     case toggle
     case key
     case unkey
 }
 
-/// The seam over `MPRemoteCommandCenter`, for the same reason ``BLECentral``
-/// exists over CoreBluetooth: the real thing needs a running audio session, a
-/// now-playing item and a physical button, and a unit test has none of those.
+/// The seam over `MPRemoteCommandCenter`, so tests need no audio session or
+/// physical button.
 protocol RemoteCommandSource: AnyObject, Sendable {
     var commands: AsyncStream<RemoteCommandEvent> { get }
 
-    /// Start taking over the transport controls. Only ever called when the
-    /// operator has switched this on: a radio app that swallows the pause
-    /// button by default is a radio app that breaks everybody's podcast.
+    /// Takes over the transport controls. Only when the operator has switched
+    /// this on, so media controls are otherwise untouched.
     func enable()
 
     /// Hand the transport controls back.
     func disable()
 }
 
-/// **PT-4.** Headset and HID buttons as a PTT, with the toggle semantics that
-/// come with them.
+/// Headset and HID buttons as a PTT (PT-4).
 ///
-/// ## The honest part
-///
-/// `MPRemoteCommandCenter` delivers *commands*, not *edges*. A headset button
-/// sends "toggle play/pause" when it is pressed and says nothing at all when it
-/// is let go. There is no release to hang an unkey on, so this input **latches**:
-/// press once to transmit, press again to stop. That is a materially different
-/// contract from PT-1 and PT-2 and the requirement acknowledges it.
-///
-/// What the requirement does not license is leaving the operator to guess.
-/// Everything keyed this way sets ``PTTSource/remoteCommand`` on the session,
-/// and the transmit banner says "latched — press again to stop" for as long as
-/// it lasts. An operator who is unsure whether letting go will unkey them is an
-/// operator about to leave a microphone open.
-///
-/// PT-5 and PT-6 both apply here and are why this is the *only* fallback:
-/// `GCKeyboard` is foreground-only, and volume-button interception fails App
-/// Store review.
+/// `MPRemoteCommandCenter` delivers commands, not edges: nothing arrives on
+/// release, so this input **latches** — press to transmit, press again to stop.
+/// Everything keyed this way is ``PTTSource/remoteCommand``, and the transmit
+/// banner says it is latched: an operator unsure whether letting go unkeys them
+/// is about to leave a microphone open. The only fallback, given PT-5 and PT-6.
 @MainActor
 final class RemoteCommandPTTController: ObservableObject {
 
-    /// Whether the transport controls are being taken over. Off by default and
-    /// persisted; see the note above about podcasts.
+    /// Whether the transport controls are taken over. Off by default;
+    /// persisted.
     @Published private(set) var isEnabled: Bool
 
     weak var sink: PTTSink?
@@ -78,9 +58,7 @@ final class RemoteCommandPTTController: ObservableObject {
         commandTask?.cancel()
     }
 
-    /// Re-arms at launch if the operator left it on. Nothing is constructed
-    /// when it is off, so an operator who does not use this never has their
-    /// media controls touched.
+    /// Re-arms at launch if left on. Constructs nothing when off.
     func activateIfEnabled() {
         guard isEnabled else { return }
         start()
@@ -131,13 +109,11 @@ final class RemoteCommandPTTController: ObservableObject {
 
 import MediaPlayer
 
-/// The real ``RemoteCommandSource``. The only file that imports `MediaPlayer`.
+/// The real ``RemoteCommandSource``; the only file importing `MediaPlayer`.
 ///
-/// Remote commands are only delivered to an app the system considers to be the
-/// current "now playing" app, so a minimal now-playing entry is published while
-/// this is enabled. That is a real constraint rather than a detail: if another
-/// app takes over playback, the headset button follows it, and the operator's
-/// PTT stops working with no error anywhere. The accessory screen says so.
+/// Commands go only to the "now playing" app, so a minimal now-playing entry is
+/// published while enabled. If another app takes over playback, the button
+/// follows it and PTT stops with no error — the accessory screen warns of this.
 final class MediaPlayerRemoteCommandSource: RemoteCommandSource, @unchecked Sendable {
     let commands: AsyncStream<RemoteCommandEvent>
     private let continuation: AsyncStream<RemoteCommandEvent>.Continuation
@@ -198,7 +174,7 @@ final class MediaPlayerRemoteCommandSource: RemoteCommandSource, @unchecked Send
 
 #else
 
-/// A platform with no MediaPlayer framework. Not reachable on iOS or macOS.
+/// Stand-in for platforms without MediaPlayer.
 final class MediaPlayerRemoteCommandSource: RemoteCommandSource, @unchecked Sendable {
     let commands: AsyncStream<RemoteCommandEvent>
 

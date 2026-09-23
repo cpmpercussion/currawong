@@ -2,30 +2,19 @@
 
 import Foundation
 
-/// **PT-3.** What the operator taught the app about their accessory.
+/// What the operator taught the app about their accessory (PT-3): the signal
+/// it sends on press and the one it sends on release, and nothing else.
 ///
-/// Two signals. That is the entire model of a Bluetooth PTT button, and it is
-/// deliberately the entire model: no vendor, no service whitelist, no product
-/// table to maintain and go stale. Whatever the accessory sends when the button
-/// goes down is `press`; whatever it sends when the button comes up is
-/// `release`.
-///
-/// ## The invariant
-///
-/// `press != release`. A mapping whose two signals are identical cannot tell
-/// keying from unkeying, so at runtime it would key the radio and never unkey
-/// it — a stuck-open-microphone generator. The initialiser therefore **fails**
-/// rather than storing one, and ``isUsable`` re-checks the invariant after
-/// decoding, because a synthesised `init(from:)` does not run the initialiser
-/// and a file on disk is not a trusted source.
+/// **Invariant: `press != release`.** Identical signals would key the radio and
+/// never unkey it. The initialiser fails rather than build one, and
+/// ``isUsable`` re-checks after decoding, which bypasses the initialiser.
 struct BLEPTTMapping: Codable, Equatable, Sendable {
     let accessoryID: UUID
     let accessoryName: String?
     let press: BLESignal
     let release: BLESignal
 
-    /// Fails when the two signals cannot be told apart. See the note above:
-    /// this is the one construction the type refuses to represent.
+    /// Fails when the two signals are identical.
     init?(accessoryID: UUID, accessoryName: String?, press: BLESignal, release: BLESignal) {
         guard press != release else { return nil }
         self.accessoryID = accessoryID
@@ -34,51 +23,27 @@ struct BLEPTTMapping: Codable, Equatable, Sendable {
         self.release = release
     }
 
-    /// Whether this mapping can distinguish a press from a release. Always
-    /// true for anything the initialiser produced; checked again on load.
+    /// Whether press and release differ. Checked again on load.
     var isUsable: Bool { press != release }
 
     var accessoryDisplayName: String { accessoryName ?? "Bluetooth accessory" }
 
-    /// Whether both edges come from the same characteristic. Common — a fob
-    /// that reports `01` down and `00` up — and worth showing the operator, so
-    /// the learn-mode summary is recognisable as *their* device.
+    /// Whether both edges come from one characteristic, for the learn-mode
+    /// summary.
     var usesOneCharacteristic: Bool { press.path == release.path }
 }
 
-/// **PT-3, the state machine.** Learn mode with no view attached.
+/// Learn mode's state machine (PT-3), as a value type driven by notifications
+/// and the operator's "nothing else arrived".
 ///
-/// A value type, driven entirely by notifications in and one "nothing else
-/// arrived" nudge from the operator, so every awkward device shape can be
-/// replayed in a unit test in three lines.
-///
-/// ## The shapes it has to survive
-///
-/// * **One characteristic, two payloads** (`01` down, `00` up). The common
-///   case; learned in two steps.
-/// * **Two characteristics.** Equally fine — a signal is a *path plus* a
-///   payload, so nothing here assumes they share a path.
-/// * **A payload that repeats while the button is held.** The press signal is
-///   latched, and every later notification identical to it is counted and
-///   ignored rather than mistaken for the release.
-/// * **Press and release that look the same.** Unlearnable, and it says so.
-///   This is the important one: silently accepting it would produce a mapping
-///   that keys and never unkeys. See ``Problem/pressAndReleaseAreIndistinguishable``.
-/// * **A payload that does not repeat** — a sequence counter in the bytes, say.
-///   Caught by the confirmation pass, because a mapping that matches by exact
-///   bytes would never match again.
-///
-/// ## Why there is a confirmation pass
-///
-/// After the first press and release, the operator is asked to do it once more.
-/// The second pass must produce the *same two signals*. It costs one extra
-/// press and it is the only way to catch an accessory whose payload varies —
-/// which at runtime would look like an accessory that keys and then ignores
-/// every release.
+/// Handles one or two characteristics, and a press payload that repeats while
+/// held (latched, not mistaken for the release). Refuses press and release that
+/// look the same, which would key and never unkey. The confirmation pass (a
+/// second press and release must match the first) catches payloads that vary,
+/// which an exact-match mapping would stop matching.
 struct PTTLearner: Equatable {
 
-    /// Where the operator is in the sequence. The UI renders this and nothing
-    /// else.
+    /// Where the operator is in the sequence; what the UI renders.
     enum Step: Equatable {
         /// "Press and hold the button on your accessory."
         case awaitingPress
@@ -94,25 +59,18 @@ struct PTTLearner: Equatable {
         case unlearnable(Problem)
     }
 
-    /// Why an accessory could not be learned. Every one of these is shown to
-    /// the operator as a sentence; none of them is silent.
+    /// Why an accessory could not be learned, each shown as a sentence.
     enum Problem: String, Equatable, Sendable {
-        /// Nothing at all arrived. Either the accessory does not notify, or the
-        /// button pressed was not the one wired to a characteristic.
+        /// Nothing arrived.
         case noPressObserved
 
-        /// A press was seen but nothing different ever followed it. The
-        /// accessory reports that the button went down and never that it came
-        /// up, so a momentary PTT built on it would key and stay keyed.
+        /// A press, but no release: a PTT built on it would stay keyed.
         case noReleaseObserved
 
-        /// Press and release produce byte-for-byte the same notification. The
-        /// app cannot tell them apart, so it will not pretend to.
+        /// Press and release send identical notifications.
         case pressAndReleaseAreIndistinguishable
 
-        /// The confirmation pass produced something different. The accessory's
-        /// payload is not stable — a counter or a timestamp in the bytes —
-        /// and an exact-match mapping would stop working immediately.
+        /// The confirmation pass differed: the payload is not stable.
         case unstablePayload
 
         var message: String {
@@ -153,8 +111,7 @@ struct PTTLearner: Equatable {
     private(set) var press: BLESignal?
     private(set) var release: BLESignal?
 
-    /// Every distinct signal seen, in order of first arrival, with how many
-    /// times it arrived. Shown in the learn-mode UI.
+    /// Every distinct signal seen, in order, with counts. Shown in the UI.
     private(set) var observed: [ObservedSignal] = []
 
     init(accessoryID: UUID, accessoryName: String?) {
@@ -192,9 +149,7 @@ struct PTTLearner: Equatable {
             step = .awaitingRelease
 
         case .awaitingRelease:
-            // A repeat of the press is the accessory saying "still held". It is
-            // not the release, and treating it as one would produce a mapping
-            // that unkeys the instant it keys.
+            // A repeated press means "still held", not the release.
             guard signal != press else { return }
             release = signal
             step = .confirmingPress
@@ -208,8 +163,7 @@ struct PTTLearner: Equatable {
             } else if isOnAMappedPath(signal) {
                 step = .unlearnable(.unstablePayload)
             }
-            // Anything on an unrelated characteristic — a battery level, a
-            // heartbeat — is none of this state machine's business.
+            // Unrelated characteristics are ignored.
 
         case .confirmingRelease:
             if signal == release {
@@ -225,23 +179,16 @@ struct PTTLearner: Equatable {
         }
     }
 
-    /// The operator says they have finished pressing and releasing and nothing
-    /// new appeared.
-    ///
-    /// This is the only way out of ``Step/awaitingRelease`` for an accessory
-    /// whose press and release are identical: the app cannot distinguish "still
-    /// held, repeating" from "released, same payload" by watching, so it asks.
+    /// The operator pressed and released and nothing new appeared — the only
+    /// way to tell "still held, repeating" from "released, same payload".
     mutating func nothingElseArrived() {
         guard !isFinished else { return }
         switch step {
         case .awaitingPress:
             step = .unlearnable(.noPressObserved)
         case .awaitingRelease:
-            // If the press signal came back after being latched, the accessory
-            // *is* saying something on release — the same thing it said on
-            // press. That is the indistinguishable case, and it is worth naming
-            // separately from silence, because the fix is different: one needs
-            // a different accessory, the other needs a different button.
+            // A press that came back means release sends the same thing, which
+            // needs a different accessory; silence may need a different button.
             let pressCount = press.map { count(of: $0) } ?? 0
             step = .unlearnable(
                 pressCount > 1 ? .pressAndReleaseAreIndistinguishable : .noReleaseObserved)
@@ -262,10 +209,8 @@ struct PTTLearner: Equatable {
                 press: press,
                 release: release)
         else {
-            // Unreachable by construction — `release` is only ever set to a
-            // signal that differs from `press` — but the failure mode of being
-            // wrong about that is a stuck microphone, so it is checked rather
-            // than asserted.
+            // Unreachable by construction, but being wrong would mean a stuck
+            // microphone, so it is checked rather than asserted.
             step = .unlearnable(.pressAndReleaseAreIndistinguishable)
             return
         }
@@ -289,10 +234,8 @@ struct PTTLearner: Equatable {
     }
 }
 
-/// Where a learned mapping and the PT-4 preference live between launches.
-///
-/// A protocol for the same reason ``SettingsStore`` is one: a unit test that
-/// writes to `UserDefaults.standard` leaks into every later run on the machine.
+/// Persistence for the learned mapping and the PT-4 preference. A protocol so
+/// tests do not write to `UserDefaults.standard`.
 protocol PTTSettingsStore: AnyObject, Sendable {
     func loadMapping() -> BLEPTTMapping?
     func saveMapping(_ mapping: BLEPTTMapping?)
@@ -300,9 +243,8 @@ protocol PTTSettingsStore: AnyObject, Sendable {
     func saveRemoteCommandEnabled(_ enabled: Bool)
 }
 
-/// `UserDefaults`-backed PTT settings. Two independent keys rather than one
-/// blob, so the two controllers that own these preferences can never overwrite
-/// each other's half.
+/// `UserDefaults`-backed PTT settings. Two keys, not one blob, so the two
+/// controllers cannot overwrite each other's half.
 final class UserDefaultsPTTSettingsStore: PTTSettingsStore, @unchecked Sendable {
     private static let mappingKey = "au.charlesmartin.currawong.blePTTMapping"
     private static let remoteKey = "au.charlesmartin.currawong.remoteCommandPTT"
@@ -317,9 +259,7 @@ final class UserDefaultsPTTSettingsStore: PTTSettingsStore, @unchecked Sendable 
         guard let data = defaults.data(forKey: Self.mappingKey),
             let mapping = try? JSONDecoder().decode(BLEPTTMapping.self, from: data)
         else { return nil }
-        // A stored mapping is not a trusted source: an older build, a hand-edited
-        // plist or a sync conflict could produce one whose two signals match,
-        // and that is the one shape that must never reach the runtime matcher.
+        // Stored data is untrusted; matching signals must never reach runtime.
         return mapping.isUsable ? mapping : nil
     }
 

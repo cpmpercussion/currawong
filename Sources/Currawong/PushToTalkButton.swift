@@ -2,40 +2,21 @@
 
 import SwiftUI
 
-/// **PT-1.** The on-screen momentary PTT. Press and hold to transmit; release
-/// to stop.
+/// The on-screen momentary PTT (PT-1): hold to transmit, release to stop.
 ///
-/// ## Why this is not a `Button`
+/// Not a `Button`, which has no press edge and says nothing on cancellation. A
+/// `DragGesture(minimumDistance: 0)` begins on touch-down, and drives a
+/// `@GestureState`, which **SwiftUI resets when the gesture ends or is
+/// cancelled, unconditionally** — the release runs off that reset, never off an
+/// `onEnded` a cancellation would skip. `onEnded` only labels the release.
 ///
-/// `Button` fires on touch-*up*, after the system has decided the gesture was
-/// a tap. There is no press edge, no release edge, and no notification at all
-/// if the touch is cancelled. A momentary PTT needs all three.
-///
-/// So: a `DragGesture(minimumDistance: 0)` driving a `@GestureState`.
-/// `minimumDistance: 0` makes it begin on touch-down, which is the press edge.
-/// `@GestureState` is the important half — **SwiftUI resets it to its initial
-/// value when the gesture ends *or is cancelled*, unconditionally**. That is
-/// the property this button is built on: there is no way for the gesture to
-/// stop without the state going back to ``PressPhase/up``, and the release
-/// handler runs off that transition rather than off an `onEnded` that a
-/// cancellation would skip.
-///
-/// `onEnded` is still attached, but only to *label* the release: a reset that
-/// arrives without a preceding `onEnded` was a cancellation. Both spellings
-/// stop transmission; the distinction is for the operator's benefit, not the
-/// repeater's.
-///
-/// Dragging out of the button's bounds latches ``PressPhase/draggedOff`` and
-/// releases. It does not re-key on the way back in — a finger that has slid
-/// off the button is not a finger that is paying attention to it, and
-/// re-keying under it would be a genuine surprise.
+/// Dragging off the button releases and latches; coming back does not re-key.
 struct PushToTalkButton: View {
     /// Whether a press should do anything. A disabled button never keys.
     let isEnabled: Bool
 
-    /// Whether the client has confirmed it is transmitting. Drives the "on
-    /// air" styling; ``isKeyDown`` drives the "pressed" styling, so the button
-    /// responds to the finger immediately and to the network honestly.
+    /// Whether the client confirms it is transmitting: the "on air" styling.
+    /// ``isKeyDown`` drives the immediate "pressed" styling.
     let isTransmitting: Bool
 
     /// Whether the operator's finger is currently down on the button.
@@ -103,17 +84,13 @@ struct PushToTalkButton: View {
                 case .draggedOff:
                     onRelease(.draggedOffButton)
                 case .up:
-                    // Reached on every possible end of the gesture, cancelled
-                    // or not. This is the guarantee the button rests on.
+                    // Reached on every end of the gesture, cancelled or not.
                     onRelease(endedCleanly ? .released : .gestureCancelled)
                     endedCleanly = false
                 }
             }
         }
-        // **A touch target on iOS, a pointer target on macOS.** 190 points is
-        // sized for a thumb; a Mac has no thumbs and a mouse hits a control at
-        // any size, so only the height differs. Full-width in both, which is
-        // what makes the button findable without looking.
+        // Thumb-sized on iOS; a pointer needs less height on macOS.
         #if os(macOS)
             .frame(minHeight: 120)
         #else
@@ -123,17 +100,11 @@ struct PushToTalkButton: View {
         .accessibilityLabel("Push to talk")
         .accessibilityValue(isTransmitting ? "Transmitting" : "Not transmitting")
         .accessibilityHint("Press and hold to transmit. Release to stop.")
-        // If this view leaves the hierarchy while the finger is still down, the
-        // gesture is torn down with it and `@GestureState` never gets to reset,
-        // so the release has to come from here. The button is on screen only
-        // while there is a link, so **a link that drops under a held finger
-        // takes this button away**, and this line is what unkeys.
-        //
-        // It fires whether or not anything was keyed, which is harmless:
-        // `endTransmit(reason:)` records a stop reason only when something was
-        // actually transmitting, so an ordinary disconnect does not leave the
-        // status panel reporting a transmission that ended because a view went
-        // away. `SessionPaneStateTests` pins both halves of that.
+        // A view torn down under a held finger never resets `@GestureState`,
+        // so the release must come from here — including when a dropped link
+        // removes the button. Harmless when nothing was keyed: `endTransmit`
+        // records a stop only if something was transmitting
+        // (`SessionPaneStateTests`).
         .onDisappear { onRelease(.viewDisappeared) }
     }
 
