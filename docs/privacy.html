@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Currawong Privacy Policy</title>
+  <meta name="description" content="Currawong collects no data. What it stores on your device, and what it sends to the networks you connect to.">
+  <link rel="icon" type="image/png" href="assets/icon-512.png">
+  <link rel="apple-touch-icon" href="assets/icon-512.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <!-- Follow the system light/dark setting. -->
+  <script>
+    document.documentElement.dataset.bsTheme =
+      window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  </script>
+</head>
+<body>
+
+  <nav class="navbar navbar-expand-sm border-bottom">
+    <div class="container">
+      <a class="navbar-brand d-flex align-items-center gap-2" href="./">
+        <img src="assets/icon-512.png" alt="" width="32" height="32" class="rounded">
+        Currawong
+      </a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="nav">
+        <ul class="navbar-nav ms-auto">
+          <li class="nav-item"><a class="nav-link" href="./">Home</a></li>
+          <li class="nav-item"><a class="nav-link" href="./#support">Support</a></li>
+          <li class="nav-item"><a class="nav-link active" aria-current="page" href="privacy.html">Privacy</a></li>
+          <li class="nav-item"><a class="nav-link" href="age-suitability.html">Age suitability</a></li>
+          <li class="nav-item"><a class="nav-link" href="https://github.com/cpmpercussion/currawong">Source</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container py-5">
+    <div class="row">
+      <div class="col-lg-8">
+
+        <h1 class="mb-1">Privacy policy</h1>
+        <p class="text-body-secondary">Effective 23 September 2026</p>
+
+        <p class="lead">
+          Currawong collects no data. It has no accounts and no server of its
+          own, so nothing you type reaches us.
+        </p>
+
+        <h2 class="h4 mt-5">What Currawong does not do</h2>
+        <ul>
+          <li>No analytics, no advertising, and no tracking across apps or
+            websites.</li>
+          <li>No crash reporting service. Currawong includes no third-party
+            code of any kind.</li>
+          <li>No location. Currawong never asks for your device's location.
+            The location in your station details is text you type yourself.</li>
+        </ul>
+
+        <h2 class="h4 mt-5">What stays on your device</h2>
+        <p>
+          Currawong keeps everything it needs on your device:
+        </p>
+        <ul>
+          <li>Your saved channels, your station details (callsign, name and
+            location), your settings and your push-to-talk accessory setup.</li>
+          <li>Node secrets, passwords and tokens, which are kept in the
+            system Keychain.</li>
+          <li>Diagnostic messages about the audio route, written to the
+            device's own system log. They are not sent anywhere by
+            Currawong.</li>
+        </ul>
+
+        <h2 class="h4 mt-5">What goes to the networks you connect to</h2>
+        <p>
+          Currawong is a radio. When you connect somewhere, it sends what that
+          network needs, to that network, and to nobody else:
+        </p>
+        <ul>
+          <li><strong>Your voice, while you transmit</strong>, to the node or
+            reflector you chose, and from there to whoever is listening. Some
+            destinations are also linked to radio transmitters.</li>
+          <li><strong>Your callsign</strong>, which every amateur mode carries
+            with each transmission. Identifying yourself is a legal
+            requirement of an amateur licence.</li>
+          <li><strong>The credentials for that network</strong>: a node secret
+            or Web Transceiver token for AllStarLink, or your EchoLink
+            password. EchoLink's directory also receives the name and
+            location in your station details, which it shows to other
+            EchoLink users.</li>
+        </ul>
+        <p>
+          Currawong also fetches public information over HTTPS so you can
+          find somewhere to connect:
+        </p>
+        <ul>
+          <li>the M17 reflector list, from <code>m17-project.github.io</code>;</li>
+          <li>details of an AllStarLink node you look up, from
+            <code>stats.allstarlink.org</code> (only the node number is sent);</li>
+          <li>the list of public EchoLink proxies, from
+            <code>www.echolink.org</code>;</li>
+          <li>a Web Transceiver token, from <code>allstarlink.org</code>,
+            when you log in with your allstarlink.org callsign and password.
+            The password is used for that login and not stored.</li>
+        </ul>
+        <p>
+          Each of these services is run by its own organisation under its own
+          privacy terms. Currawong only uses them when you ask it to.
+        </p>
+
+        <h2 class="h4 mt-5">Permissions</h2>
+        <ul>
+          <li><strong>Microphone</strong>: to transmit your voice. Currawong
+            only sends audio while it is transmitting, and shows on screen
+            when it is.</li>
+          <li><strong>Bluetooth</strong>: to connect a push-to-talk
+            accessory.</li>
+          <li><strong>Local network</strong> (iPhone and iPad): to reach a
+            node on your own network, such as one on a Raspberry Pi.</li>
+        </ul>
+        <p>
+          You can withdraw any of these in your device's Settings, under
+          Privacy &amp; Security.
+        </p>
+
+        <h2 class="h4 mt-5">Removing your data</h2>
+        <p>
+          Because nothing is sent to us, there is nothing for us to delete.
+          Deleting Currawong removes its data from your device. The Keychain
+          can keep stored passwords after an app is deleted. To remove them
+          first, clear each password in Currawong's Settings and use
+          <em>Forget token</em> for a Web Transceiver token.
+        </p>
+
+        <h2 class="h4 mt-5">Children</h2>
+        <p>
+          Currawong collects no data from anyone, including children. See
+          <a href="age-suitability.html">age suitability</a> for what the app
+          lets people do.
+        </p>
+
+        <h2 class="h4 mt-5">Changes and contact</h2>
+        <p>
+          If this policy changes, the new version will be published here with
+          a new date. Its history is public in the
+          <a href="https://github.com/cpmpercussion/currawong/commits/main/docs/privacy.html">app's source repository</a>.
+          For questions, open an issue on
+          <a href="https://github.com/cpmpercussion/currawong/issues">GitHub</a>.
+        </p>
+
+      </div>
+    </div>
+  </main>
+
+  <footer class="border-top py-4">
+    <div class="container small text-body-secondary">
+      Copyright 2026 Charles Patrick Martin. Currawong is released under the
+      Apache 2.0 licence.
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+</body>
+</html>

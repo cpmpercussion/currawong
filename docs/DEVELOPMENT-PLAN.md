@@ -1835,3 +1835,40 @@ say so.
 
 **Done when:** the three factories share one assembler, and the device build and
 both test destinations pass with no test changes.
+
+### APP-38 — the website, and the pages App Store Connect links to
+**Where:** `currawong`, `docs/`. **Raised by:** the maintainer, 2026-09-23,
+while filling in the App Store Connect metadata.
+
+App Store Connect needs a **Privacy Policy URL** (required) and offers an
+**Age Suitability URL** (optional, under the age rating). Its questionnaire
+calculates **13+**, because the app carries live, unmoderated voice between
+people who do not know each other. That rating is correct, and the page
+explains it rather than arguing it down. The Support and Marketing URLs point
+at the same site.
+
+**The site is static HTML in `docs/`, built with Bootstrap from a CDN**, served
+by GitHub Pages at <https://charlesmartin.au/currawong/>. That is the
+maintainer's standing style for app sites.
+
+- `docs/index.html`: what the app does, the licence disclosure, a privacy
+  summary, and the support route (GitHub issues). Support URL
+  `https://charlesmartin.au/currawong/#support`, Marketing URL
+  `https://charlesmartin.au/currawong/`.
+- `docs/privacy.html`: `APP-25` item 5 written for the public. It uses item 5's
+  two statements, kept separate, and says "no account required" nowhere.
+- `docs/age-suitability.html`: why 13+, what the app does not have (text chat,
+  profiles, purchases), and the licence notice from `APP-33`.
+- `docs/.nojekyll`, so Pages serves the HTML as written and does not render the
+  Markdown design docs in the same folder as a site.
+- `docs/assets/icon-512.png`, copied from the app icon set.
+
+The pages make claims about the app, and **those claims must stay true of the
+code**: no analytics or third-party code, the four HTTPS fetches listed in
+`APP-25` item 5, what EchoLink's directory receives (callsign, name, location),
+and the licence notice's wording. A change to any of those is a change to
+`privacy.html` or `age-suitability.html` in the same PR.
+
+**Done when:** the three pages are merged, Pages is enabled for `main` ▸
+`/docs` with the site live at the URL above, and all four URLs are entered in
+App Store Connect.
