@@ -2,34 +2,18 @@
 
 import SwiftUI
 
-/// **APP-18.** Whether something other than the on-screen button can key the
-/// radio, as one glyph and three words, for the status panel.
+/// Whether something other than the on-screen button can key the radio, as a
+/// glyph and a few words for the status panel (APP-18). A pure value, so the
+/// choice is testable without a view.
 ///
-/// A pure value like ``SessionLinkControl`` and ``TransmitStatusPresentation``,
-/// and for the same reason: which of these an operator is looking at is a
-/// decision worth testing without a view. It lives in the status panel rather
-/// than the settings screen because *"is my PTT fob still connected?"* is asked
-/// from the screen the operator is looking at **while transmitting**, not from
-/// the screen that configures it (APP-12 owns that one).
-///
-/// ## Three states, not two
-///
-/// The state that matters is the third one. **Nothing configured** is dim and
-/// says so. **Configured and connected** is solid, and is the ordinary case
-/// nobody reads. **Configured and lost** is loud, because it is SF-2: BLE link
-/// loss has already dropped transmit, and an operator whose fob just stopped
-/// keying the radio needs to be told why by the screen they are already looking
-/// at. A greyed-out icon cannot carry that, and carrying it is the whole reason
-/// the indicator exists.
-///
-/// ``Emphasis/working`` is a fourth, and is not one of the three: it is the
-/// pairing path — scanning and connecting *towards* an accessory — which is
-/// neither lost nor ready and is not a safety message.
+/// Nothing configured is dim; configured and connected is solid; **configured
+/// and lost is loud**, because SF-2 has already dropped transmit and the
+/// operator needs to see why on the screen they are using. ``Emphasis/working``
+/// is pairing or connecting, not a safety message.
 struct AccessoryIndicator: Equatable {
-    /// How loudly to draw it. Maps to a colour in the view and to nothing else;
-    /// the words carry the meaning for anyone who cannot see the colour.
+    /// How loudly to draw it: a colour only; the words carry the meaning.
     enum Emphasis: Equatable {
-        /// Nothing is configured. There is no accessory to have lost.
+        /// Nothing is configured.
         case dim
         /// Configured and usable, or keyed right now.
         case solid
@@ -44,31 +28,20 @@ struct AccessoryIndicator: Equatable {
     /// Short enough for one line beside the connection state.
     let title: String
 
-    /// The whole story, including the reason the link state carries when it has
-    /// one — the panel has room for three words, VoiceOver does not have that
-    /// limit, and the operator asking this question is the one who needs the
-    /// detail.
+    /// The full story for VoiceOver, including the link state's reason.
     let accessibilityLabel: String
 
     let emphasis: Emphasis
 
     /// - Parameters:
     ///   - linkState: the BLE controller's link state.
-    ///   - isAccessoryConfigured: whether a mapping has been learned — i.e.
-    ///     whether there is an accessory this app expects to be connected to.
-    ///     Not the same as the link being up, and it is the difference between
-    ///     "nothing configured" and "lost".
+    ///   - isAccessoryConfigured: whether a mapping has been learned — what
+    ///     separates "nothing configured" from "lost".
     ///   - isAccessoryKeyed: whether the accessory is holding the key now.
-    ///   - isRemoteCommandEnabled: PT-4. A headset button is a configured input
-    ///     too, and it needs no link, so it is the one thing that can make this
-    ///     solid with no accessory at all.
-    ///   - isButtonVerified: whether anything has actually arrived on the link
-    ///     since it came up. **A connected link is not a working button** — see
-    ///     `BLEPTTController.isButtonVerified` — and this indicator must not
-    ///     claim otherwise, because an operator who believes they can key and
-    ///     cannot is worse off than one who knows they cannot. No default: a
-    ///     call site that forgot the question would compile cleanly into
-    ///     "Accessory ready" over an unproven button.
+    ///   - isRemoteCommandEnabled: PT-4; a headset button needs no link.
+    ///   - isButtonVerified: see `BLEPTTController.isButtonVerified`. No
+    ///     default, so a call site cannot forget it and show "Accessory ready"
+    ///     over an unproven button.
     init(
         linkState: BLEPTTController.LinkState,
         isAccessoryConfigured: Bool,
@@ -76,8 +49,7 @@ struct AccessoryIndicator: Equatable {
         isRemoteCommandEnabled: Bool,
         isButtonVerified: Bool
     ) {
-        // Keyed first: while a button is held, what it is doing outranks how it
-        // got connected.
+        // Keyed outranks everything.
         if isAccessoryKeyed {
             systemImage = "dot.radiowaves.left.and.right"
             title = "Accessory keyed"
@@ -87,9 +59,7 @@ struct AccessoryIndicator: Equatable {
         }
 
         guard isAccessoryConfigured else {
-            // No accessory to lose. `unavailable` is not shouted about here:
-            // Bluetooth being off matters to an operator who has a fob, and to
-            // nobody else.
+            // No accessory to lose, so Bluetooth being off is not news.
             systemImage = isRemoteCommandEnabled ? "headphones" : "dot.circle"
             title = isRemoteCommandEnabled ? "Headset PTT" : "No accessory"
             accessibilityLabel =
@@ -102,16 +72,12 @@ struct AccessoryIndicator: Equatable {
 
         switch linkState {
         case .connected where !isButtonVerified:
-            // Connected, and that is all that can honestly be said: a
-            // connection is not evidence the button works (BU-14). "Untested"
-            // rather than a warning, because most of the time the first press
-            // proves it and all is well.
+            // A connection is not a working button (BU-14). Not a warning:
+            // usually the first press proves it. Its own VoiceOver label, since
+            // "connected" is the claim being avoided.
             systemImage = "dot.circle"
             title = "Accessory untested"
             emphasis = .working
-            // Its own label, not the fall-through "connected" one below: a
-            // VoiceOver operator asking this question needs the same honesty
-            // the glyph carries, and "connected" is the claim being avoided.
             accessibilityLabel =
                 "PTT accessory: connected, but nothing has arrived from it yet — "
                 + "the button is untested"
@@ -125,9 +91,7 @@ struct AccessoryIndicator: Equatable {
             title = "Linking…"
             emphasis = .working
         case .reconnecting, .failed, .unavailable, .noAccessory:
-            // Every one of these is "configured, and cannot key the radio".
-            // `noAccessory` reaches here only if the mapping outlived the
-            // controller's own state, which is still that same fact.
+            // All mean "configured, and cannot key the radio".
             systemImage = "exclamationmark.triangle.fill"
             title = "Accessory lost"
             emphasis = .loud
@@ -137,11 +101,8 @@ struct AccessoryIndicator: Equatable {
     }
 }
 
-/// The indicator itself: a glyph and its three words, in the status panel.
-///
-/// Non-interactive on purpose. Configuration is on the settings screen (APP-12),
-/// and a tappable light on a front panel invites the operator to press the thing
-/// that reports their PTT state while they are using it.
+/// The indicator in the status panel. Deliberately not tappable: configuring
+/// is on the settings screen.
 struct AccessoryIndicatorView: View {
     let indicator: AccessoryIndicator
 

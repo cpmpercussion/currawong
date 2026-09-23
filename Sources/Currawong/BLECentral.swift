@@ -2,13 +2,11 @@
 
 import Foundation
 
-/// One characteristic, named by the pair of UUIDs that identify it.
+/// One characteristic, by service and characteristic UUID.
 ///
-/// Strings rather than `CBUUID` on purpose: this type is persisted, compared
-/// and asserted against in tests, and none of those want CoreBluetooth linked
-/// in. The strings are whatever `CBUUID.uuidString` produced — 16-bit UUIDs
-/// come out short (`"FFE1"`), 128-bit ones come out long — which is stable for
-/// a given device and is all the mapping needs.
+/// Strings rather than `CBUUID`, so it can be persisted and tested without
+/// CoreBluetooth. They are `CBUUID.uuidString` as produced — short for 16-bit
+/// UUIDs, long for 128-bit — which is stable per device.
 struct BLECharacteristicPath: Hashable, Codable, Sendable {
     let service: String
     let characteristic: String
@@ -19,11 +17,8 @@ struct BLECharacteristicPath: Hashable, Codable, Sendable {
     }
 }
 
-/// One notification: where it came from and what it said.
-///
-/// **This is the whole vocabulary of PT-3.** A learned mapping is two of these
-/// and nothing else — no vendor name, no service whitelist, no product ID. The
-/// app never needs to know what the accessory *is*, only what it *sends*.
+/// One notification: where it came from and what it said. A learned mapping
+/// is two of these and nothing else — no vendor or product knowledge (PT-3).
 struct BLESignal: Hashable, Codable, Sendable {
     let path: BLECharacteristicPath
     let payload: Data
@@ -39,15 +34,14 @@ struct BLESignal: Hashable, Codable, Sendable {
             payload: payload)
     }
 
-    /// For logs and the learn-mode UI, so an operator can see that *something*
-    /// arrived even when it means nothing to them.
+    /// Hex bytes, for logs and the learn-mode UI.
     var payloadDescription: String {
         payload.isEmpty ? "(empty)" : payload.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 }
 
-/// A peripheral the central has seen. Not a device the app claims to support —
-/// there is no such list (PT-3).
+/// A peripheral the central has seen. There is no list of supported devices
+/// (PT-3).
 struct BLEAccessory: Identifiable, Equatable, Sendable {
     let id: UUID
     let name: String?
@@ -62,11 +56,8 @@ struct BLEAccessory: Identifiable, Equatable, Sendable {
     var displayName: String { name ?? "Unnamed accessory" }
 }
 
-/// Whether Bluetooth can be used at all, in the app's own words.
-///
-/// `CBManagerState` collapsed to the five cases the UI has different sentences
-/// for. The distinction that matters is *whose problem it is*: `.unauthorised`
-/// and `.poweredOff` the operator can fix, `.unsupported` they cannot.
+/// Whether Bluetooth can be used: `CBManagerState` reduced to the cases the UI
+/// words differently.
 enum BLECentralAvailability: Equatable, Sendable {
     case unknown
     case unsupported
@@ -96,56 +87,33 @@ enum BLECentralEvent: Sendable, Equatable {
     case connectionFailed(id: UUID, reason: String?)
     case disconnected(id: UUID, reason: String?)
 
-    /// The characteristics the central subscribed to on this peripheral. Every
-    /// notifying characteristic it found, because PT-3 forbids guessing which
-    /// one matters.
+    /// Every notifying characteristic found and subscribed to (PT-3: no
+    /// guessing which one matters).
     case subscribed(id: UUID, paths: [BLECharacteristicPath])
 
-    /// A notification arrived. The only event the runtime PTT path cares about.
+    /// A notification arrived — the only event that may key the radio.
     ///
-    /// **Never a probe's read answer.** The central is the one layer that knows
-    /// which read it issued, so it is the one layer that can tell the answer
-    /// from a notification — and it must, because the two mean different
-    /// things: a notification is the accessory speaking and may key the radio;
-    /// a read answer is the app asking and must not. An accessory whose press
-    /// characteristic is readable and latches the press payload would otherwise
-    /// be keyed by every post-over probe, with no release ever coming.
+    /// **Never a probe's read answer**, which the central alone can tell apart
+    /// (CoreBluetooth delivers both through one callback). A readable press
+    /// characteristic would otherwise key the radio on every probe, with no
+    /// release to follow.
     case notified(id: UUID, signal: BLESignal)
 
-    /// **A liveness probe actually issued a read.** Emitted at the moment the
-    /// read goes out, and not when nothing readable has been discovered yet.
-    ///
-    /// Exists so the caller can bound the wait for an answer from the moment a
-    /// read was *attempted*. Arming a deadline for a probe that silently could
-    /// not run reads discovery latency as link death instead.
+    /// A liveness probe's read went out. Not emitted when nothing readable has
+    /// been discovered, so the caller times the answer, not discovery.
     case probeIssued(id: UUID)
 
-    /// **A liveness probe's read answered.** The link demonstrably carries
-    /// data; the payload is reported for the diagnostics log only.
+    /// A liveness probe's read answered: the link carries data. The payload is
+    /// for the log only.
     case probeAnswered(id: UUID, signal: BLESignal)
 
-    /// **A liveness probe failed.** The read was refused, errored, or came back
-    /// without a characteristic to attribute it to.
-    ///
-    /// Exists so that "this link is dead" is an *event* rather than the absence
-    /// of one: waiting to see whether a notification turns up measures how
-    /// recently the operator pressed the button, not whether the link works. A
-    /// read either answers or fails, and both arrive on their own.
-    ///
-    /// Emitted only for the read a probe issued. A characteristic that errors
-    /// with no probe outstanding is not evidence of anything the caller asked
-    /// about.
+    /// A liveness probe's read was refused or errored, so a dead link is an
+    /// event rather than an absence. Emitted only for a read a probe issued.
     case probeFailed(id: UUID, reason: String?)
 }
 
-/// The seam that keeps CoreBluetooth out of the PTT state logic.
-///
-/// The same idea as `RadioCore.DatagramTransport` and this app's ``AudioIO``:
-/// CoreBluetooth cannot run in a headless test — there is no radio, no
-/// accessory and, in a test bundle, no authorisation prompt to answer — so
-/// everything above this protocol deals in `BLECentralEvent` values instead.
-/// Scanning, connecting, learn mode, the mapping, reconnection and the SF-2
-/// drop are all tested against `FakeBLECentral` with no radio anywhere.
+/// The seam that keeps CoreBluetooth out of the PTT logic, so it can be tested
+/// against `FakeBLECentral`.
 ///
 /// Rules for conformers:
 ///
@@ -163,9 +131,9 @@ protocol BLECentral: AnyObject, Sendable {
     /// The last known availability, for a caller that starts observing late.
     var availability: BLECentralAvailability { get }
 
-    /// Scans for anything advertising. Foreground only, by design: iOS refuses
-    /// a service-less scan in the background, and the background mode is for
-    /// keeping an *established* link alive (PT-2), not for finding new ones.
+    /// Scans for anything advertising. Foreground only: iOS refuses a
+    /// service-less background scan, and the background mode keeps an
+    /// established link alive (PT-2).
     func startScan()
     func stopScan()
 
@@ -174,28 +142,16 @@ protocol BLECentral: AnyObject, Sendable {
 
     func subscribeToAllNotifyingCharacteristics(_ id: UUID)
 
-    /// **Ask the link to prove it carries data**, by reading any readable
-    /// characteristic.
+    /// Asks the link to prove it carries data, by reading any readable
+    /// characteristic — the only evidence on this seam, since `.connected` and a
+    /// subscribe can succeed over a dead link and a PTT button is silent for
+    /// minutes.
     ///
-    /// A read that goes out is announced as
-    /// ``BLECentralEvent/probeIssued(id:)``, and its result arrives as
+    /// Announced as ``BLECentralEvent/probeIssued(id:)``; answered as
     /// ``BLECentralEvent/probeAnswered(id:signal:)`` or
-    /// ``BLECentralEvent/probeFailed(id:reason:)`` — never as
-    /// ``BLECentralEvent/notified(id:signal:)``. A read and a notification are
-    /// the same callback in CoreBluetooth, so the conformer must remember which
-    /// read it issued; the caller cannot tell them apart, and treating an
-    /// answer as a notification is how a probe could key the radio.
-    ///
-    /// This exists because **nothing else on this seam is evidence.**
-    /// `.connected` and a successful subscribe can both be reported over a link
-    /// that delivers nothing, and waiting for a *notification* is not evidence
-    /// within a useful time either, because a PTT button is legitimately silent
-    /// for minutes.
-    ///
-    /// **A no-op when there is nothing readable yet, or the peripheral is not
-    /// connected — and silence must not be read as failure.** Characteristic
-    /// discovery arrives service by service, so an early probe genuinely cannot
-    /// run. Only a read that was attempted and failed is evidence, and that is
-    /// what ``BLECentralEvent/probeFailed(id:reason:)`` means.
+    /// ``BLECentralEvent/probeFailed(id:reason:)``, **never** as
+    /// ``BLECentralEvent/notified(id:signal:)``, or a probe could key the radio.
+    /// A no-op with nothing readable yet or no connection; that silence is not
+    /// failure.
     func probeForLiveness(_ id: UUID)
 }
