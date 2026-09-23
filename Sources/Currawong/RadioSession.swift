@@ -89,12 +89,9 @@ final class RadioSession: ObservableObject {
     /// into a link. Throws, because building a destination can reject what was
     /// typed.
     ///
-    /// The identity has its own type rather than a second `String`, so it
-    /// cannot be swapped with the secret at a call site (``OperatorIdentity``).
-    /// The watchdog timeout and the proxy travel as separate parameters rather
-    /// than fields of the settings: the timeout is the operator's one app-wide
-    /// limit (SF-1), and the proxy is `nil` outside EchoLink and resolved per
-    /// session (APP-13), not per channel.
+    /// The timeout and the proxy are parameters rather than settings fields:
+    /// the timeout is app-wide (SF-1), and the proxy is resolved per session,
+    /// not per channel (APP-13).
     typealias LinkFactory =
         @MainActor (
             NodeSettings, OperatorIdentity, LinkCredentials, TransmitTimeout,
@@ -103,11 +100,9 @@ final class RadioSession: ObservableObject {
 
     /// What a link is built with, beyond the settings and the identity.
     ///
-    /// One type rather than two `String` parameters, because the two
-    /// credentials are not interchangeable and a call site that swapped them
-    /// would still compile: a node secret authenticates us as an account, a
-    /// Web Transceiver token stands for our callsign on a guest call (APP-11).
-    /// Which one is used is the channel's business (``NodeSettings/usesWebTransceiver``).
+    /// A type rather than two `String` parameters, so a call site cannot swap
+    /// them and still compile. Which one is used is decided by
+    /// ``NodeSettings/usesWebTransceiver``.
     struct LinkCredentials: Equatable, Sendable {
         /// The node secret, or an EchoLink account password. Empty for a mode or
         /// a route that does not authenticate.
@@ -129,69 +124,46 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Published state
 
-    /// The node being connected to, and the form's working copy of it.
+    /// The connect form's working copy of the selected channel (BU-9).
     ///
-    /// **A draft, not the stored channel** — the connect form binds straight
-    /// to it, so it holds half-typed hostnames and an unvalidated port while
-    /// the operator edits. Carries the id of the channel it was edited from;
-    /// only ``saveDraft()`` writes it back into ``channels`` (BU-9). Until
-    /// then the difference is kept in ``drafts``. ``connect()`` *adds* a draft
-    /// that is in no channel yet, but never overwrites one already there.
+    /// A draft, not the stored channel: it may hold half-typed values, and only
+    /// ``saveDraft()`` writes it back into ``channels``. ``connect()`` adds a
+    /// draft that is in no channel yet, but never overwrites one.
     @Published var settings: NodeSettings
 
-    /// Every saved channel and which one is selected (APP-4).
-    ///
-    /// Selecting one loads it into ``settings`` and fetches its secret; see
-    /// ``select(_:)``. Persisted on every change rather than at quit: there is
-    /// no reliable "at quit" on iOS.
+    /// Every saved channel and which one is selected (APP-4). Persisted on
+    /// every change, since iOS has no reliable "at quit".
     @Published private(set) var channels: ChannelSet
 
-    /// **BU-9.** Unsaved edits, keyed by the id of the channel they belong to.
+    /// Unsaved edits, keyed by channel id (BU-9). An id in no channel is a
+    /// channel never saved, and needs no special case.
     ///
-    /// A draft *is* a ``NodeSettings`` carrying the id of the channel it came
-    /// from, so an entry whose id is in no channel is simply a channel that
-    /// has never been saved — a directory browse, or an abandoned
-    /// ``newChannel(_:)`` — and needs no special case.
-    ///
-    /// Written by ``stashDraft()`` and cleared, per channel, by ``saveDraft()``.
-    /// Loaded in preference to the stored channel when its channel is
-    /// selected, which is what makes an edit survive a quit.
+    /// Written by ``stashDraft()``, cleared by ``saveDraft()``, and loaded in
+    /// preference to the stored channel, so an edit survives a quit.
     @Published private(set) var drafts: [UUID: NodeSettings]
 
     /// The secret, in memory only. It reaches the Keychain in ``connect()``
     /// and `UserDefaults` never.
     @Published var secret: String
 
-    /// The Web Transceiver token (APP-11), in memory only, on the same terms
-    /// as ``secret``.
+    /// The Web Transceiver token (APP-11), in memory only, like ``secret``.
     ///
-    /// **App-wide, not per channel:** the portal issues one token per operator
-    /// that stands for their callsign on every WT-enabled node, so it is filed
-    /// under the callsign (``NodeSettings/webTransceiverAccount(for:)``) and
-    /// is *not* reloaded when the operator selects a different channel, unlike
-    /// ``secret``. Typed or pasted for now; APP-12's portal login will fill it
-    /// in.
+    /// App-wide: one token stands for the operator's callsign on every
+    /// WT-enabled node, so it is filed under the callsign
+    /// (``NodeSettings/webTransceiverAccount(for:)``) and not reloaded on a
+    /// channel change. Typed, pasted, or filled in by the portal login.
     @Published var webTransceiverToken: String
 
-    /// **EchoLink.** The account password issued with the operator's callsign
-    /// (APP-12), in memory only and app-wide.
+    /// The EchoLink account password, in memory only and app-wide: filed under
+    /// `echolink:<callsign>` and edited in Settings (APP-12).
     ///
-    /// Filed under `echolink:<callsign>`, shared by every EchoLink channel with
-    /// that callsign — never a per-channel credential — so it is edited on the
-    /// settings screen rather than mid-connect.
-    ///
-    /// **APP-14: this is the only copy.** Nothing mirrors it into ``secret``:
-    /// ``credentialSecret(for:identity:)`` reads this directly for an EchoLink
-    /// connection, and the station browser is handed it too.
+    /// The only copy (APP-14): nothing mirrors it into ``secret``;
+    /// ``credentialSecret(for:identity:)`` and the station browser read it here.
     @Published private(set) var echoLinkAccountPassword: String
 
-    /// **APP-13.** The operator's own EchoLink proxy, if they run one.
-    ///
-    /// App-wide, edited on the settings screen, and persisted on change like the
-    /// watchdog — a proxy is a thing an operator sets up once for their whole
-    /// station. Empty means "find a public one", which is what most sessions do.
-    /// It reaches a connection through ``ProxyPicker/route(privateProxy:privatePassword:)``,
-    /// which prefers it over any public proxy and never overwrites it.
+    /// The operator's own EchoLink proxy, if they run one (APP-13). App-wide
+    /// and persisted on change; empty means "find a public one".
+    /// ``ProxyPicker/route(privateProxy:privatePassword:)`` prefers it.
     @Published private(set) var echoLinkProxy: EchoLinkProxySettings
 
     /// The private proxy's password, in memory only, from the Keychain: a real
@@ -199,27 +171,20 @@ final class RadioSession: ObservableObject {
     /// private proxy is set.
     @Published private(set) var echoLinkProxyPassword: String
 
-    /// What the microphone is putting on the air, **after** ``transmitGain``
-    /// — the operator is setting that number, so a pre-gain meter would be
-    /// misleading.
-    ///
-    /// Not `@Published`: written fifty times a second from the audio thread,
-    /// and the views poll it instead. See ``AudioLevelMeter``.
+    /// What the microphone is putting on the air, after ``transmitGain``.
+    /// Not `@Published`: the audio thread writes it 50 times a second and the
+    /// views poll it. See ``AudioLevelMeter``.
     let transmitMeter = AudioLevelMeter()
 
     /// What is arriving from the far end.
     let receiveMeter = AudioLevelMeter()
 
-    /// Software gain on captured audio (0 to +30 dB).
-    ///
-    /// App-wide rather than per channel, like the operator's identity: it
-    /// compensates for this device and this voice, not for where the audio is
-    /// going. Persisted on change.
+    /// Software gain on captured audio (0 to +30 dB). App-wide, since it
+    /// compensates for this device and voice; persisted on change.
     @Published var transmitGain: TransmitGain {
         didSet {
             guard transmitGain != oldValue else { return }
-            // The box is what the audio thread reads, so a slider drag is
-            // audible in the same breath rather than the next one.
+            // The box is what the audio thread reads.
             gainBox.gain = transmitGain
             settingsStore.saveTransmitGain(transmitGain)
         }
@@ -228,9 +193,7 @@ final class RadioSession: ObservableObject {
     /// The gain as the capture tap sees it. See ``GainBox``.
     private let gainBox = GainBox<TransmitGain>(.unity)
 
-    /// Software gain on received audio (0 to +20 dB), for the same kind of
-    /// reason as ``transmitGain``: what it compensates for is documented on
-    /// ``ReceiveGain``.
+    /// Software gain on received audio (0 to +20 dB). See ``ReceiveGain``.
     @Published var receiveGain: ReceiveGain {
         didSet {
             guard receiveGain != oldValue else { return }
@@ -244,10 +207,9 @@ final class RadioSession: ObservableObject {
 
     /// **SF-1.** How long one transmission may last before the library unkeys.
     ///
-    /// App-wide rather than per channel (see ``TransmitTimeout``), and
-    /// persisted so a safety limit does not quietly revert on relaunch. It
-    /// reaches the library through `CompositionRoot` when a link is built, so
-    /// a change applies to the *next* connection; the settings screen says so.
+    /// App-wide and persisted, so a safety limit does not revert on relaunch.
+    /// Passed to the library when a link is built, so a change applies to the
+    /// next connection; the settings screen says so.
     @Published var transmitTimeout: TransmitTimeout {
         didSet {
             guard transmitTimeout != oldValue else { return }
@@ -255,10 +217,8 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Who is operating. **App-wide, not per channel** — one callsign is used
-    /// on every network. Persisted by ``connect()``, ``saveDraft()`` and
-    /// ``stashDraft()``, since it is not part of a channel and so has no
-    /// unsaved draft of its own.
+    /// Who is operating. App-wide, so it has no draft of its own: persisted by
+    /// ``connect()``, ``saveDraft()`` and ``stashDraft()``.
     @Published var identity: OperatorIdentity
 
     @Published private(set) var connection: ConnectionStatus = .disconnected
@@ -274,26 +234,17 @@ final class RadioSession: ObservableObject {
     /// own appearance so it responds on touch-down rather than on the network.
     @Published private(set) var isKeyDown = false
 
-    /// **BU-15's instrument.** How many times the radio has actually been keyed
-    /// during the current hold — one continuous press should produce exactly
-    /// one.
+    /// How many times the radio was keyed during the current hold; one press
+    /// should produce exactly one (BU-15).
     ///
-    /// Reset by a press the operator makes, never by one this class makes, so
-    /// it survives the release and can be read after the gesture ends: XCUITest
-    /// cannot look at the app during its own `press(forDuration:)`, so the
-    /// count has to outlive the press to be assertable at all. `BU15FirstOverUITests`
-    /// reads it off the transmit strip — the simulator posts no route-change
-    /// notifications (`BU15SessionProbeTests`).
+    /// Reset only by an operator press, so it outlives the release: XCUITest
+    /// cannot inspect the app during `press(forDuration:)`, and
+    /// `BU15FirstOverUITests` reads it off the transmit strip afterwards.
     @Published private(set) var keyDownsInCurrentHold = 0
 
-    /// **BU-15's instrument, continued.** Where in the hold route-change
-    /// signals landed, so the device test can say *why* a hold keyed twice.
-    ///
-    /// Signals during preparation are this over's own doing — the category
-    /// change and the microphone opening — and cost nothing since nothing is
-    /// on air yet. Signals after key-down are the ones SF-3 drops.
-    ///
-    /// Reset with the hold, like ``keyDownsInCurrentHold``.
+    /// Route changes during this hold's preparation, before key-down (BU-15).
+    /// They are this over's own doing and cost nothing, since nothing is on
+    /// air yet. Reset with ``keyDownsInCurrentHold``.
     @Published private(set) var routeSignalsDuringPreparation = 0
 
     /// Route changes that arrived with the radio on air during this hold — the
@@ -304,31 +255,19 @@ final class RadioSession: ObservableObject {
     /// milliseconds. A fast warm hold is `BU-16`'s fast path being intact.
     @Published private(set) var lastPreparationMilliseconds = 0
 
-    /// The audio route the last key-down actually went out on, as
-    /// `AVAudioSession` reported it — `route=BluetoothHFP`, `route=none`, and
-    /// so on.
+    /// The audio route the last key-down went out on (`route=BluetoothHFP`,
+    /// `route=none`, …).
     ///
-    /// **BU-15 has two triggers, fixed independently.** A Bluetooth accessory
-    /// can be connected for BLE (its PTT button) while its Classic side is not
-    /// the audio route, so a run with the accessory "connected" can really be
-    /// another run of the no-accessory case; this is how a device test tells
-    /// them apart.
+    /// An accessory can be connected over BLE while its Classic side is not the
+    /// audio route; this is how a device test tells the two BU-15 cases apart.
     @Published private(set) var lastKeyDownRoute = ""
 
-    /// What the last connect's input warm-up managed to do (BU-22, BU-24).
+    /// What the last connect's input warm-up managed (BU-22, BU-24).
     ///
-    /// **A connect is never failed over this.** Warming the device is
-    /// opportunistic: the microphone is asked for again at key-down, behind
-    /// `AudioIO.startCapture`'s reactivate-and-rebuild repair. Refusing to
-    /// connect because the microphone was busy seconds before anybody pressed
-    /// PTT would trade a working receive-only session for nothing.
-    ///
-    /// Published so a warm-up that could not open the input — meaning the
-    /// device may still be cold on the operator's first over — has a cause
-    /// somewhere other than a diagnostic log nobody has running.
-    ///
-    /// Set on every exit from ``connect()`` that started a warm-up, including
-    /// the failures; `.warmed` until a connect says otherwise.
+    /// A connect never fails over this: the microphone is asked for again at
+    /// key-down, behind `AudioIO.startCapture`'s repair. Published so a cold
+    /// first over has a visible cause. Set on every exit from ``connect()``
+    /// that started a warm-up.
     @Published private(set) var inputWarmUp: InputWarmUpOutcome = .warmed
 
     /// How long opening the microphone took, from ``AudioIO``. Compared
@@ -337,57 +276,39 @@ final class RadioSession: ObservableObject {
     /// wait too.
     @Published private(set) var lastCaptureStartMilliseconds = 0
 
-    /// **BU-15's trace**, DEBUG only: what happened during this hold and how
-    /// many milliseconds after the press, in order.
-    ///
-    /// Carries the same facts an unattended test cannot get from the phone's
-    /// log (see `docs/HANDOFF-BU15.md` §8) out on the transmit strip's
-    /// accessibility value instead.
-    ///
-    /// Zeroed by a press the operator makes, so it describes one hold and
-    /// survives the release to be read after the gesture.
+    /// DEBUG only: what happened during this hold, in milliseconds after the
+    /// press (BU-15). Published on the transmit strip's accessibility value
+    /// for tests that cannot read the device log. Zeroed by an operator press.
     @Published private(set) var holdTrace: [String] = []
 
-    /// Picks the `route=` field out of ``AudioIO/audioStateDescription``.
-    ///
-    /// Its documentation forbids branching on this string's contents (BU-13);
-    /// this only publishes it for a test to print, and an unparseable state
-    /// simply reports itself whole.
+    /// Picks the `route=` field out of ``AudioIO/audioStateDescription``, for
+    /// display only — nothing may branch on it (BU-13).
     private static func routeField(of state: String) -> String {
         state.split(separator: " ").first { $0.hasPrefix("route=") }.map(String.init) ?? state
     }
 
-    /// Appends to ``holdTrace``, stamped from the start of the hold. Compiled
-    /// away outside DEBUG: it is an instrument, not a feature.
+    /// Appends to ``holdTrace``, stamped from the start of the hold.
     private func trace(_ event: String) {
         #if DEBUG
             guard let holdBegan else { return }
             let ms = Int(now().timeIntervalSince(holdBegan) * 1000)
             holdTrace.append("\(event)@\(ms)")
-            // A hold that produces more than this has something wrong with it
-            // that the first two dozen events will already have said.
             if holdTrace.count > 24 { holdTrace.removeFirst() }
         #endif
     }
 
-    /// **PT-4's honesty requirement.** Which input keyed the radio, while it
-    /// is keyed. `nil` when nothing is.
-    ///
-    /// Lets the transmit banner say whether letting go will unkey: the
-    /// on-screen button and a Bluetooth accessory are momentary, but a
-    /// remote-command button latches.
+    /// **PT-4.** Which input keyed the radio, or `nil`. Lets the banner say
+    /// whether letting go will unkey: a remote-command button latches, the
+    /// others are momentary.
     @Published private(set) var activeSource: PTTSource?
 
     /// The codec the far end agreed to, as a name to display. `nil` until a
     /// connection reports one.
     @Published private(set) var negotiatedCodec: String?
 
-    /// DTMF digits sent and received on this connection, oldest first.
-    ///
-    /// Kept because commanding an AllStar node means sending a digit string and
-    /// watching for what comes back, and "did that go out?" is otherwise
-    /// unanswerable from the app. Trimmed to ``dtmfLogLimit``: this is a recent
-    /// history for the operator's eyes, not a record.
+    /// DTMF digits sent and received on this connection, oldest first, so an
+    /// operator commanding a node can see what went out and what came back.
+    /// Trimmed to ``dtmfLogLimit``.
     @Published private(set) var sentDTMF: String = ""
     @Published private(set) var receivedDTMF: String = ""
 
@@ -402,24 +323,18 @@ final class RadioSession: ObservableObject {
     /// themselves.
     @Published private(set) var safetyNotice: SafetyNotice?
 
-    /// **APP-33.** Whether the licence acknowledgement is waiting to be
-    /// answered.
-    ///
-    /// Set by ``beginTransmit(from:)`` on a press when the operator has never
-    /// acknowledged; cleared by ``acknowledgeLicence()`` or
-    /// ``declineLicence()``. A sheet rather than an alert, so it is not in
-    /// ``alert``'s queue.
+    /// Whether the licence acknowledgement sheet is waiting (APP-33). Set by
+    /// ``beginTransmit(from:)``; cleared by ``acknowledgeLicence()`` or
+    /// ``declineLicence()``. Not in ``alert``'s queue.
     @Published private(set) var needsLicenceAcknowledgement = false
 
     /// Which version of the acknowledgement wording is on file. `nil` until
     /// one is accepted. Not published: the sheet is driven by the flag above.
     private var acknowledgedLicenceVersion: Int?
 
-    /// **APP-33.** Whether the operator has accepted the current wording.
-    ///
-    /// Read by ``beginTransmit(from:)`` only: connecting, browsing and
-    /// receiving deliberately do not consult it, so declining still leaves a
-    /// usable listening radio.
+    /// Whether the operator has accepted the current wording (APP-33). Only
+    /// ``beginTransmit(from:)`` reads it, so declining leaves a working
+    /// receive-only radio.
     var hasAcknowledgedLicence: Bool {
         LicenceAcknowledgement.isSatisfied(by: acknowledgedLicenceVersion)
     }
@@ -437,68 +352,44 @@ final class RadioSession: ObservableObject {
     /// Inbound media the client is discarding, if any.
     @Published private(set) var mediaWarning: String?
 
-    /// The channel the last call this run was actually placed to, or `nil`
-    /// before the first one.
+    /// The channel of the last successful call this run, for the Reconnect
+    /// button (``SessionLinkControl``).
     ///
-    /// What the session pane's Reconnect button goes back to
-    /// (``SessionLinkControl``). Set on a **successful** connect only, so the
-    /// button never offers to return to somewhere that refused us — the draft
-    /// is not enough, since the operator may pick a different channel after
-    /// hanging up. Holds the channel as typed, before resolution, so a name
-    /// stays a name (``resolveDirectoryServer(in:)``).
-    ///
-    /// In memory only: `SettingsStore` already remembers the last connected
-    /// node across launches, so persisting this too would put a Reconnect
-    /// button in front of an operator who has not connected to anything this
-    /// run.
+    /// Successful connects only, so Reconnect never returns somewhere that
+    /// refused us. Held as typed, before resolution. In memory only, so a
+    /// fresh launch shows no Reconnect.
     @Published private(set) var lastConnectedChannel: NodeSettings?
 
-    /// The station currently transmitting on a shared channel, when one is.
-    ///
-    /// **M17 only** — a reflector module is shared and an AllStarLink call is
-    /// not, so this stays `nil` for the whole of an AllStar connection. `nil`
-    /// while an M17 link is up means nobody is transmitting, which is the
-    /// ordinary quiet state of a module.
+    /// The station transmitting on a shared channel — M17 only, since a
+    /// reflector module is shared. `nil` when nobody is.
     @Published private(set) var receivingFrom: String?
 
     // MARK: - Dependencies
 
     private let audio: AudioIO
 
-    /// **Called after an audio route change that found the session idle.**
+    /// Called after an audio route change that found the session idle; wired
+    /// to the accessory controller's repair. A closure, so this class need not
+    /// know Bluetooth exists.
     ///
-    /// Set by the composition root to the accessory controller's repair entry
-    /// point. A closure, not a reference, because this class must not know
-    /// that Bluetooth exists.
-    ///
-    /// **The idle test is the safety-relevant part, and it lives here**
-    /// because this is the class that knows whether anything is on air. A
-    /// repair means a reconnect, and SF-2 makes a disconnection unkey
-    /// unconditionally, so a repair fired mid-over would drop the operator.
-    /// This hook simply is not called unless nothing is keyed.
+    /// Only called when ``isIdleForAccessoryRepair``: a repair is a reconnect,
+    /// and SF-2 makes a disconnection unkey, so a repair mid-over would drop
+    /// the operator.
     var onIdleAudioRouteChange: (@MainActor () -> Void)?
 
-    /// **Called when the SF-1 watchdog unkeys the radio.**
-    ///
-    /// Set by the composition root to the accessory controller's
-    /// `radioUnkeyedExternally()`. Needed because a link that dies silently
-    /// mid-press delivers neither a release nor a disconnection, so without
-    /// this the controller's "accessory keyed" claim would outlive the
-    /// transmission it described — and that claim guards every repair path,
-    /// the operator's Reconnect included.
+    /// Called when the SF-1 watchdog unkeys; wired to the accessory
+    /// controller's `radioUnkeyedExternally()`. An accessory link that dies
+    /// silently mid-press delivers no release, so without this its "keyed"
+    /// claim would outlive the transmission and block every repair.
     var onWatchdogUnkey: (@MainActor () -> Void)?
 
-    /// **Whether the accessory link may be rebuilt right now.**
+    /// Whether the accessory link may be rebuilt right now.
     ///
-    /// A rebuild means a disconnection, and `SF-2` makes a disconnection unkey
-    /// unconditionally — so a rebuild while anything is on air is a way of
-    /// dropping the operator mid-sentence. This is the one place that question is
-    /// answered, because this is the class that knows.
-    ///
-    /// Consulted two ways: this class calls ``onIdleAudioRouteChange`` only when
-    /// it is true, and the controller *also* asks before a repair it scheduled
-    /// itself — an escalation fires on a timer, by which time the operator may
-    /// have keyed up on the on-screen button, which the controller cannot see.
+    /// A rebuild is a disconnection, and SF-2 makes a disconnection unkey, so
+    /// a rebuild while anything is on air drops the operator. Answered here
+    /// because this class knows. Gates ``onIdleAudioRouteChange``, and the
+    /// controller also asks before a repair on its own timer, since it cannot
+    /// see the on-screen button.
     var isIdleForAccessoryRepair: Bool {
         // Nothing on air, no hold the operator is still making, no automatic
         // resume about to key back down. **And nothing else** — see
@@ -523,12 +414,8 @@ final class RadioSession: ObservableObject {
     private let secretStore: SecretStore
     private let makeLink: LinkFactory
 
-    /// **APP-13.** Gives up the leased public proxy when a link ends.
-    ///
-    /// A closure rather than a reference to ``ProxyPicker``, so this type keeps
-    /// knowing nothing about probing strangers' machines — it knows only that
-    /// something borrowed has to be returned when the session that borrowed it is
-    /// over. `CompositionRoot` wires it; the tests can watch it.
+    /// Gives up the leased public proxy when a link ends (APP-13). A closure,
+    /// so this type knows nothing of ``ProxyPicker``.
     private let releaseProxyLease: @MainActor () -> Void
 
     /// Turns the directory server's host name into the address the library
@@ -548,13 +435,11 @@ final class RadioSession: ObservableObject {
     private var transmitWork: Task<Void, Never>?
     private var transmitWorkGeneration = 0
 
-    /// Where the *hold* came from, as distinct from ``activeSource``, which is
-    /// where the current transmission came from.
+    /// Where the *hold* came from, as distinct from ``activeSource``.
     ///
-    /// They differ for exactly as long as it takes to recover from a route
-    /// change: transmission has stopped (SF-3) but the operator has not let go,
-    /// so there is still a hold to key back down. Cleared by every stop reason
-    /// but that one — see `TransmitStopReason.leavesTheHoldAlive`.
+    /// They differ while recovering from a route change: transmission has
+    /// stopped (SF-3) but the operator has not let go. Cleared by every other
+    /// stop reason — see `TransmitStopReason.leavesTheHoldAlive`.
     private var heldSource: PTTSource?
 
     /// Automatic key-downs used by the current hold. Reset by a press the
@@ -565,52 +450,43 @@ final class RadioSession: ObservableObject {
 
     /// **SF-4.** The lock-screen half of the transmit indicator (APP-3).
     ///
-    /// Driven from exactly one place — ``refreshActivity()``, called from every
-    /// transition that could change whether the radio is keyed — rather than
-    /// from each release path in turn. A per-path teardown is a teardown
-    /// somebody eventually forgets to add, and the thing they would be
-    /// forgetting is an activity that goes on claiming TX.
+    /// Driven only by ``refreshActivity()``, called from every transition that
+    /// could change whether the radio is keyed, rather than by each release
+    /// path: a per-path teardown is one somebody forgets, leaving an activity
+    /// that goes on claiming TX.
     private let activity: TransmitActivityController
 
     /// Whether a route-change recovery is between the stop and the key-down.
     ///
-    /// The one state in which there is a live hold, nothing on air, and an
-    /// activity that must *stay up* — ending and restarting it around a 300 ms
-    /// gap would flicker the lock screen off and back on under a button the
-    /// operator never released. Tracked explicitly rather than inferred from
-    /// ``heldSource``, because a route change that cannot be recovered from also
-    /// leaves the hold alive and must **not** keep the activity.
+    /// The activity stays up through this gap rather than flickering. Tracked
+    /// explicitly rather than inferred from ``heldSource``, because an
+    /// unrecoverable route change also leaves the hold alive and must **not**
+    /// keep the activity.
     private var routeResumeInFlight = false
 
-    /// **BU-15.** Whether the app is between the operator's press and the
-    /// key-down, escalating the session policy and opening the microphone, and
-    /// then waiting for the route-change cascade they cause to go quiet.
+    /// **BU-15.** Whether the app is between the press and the key-down:
+    /// escalating the session policy, opening the microphone, and waiting for
+    /// the route changes they cause to go quiet.
     ///
-    /// The one window in which a route change is expected and means nothing:
+    /// The one window in which a route change is expected and ignored:
     ///
-    /// * **Nothing is on air.** The microphone is open for part of this
-    ///   window, but `OnAirGate` drops every frame it produces, so nothing
-    ///   reaches the wire or the transmit meter — SF-3 requires that
-    ///   *transmission* drop on a route change, and there is none here to drop.
-    /// * **It cannot be entered while transmitting.** The wait completes before
-    ///   ``RadioLink/startTransmit()`` is called, so this and `isTransmitting`
-    ///   are never both true; the guard below checks both anyway.
-    /// * **It is bounded by the audio layer** and cannot outlive the press: a
-    ///   release clears the hold and abandons the key-down.
+    /// * **Nothing is on air.** `OnAirGate` drops every captured frame, and
+    ///   SF-3 is about dropping *transmission*, of which there is none.
+    /// * **It cannot overlap transmitting.** The wait completes before
+    ///   ``RadioLink/startTransmit()``; the guard checks both anyway.
+    /// * **It cannot outlive the press:** a release clears the hold and
+    ///   abandons the key-down.
     ///
-    /// Without it, both disturbances happened under a live carrier, SF-3
-    /// dropped it correctly, and the operator saw the app key down, unkey and
-    /// key down again inside one press.
+    /// Without it, those route changes land under a live carrier and SF-3
+    /// unkeys mid-press.
     private var routePreparationInFlight = false
 
     /// When the current hold began, for the activity's elapsed clock. Survives
-    /// a route-change resume, so the clock measures the over rather than the
-    /// key-down.
+    /// a route-change resume, so it times the over.
     private var holdBegan: Date?
 
     /// When the library's watchdog will unkey the current key-down (SF-1).
-    /// Re-set on every key-down, including an automatic resume, because each one
-    /// starts its own watchdog.
+    /// Re-set on every key-down, since each starts its own watchdog.
     private var watchdogDeadline: Date?
 
     /// How many times one hold may be keyed back down after a route change.
@@ -637,11 +513,9 @@ final class RadioSession: ObservableObject {
         releaseProxyLease: @escaping @MainActor () -> Void = {},
         resolver: any HostResolver = SystemHostResolver(),
         now: @escaping @MainActor () -> Date = { Date() },
-        // Not a default argument expression like the two above: the controller
-        // is `@MainActor` and a default argument is evaluated in a nonisolated
-        // context. `nil` means "no lock-screen indicator", which is what macOS,
-        // a preview and most of the tests want; `CompositionRoot` passes a real
-        // one on iOS.
+        // Optional rather than a default expression: a default argument is
+        // evaluated nonisolated, and the controller is `@MainActor`. `nil`
+        // means no lock-screen indicator (macOS, previews, most tests).
         activity: TransmitActivityController? = nil
     ) {
         self.audio = audio
@@ -656,38 +530,29 @@ final class RadioSession: ObservableObject {
         let loaded = ChannelSet.loaded(from: settingsStore)
         self.channels = loaded
 
-        // **BU-9's other half.** The stash is loaded before the draft is
-        // chosen, since the draft is chosen *from* it. Deduplicated by keeping
-        // the last entry for an id rather than trapping: a defaults blob that
-        // somehow holds two drafts for one channel must not be a launch that
-        // crashes.
+        // Drafts load before the draft is chosen, since it is chosen from
+        // them. Duplicate ids keep the last rather than trapping at launch.
         let storedDrafts = settingsStore.loadDrafts() ?? []
         let allDrafts = Dictionary(
             storedDrafts.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
 
-        // Drafts for channels that are not in the list are dropped here, at
-        // launch, and only here: a draft is reached by selecting the channel
-        // it belongs to, and nothing stored says which draft was on screen, so
-        // an orphan would sit in the defaults for ever. Within a run they work
-        // fine (a directory browse is exactly a draft belonging to no channel
-        // yet), which is why they are stashed rather than refused.
+        // Drafts for channels not in the list are dropped here, at launch
+        // only: nothing can select them, so they would sit in the defaults for
+        // ever. Within a run they are how a directory browse is kept.
         let liveDrafts = allDrafts.filter { id, _ in loaded.channels.contains { $0.id == id } }
         self.drafts = liveDrafts
         if liveDrafts.count != allDrafts.count {
             settingsStore.saveDrafts(Array(liveDrafts.values))
         }
 
-        // The stash wins over the stored channel where there is one: an edit
-        // that was never saved is what the operator was last looking at
-        // (BU-9).
+        // An unsaved edit wins over the stored channel: it is what the
+        // operator was last looking at.
         let stored = loaded.selected ?? NodeSettings()
         let current = liveDrafts[stored.id] ?? stored
         self.settings = current
 
-        // Before the secret is fetched: for two of the three modes the Keychain
-        // account is derived from the callsign, so an identity loaded after this
-        // would look the secret up under `echolink:` with nothing after the
-        // colon and come back empty.
+        // Before the secret is fetched: some Keychain accounts are derived from
+        // the callsign.
         let identity = settingsStore.loadIdentity() ?? .empty
         self.identity = identity
         let storedGain = settingsStore.loadTransmitGain() ?? .unity
@@ -698,26 +563,21 @@ final class RadioSession: ObservableObject {
         let storedReceiveGain = settingsStore.loadReceiveGain() ?? .unity
         self.receiveGain = storedReceiveGain
         self.receiveGainBox.gain = storedReceiveGain
-        // Not `storedSecret(for:)`: an instance method cannot be called until
-        // every property is initialised. Same rule as there — a channel's own
-        // secret is loaded, an app-wide one is not (APP-14).
+        // Inline `storedSecret(for:)`, which cannot be called before every
+        // property is initialised.
         if case .channel(let account) = current.secretOwnership(for: identity) {
             self.secret = (try? secretStore.secret(for: account)) ?? ""
         } else {
             self.secret = ""
         }
-        // Loaded regardless of the selected channel's mode: the token belongs to
-        // the operator rather than to a channel, so it is there for whichever
-        // channel they switch to next.
+        // Loaded whatever the channel's mode: it belongs to the operator.
         self.webTransceiverToken =
             (try? secretStore.secret(for: current.webTransceiverAccount(for: identity))) ?? ""
         self.echoLinkAccountPassword =
             (try? secretStore.secret(for: NodeSettings.echoLinkAccount(for: identity))) ?? ""
 
-        // **APP-13's migration.** `loadEchoLinkProxy()` rescues a *private*
-        // proxy out of an old channel's own fields and discards a public one.
-        // A harvested password is filed in the Keychain and the settings
-        // resaved under their own key, so the harvest does not run again.
+        // APP-13's migration: a private proxy harvested from an old channel is
+        // filed in the Keychain and resaved, so the harvest runs once.
         let storedProxy = settingsStore.loadEchoLinkProxy()
         self.echoLinkProxy = storedProxy?.settings ?? .none
         if let harvested = storedProxy?.harvestedPassword {
@@ -733,14 +593,8 @@ final class RadioSession: ObservableObject {
     // MARK: - The stored accounts (APP-12)
 
     /// Stores the Web Transceiver token now, rather than at the next connect.
-    ///
-    /// The settings screen is not a connect form: an operator who has just
-    /// fetched a token and switched away expects it to still be there, and
-    /// waiting for a connection to persist it would lose it. Trimmed, because a
-    /// pasted token arrives with whatever the clipboard had around it.
-    ///
-    /// Failing to write is reported and not fatal, exactly as in ``connect()``:
-    /// the token is still usable from memory for this run.
+    /// Trimmed, since a pasted token carries clipboard whitespace. A failed
+    /// write is reported, not fatal: the token still works this run.
     ///
     /// - Returns: whether it reached the Keychain.
     @discardableResult
@@ -761,14 +615,11 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Stores the EchoLink account password. The one place it is written
-    /// (APP-14): `connect()` reads ``echoLinkAccountPassword`` for an EchoLink
-    /// channel, and nothing mirrors it into ``secret``.
+    /// Stores the EchoLink account password; the one place it is written
+    /// (APP-14).
     ///
-    /// **Trimmed**, like the Web Transceiver token (``saveWebTransceiverToken(_:)``):
-    /// a trailing newline passes every emptiness check and Keychain indicator,
-    /// then fails the digest at the directory server, which presents as a
-    /// password that is right but rejected.
+    /// Trimmed: a trailing newline passes every emptiness check, then fails
+    /// the digest at the directory server as a right-but-rejected password.
     ///
     /// - Returns: whether it reached the Keychain.
     @discardableResult
@@ -788,16 +639,11 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// **APP-13.** Stores the operator's own EchoLink proxy: host and port in
-    /// `UserDefaults`, password in the Keychain.
+    /// Stores the operator's own EchoLink proxy (APP-13): host and port in
+    /// `UserDefaults`, password in the Keychain, as one setting.
     ///
-    /// One call for both halves, because they are one setting and a proxy stored
-    /// without its password is a proxy that refuses every session. Validated
-    /// here rather than at connect time, so a pasted URL is refused while the
-    /// operator is looking at the field.
-    ///
-    /// Clearing the host clears the password with it — a stored password for a
-    /// proxy that is no longer configured is a credential kept for nothing.
+    /// Validated here, so a bad value is refused while the operator is at the
+    /// field. Clearing the host clears the password.
     ///
     /// - Returns: `nil` on success, or the complaint to show.
     @discardableResult
@@ -819,9 +665,7 @@ final class RadioSession: ObservableObject {
         do {
             try secretStore.setSecret(storedPassword, for: EchoLinkProxySettings.passwordAccount)
         } catch {
-            // Not fatal, and said the way the other two credentials say it: the
-            // proxy works for this run from memory, and the operator needs to
-            // know it will not be there next time rather than to find out then.
+            // Not fatal: the proxy works from memory for this run.
             return
                 "\(error) The proxy will work for this run, but its password was not stored — you "
                 + "will have to type it again next time."
@@ -833,16 +677,13 @@ final class RadioSession: ObservableObject {
 
     /// Switches to a saved channel, loading its details and its secret.
     ///
-    /// **Refused while a link is up:** changing the destination under a live
-    /// connection would leave the form describing one node and the audio
-    /// coming from another. The UI disables the list too; this is the backstop.
+    /// Refused while a link is up, so the form never describes one node while
+    /// the audio comes from another. The UI disables the list too.
     func select(_ id: UUID) {
         guard connection == .disconnected else { return }
-        // Already selected *and* already in the form: nothing to do.
-        // ``chooseChannel(_:)`` can point the draft at a directory entry
-        // without moving the selection, so the row and the form can describe
-        // different places, and tapping the highlighted row is then the
-        // operator asking to go back to it.
+        // Nothing to do only if selected *and* in the form: after
+        // ``chooseChannel(_:)`` the two can differ, and tapping the highlighted
+        // row means "go back to it".
         guard id != channels.selectedID || settings.id != id else { return }
         guard channels.channels.contains(where: { $0.id == id }) else { return }
 
@@ -852,52 +693,32 @@ final class RadioSession: ObservableObject {
         persistChannels()
     }
 
-    /// **APP-23.** Go to a channel, whatever the link is doing: hang up if
-    /// there is a call, select, and report whether the caller should dial the
-    /// new one.
+    /// Go to a channel whatever the link is doing (APP-23): hang up if there is
+    /// a call, then ``select(_:)``, which still refuses while connected.
     ///
-    /// ``select(_:)``'s refusal while connected stays exactly as it is — the
-    /// selection is what the status panel, the connect form and the link
-    /// button all describe, and moving it under a live call would leave them
-    /// naming a node the audio is not coming from. This answers the operator's
-    /// tap with a sequence that reaches the same place legally instead.
-    ///
-    /// Connected to one channel and tapping another leaves the operator
-    /// connected to the new one; tapping one while disconnected only selects
-    /// it — a tap in a list is "go here", not "call this".
-    ///
-    /// Returns a `Bool` rather than taking a connect closure because dialling
-    /// is more than ``connect(proxy:)`` (an EchoLink channel needs a proxy
-    /// sourced first) and ``RootView`` is the one place that knows the whole
-    /// sequence.
+    /// Connected, the operator ends up connected to the new channel;
+    /// disconnected, a tap only selects. The caller dials, because an EchoLink
+    /// channel needs a proxy sourced first and ``RootView`` knows how.
     ///
     /// - Returns: `true` when a call was up and the caller should now place one
     ///   to the newly selected channel.
     @discardableResult
     func switchChannel(to id: UUID) async -> Bool {
         guard channels.channels.contains(where: { $0.id == id }) else { return false }
-        // Already there in both senses `select(_:)` means it — highlighted and
-        // in the form. Hanging up and redialling the channel the operator is
-        // already talking on is the one outcome this must never produce.
+        // Already there, as `select(_:)` means it: never hang up and redial
+        // the channel the operator is talking on.
         guard id != channels.selectedID || settings.id != id else { return false }
 
         let wasLinked = connection != .disconnected
         if wasLinked { await disconnect() }
         select(id)
-        // `select(_:)`'s own guards mean a selection that did not move is not
-        // followed by a call — also the backstop if `disconnect()` ever leaves
-        // the link short of `.disconnected`.
+        // A selection that did not move is not followed by a call.
         return wasLinked && channels.selectedID == id
     }
 
-    /// Whether the draft differs from the channel it belongs to — what the
-    /// Save action and the "unsaved changes" indicator ask (BU-9).
-    ///
-    /// A draft whose id is in no channel counts as dirty, since saving it is
-    /// the only thing that would put it in the list. The exception is an
-    /// **untouched blank form**: the app opens on one when there are no
-    /// channels at all, and calling that dirty would make the indicator
-    /// worthless everywhere else.
+    /// Whether the draft differs from its stored channel (BU-9). A draft in no
+    /// channel counts as dirty, except an untouched blank form, which is what
+    /// the app opens on with no channels.
     var isDraftDirty: Bool {
         if let stored = channels.channels.first(where: { $0.id == settings.id }) {
             return stored != settings
@@ -905,36 +726,26 @@ final class RadioSession: ObservableObject {
         return settings != NodeSettings(id: settings.id)
     }
 
-    /// Whether the draft is somewhere **not in the channel list at all** — a
-    /// directory browse, or an `Add channel` not yet saved or connected.
-    ///
-    /// Connecting *adds* a draft like this one, so telling the operator their
-    /// channels are unchanged until they save would be false; connecting with
-    /// edits to an already-stored channel leaves it alone, where the same
-    /// sentence is the point.
+    /// Whether the draft is in no channel at all — a directory browse, or an
+    /// `Add channel` not yet saved or connected. Connecting adds such a draft
+    /// to the list, unlike edits to a stored channel.
     var isDraftAnUnsavedChannel: Bool {
         !channels.channels.contains { $0.id == settings.id }
     }
 
-    /// Whether a channel in the list has an edit waiting that it does not
-    /// contain. What ``ChannelListView`` marks a row with, so the list stays
-    /// honest while the form shows something else.
+    /// Whether a channel has an unsaved edit waiting, for ``ChannelListView``'s
+    /// row marker.
     func hasUnsavedEdits(for id: UUID) -> Bool {
         if id == settings.id { return isDraftDirty }
         guard let draft = drafts[id] else { return false }
         return channels.channels.first(where: { $0.id == id }) != draft
     }
 
-    /// **Save. The only thing in the app that overwrites a stored channel**
-    /// (BU-9), and only because the operator asked.
+    /// **Save.** The only thing that overwrites a stored channel (BU-9). A
+    /// draft in no channel is added.
     ///
-    /// Writes the draft over the channel it came from. A draft whose id is in
-    /// no channel is *added* rather than discarded: Save is the operator
-    /// saying "keep this".
-    ///
-    /// Unvalidated on purpose — an operator part-way through typing a host may
-    /// still want to keep what they have. ``connect()`` is where the
-    /// validation gate is.
+    /// Unvalidated, so a half-typed channel can be kept; ``connect()`` is the
+    /// validation gate.
     func saveDraft() {
         if channels.channels.contains(where: { $0.id == settings.id }) {
             channels.update(settings)
@@ -945,30 +756,19 @@ final class RadioSession: ObservableObject {
         persistChannels()
         persistDrafts()
 
-        // The identity travels with the draft rather than only with a
-        // connection, so a callsign typed and then never connected with is
-        // still there on the next launch. Stored as typed — validation, and
-        // therefore uppercasing, happens at `connect()`.
+        // Stored as typed; `connect()` validates and uppercases.
         settingsStore.saveIdentity(identity)
     }
 
-    /// Keeps the draft without saving it: the channel list is left exactly as
-    /// it was, and the difference is remembered in ``drafts`` (BU-9). Called
-    /// by every path that moves the operator away from the draft — selecting
-    /// another channel, adding one, pointing at a directory entry, going back
-    /// to the last connected channel, the app leaving the foreground — so none
-    /// of them overwrite a channel the operator did not ask to change, or lose
-    /// what was typed.
-    ///
-    /// Idempotent: a clean draft *clears* any stale stash for its channel,
-    /// since there is then nothing to remember.
+    /// Keeps the draft in ``drafts`` without touching the channel list (BU-9).
+    /// Called by every path that moves the form away from the draft, so none
+    /// overwrites a channel or loses what was typed. A clean draft clears its
+    /// stash.
     func stashDraft() {
         drafts[settings.id] = isDraftDirty ? settings : nil
         persistDrafts()
 
-        // Also saved here, as in `saveDraft()`: the callsign is app-wide
-        // rather than part of a channel, so there is no such thing as an
-        // unsaved draft *of* it — stashing is simply a moment we pass through.
+        // The callsign is app-wide, so it has no draft; save it as we pass.
         settingsStore.saveIdentity(identity)
     }
 
@@ -998,58 +798,39 @@ final class RadioSession: ObservableObject {
         return channel.id
     }
 
-    /// **APP-22.** Throws away a draft that is in no channel, and puts the form
-    /// back on the selected channel.
-    ///
-    /// What the provisional row's Discard does. Not ``deleteChannel(_:)``, which
-    /// takes an id out of the stored list — there is nothing stored here to take
-    /// out, and calling it with this draft's id would be a no-op that left the
-    /// row on screen.
-    ///
-    /// A no-op when the draft *is* a stored channel: there the row is the
-    /// channel, and removing it is Delete's job.
+    /// Throws away a draft that is in no channel and puts the form back on the
+    /// selected channel: the provisional row's Discard (APP-22). A no-op for a
+    /// stored channel, which is ``deleteChannel(_:)``'s job.
     ///
     /// - Returns: whether anything was discarded.
     @discardableResult
     func discardDraftChannel() -> Bool {
         guard connection == .disconnected, isDraftAnUnsavedChannel else { return false }
 
-        // Its pending edit goes with it. A draft is only ever reached by way of
-        // the channel it belongs to, and this one belongs to none — so leaving it
-        // in the stash would leave something unreachable in the defaults, which
-        // is the reason BU-9 prunes those at launch anyway.
+        // Its stash entry would otherwise be unreachable.
         drafts[settings.id] = nil
         persistDrafts()
         loadSelectedIntoDraft()
         return true
     }
 
-    /// Points the draft at somewhere chosen from a directory, **without saving
-    /// it**.
-    ///
-    /// Browsing a directory is looking around, which should not leave anything
-    /// behind: what saves a channel is ``saveDraft()`` or ``connect()``, so the
-    /// channel list means "places I have actually been". ``newChannel(_:)``
-    /// works the same way (APP-19); the only thing left here that is
-    /// particular to a directory is the same-place check below. An unsaved
-    /// draft is kept in ``drafts`` and survives a quit (BU-9).
+    /// Points the draft at somewhere chosen from a directory, without saving
+    /// it: only ``saveDraft()`` and ``connect()`` add to the channel list, so
+    /// browsing leaves nothing behind. Like ``newChannel(_:)``, the draft does
+    /// not survive a quit unless saved or connected to.
     ///
     /// - Returns: whether the draft now points at `channel`. `false` means a
     ///   link is up and nothing changed.
     @discardableResult
     func chooseChannel(_ channel: NodeSettings) -> Bool {
-        // Same rule as `select(_:)` and `newChannel(_:)`: changing where we are
-        // pointed mid-call would leave the form describing one place and the
-        // audio coming from another.
+        // Refused while connected, as `select(_:)` is.
         guard connection == .disconnected else { return false }
 
-        // The draft being replaced may be a real channel with unsaved edits, and
-        // they are kept without being applied to it.
+        // Keep the replaced draft's edits without applying them.
         stashDraft()
 
-        // Already in the list? Select it rather than making a second copy of
-        // it. Two channels for one module are indistinguishable in the list and
-        // an operator cannot tell which one they are editing.
+        // Already in the list: select it rather than add an indistinguishable
+        // second copy.
         if let existing = channels.channels.first(where: { $0.isSamePlace(as: channel) }) {
             channels.select(existing.id)
             loadSelectedIntoDraft()
@@ -1062,19 +843,11 @@ final class RadioSession: ObservableObject {
         return true
     }
 
-    /// Deletes a channel.
+    /// Deletes a channel and its pending draft (BU-9).
     ///
-    /// **The Keychain secret is left alone.** A deleted channel's secret is
-    /// keyed by `secretAccount`, which other channels may share — every
-    /// EchoLink channel for one callsign does, by construction — so deleting
-    /// the item here would log the operator out of channels they did not touch.
-    /// An orphaned Keychain item is invisible and harmless; a lost password is
-    /// neither.
-    ///
-    /// **Its pending draft goes with it** (BU-9), for the opposite reason: a
-    /// draft is only ever reached by selecting the channel it belongs to, so
-    /// one for a channel that no longer exists is unreachable and would sit in
-    /// the defaults for ever.
+    /// The Keychain secret is left alone: its account may be shared by other
+    /// channels, so deleting it could log the operator out of those. An
+    /// orphaned Keychain item is harmless; a lost password is not.
     func deleteChannel(_ id: UUID) {
         guard connection == .disconnected else { return }
 
@@ -1086,30 +859,20 @@ final class RadioSession: ObservableObject {
         persistChannels()
     }
 
-    /// Reorders the channel list.
-    ///
-    /// The one channel operation with no "only while disconnected" guard, and
-    /// deliberately: reordering changes nothing about which channel is selected
-    /// or what it points at, so there is nothing here for a live connection to
-    /// be inconsistent with.
+    /// Reorders the channel list. Allowed while connected: it changes neither
+    /// the selection nor what it points at.
     func moveChannels(fromOffsets source: IndexSet, toOffset destination: Int) {
         channels.move(fromOffsets: source, toOffset: destination)
         persistChannels()
     }
 
-    /// **APP-14.** What the station browser needs in order to ask the directory
-    /// server for a listing.
-    ///
-    /// *Which* password goes to the directory server is decided here, next to
-    /// the two fields, rather than in a view: a view reaching for one of two
-    /// similarly named properties (the channel's own secret vs. the app-wide
-    /// account password) is a mistake nothing catches; a named request is
-    /// testable.
+    /// What the station browser needs to ask the directory server for a
+    /// listing (APP-14). Decides here, testably, which password goes, so a view
+    /// cannot pick the channel's secret by mistake.
     struct DirectoryRequest: Equatable {
         let settings: NodeSettings
         let identity: OperatorIdentity
-        /// The **app-wide** EchoLink account password (APP-12), which is the only
-        /// credential a directory login has ever used.
+        /// The app-wide EchoLink account password, the only directory credential.
         let accountPassword: String
     }
 
@@ -1118,13 +881,8 @@ final class RadioSession: ObservableObject {
             settings: settings, identity: identity, accountPassword: echoLinkAccountPassword)
     }
 
-    /// **APP-14.** Which password a link is built with.
-    ///
-    /// For AllStarLink it is the channel's own, as typed into the form. For
-    /// EchoLink it is the *app-wide* account password the settings screen owns —
-    /// **not** the form's `secret`, which is a different channel's node secret
-    /// as often as not, and would authenticate to the directory server as the
-    /// wrong kind of credential entirely.
+    /// Which password a link is built with (APP-14): the form's `secret` for a
+    /// channel-owned credential, the app-wide account password for EchoLink.
     private func credentialSecret(
         for settings: NodeSettings, identity: OperatorIdentity
     ) -> String {
@@ -1139,12 +897,8 @@ final class RadioSession: ObservableObject {
     }
 
     /// The stored secret to put in the form for a channel, if it has one of its
-    /// own.
-    ///
-    /// **An app-wide password is not loaded here** (APP-14). It lives in
-    /// ``echoLinkAccountPassword``, loaded once at launch and written only by
-    /// the settings screen — copying it into `secret` too would let the two
-    /// disagree.
+    /// own. An app-wide password stays in ``echoLinkAccountPassword`` only, so
+    /// the two cannot disagree (APP-14).
     private func storedSecret(for settings: NodeSettings) -> String {
         switch settings.secretOwnership(for: identity) {
         case .channel(let account):
@@ -1154,10 +908,7 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Replaces the draft and the in-memory secret from the selected channel —
-    /// or from that channel's **pending draft**, where there is one (BU-9), so
-    /// that returning to a channel shows what was typed rather than what was
-    /// stored.
+    /// Loads the selected channel, or its pending draft, into the form (BU-9).
     private func loadSelectedIntoDraft() {
         let stored = channels.selected ?? NodeSettings()
         let current = drafts[stored.id] ?? stored
@@ -1169,26 +920,20 @@ final class RadioSession: ObservableObject {
         channels.save(to: settingsStore)
     }
 
-    /// Writes the stash out. Persisted on every change rather than at quit,
-    /// like the channel list: there is no reliable "at quit" on iOS.
+    /// Writes the drafts out, on every change like the channel list.
     private func persistDrafts() {
         settingsStore.saveDrafts(Array(drafts.values))
     }
 
     // MARK: - Lifecycle
 
-    /// Starts observing SF-3 signals. Idempotent; called from the root view's
-    /// `.task`, and directly by tests.
-    ///
-    /// This runs for the app's lifetime, not the connection's: an interruption
-    /// that arrives while connecting must still be seen, and the pipeline's
-    /// stream is created once.
+    /// Starts observing SF-3 signals for the app's lifetime, not the
+    /// connection's, so an interruption while connecting is still seen.
+    /// Idempotent; called from the root view's `.task` and by tests.
     func start() {
         guard signalTask == nil else { return }
-        // **SF-4, the app-termination path.** A Live Activity outlives the
-        // process that requested it, so a Currawong killed mid-over leaves a
-        // banner claiming TX with nothing behind it. This is the launch that
-        // clears it, and it runs before anything can key up.
+        // **SF-4.** A Live Activity outlives a process killed mid-over, still
+        // claiming TX; clear it before anything can key up.
         activity.adopt()
         let signals = audio.signals
         signalTask = Task { @MainActor [weak self] in
@@ -1200,12 +945,9 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Connecting
 
-    /// - Parameter proxy: the proxy an EchoLink session is to tunnel through,
-    ///   already resolved by ``ProxyPicker`` — `nil` for the other two modes.
-    ///   Passed in rather than read from the settings because a proxy is not part
-    ///   of a channel (APP-13), and passed at the moment of connecting rather
-    ///   than held on this object because that is the moment it is true: a public
-    ///   proxy is leased for one sitting.
+    /// - Parameter proxy: the EchoLink proxy, already resolved by
+    ///   ``ProxyPicker``; `nil` for other modes. Passed per connect, since a
+    ///   proxy is not part of a channel and a public one is leased per sitting.
     func toggleConnection(proxy: EchoLinkProxyRoute? = nil) async {
         switch connection {
         case .disconnected: await connect(proxy: proxy)
@@ -1216,17 +958,13 @@ final class RadioSession: ObservableObject {
 
     /// Validates, persists, and places the call.
     ///
-    /// The audio session is configured *before* the call goes out, and a
-    /// failure there aborts the connection rather than being noted and
-    /// ignored. A connection whose microphone will never open is a PTT button
-    /// that lights up and transmits nothing, and the operator would have no
-    /// way to tell that from a quiet channel.
+    /// The audio session is configured before the call goes out, and a failure
+    /// aborts the connection: a microphone that will never open is
+    /// indistinguishable from a quiet channel.
     func connect(proxy: EchoLinkProxyRoute? = nil) async {
         guard connection == .disconnected else { return }
 
-        // Identity first: it is app-wide, so a missing callsign is wrong for
-        // every channel rather than for this one, and reporting a channel
-        // problem first would send the operator to the wrong field.
+        // Identity first: a bad callsign is wrong for every channel.
         let validatedIdentity: OperatorIdentity
         do {
             validatedIdentity = try identity.validated()
@@ -1238,8 +976,7 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // Written back so the field shows what was actually used — the
-        // uppercased, trimmed form that went on the air.
+        // Written back so the field shows the uppercased, trimmed form used.
         identity = validatedIdentity
         settingsStore.saveIdentity(validatedIdentity)
 
@@ -1255,11 +992,8 @@ final class RadioSession: ObservableObject {
         }
         settings = validated
 
-        // A Web Transceiver call carries the token in place of a node secret
-        // (APP-11), so an empty one is checked here rather than in
-        // `NodeSettings.validated()`: the token is a credential and that type
-        // holds none. Only emptiness is refused — an unfamiliar-shaped token is
-        // passed on, since the node is what decides (`isPlausibleWebTransceiverToken`).
+        // Checked here, not in `NodeSettings.validated()`, which holds no
+        // credentials. Only emptiness is refused; the node judges the shape.
         let trimmedToken = webTransceiverToken.trimmingCharacters(in: .whitespacesAndNewlines)
         if validated.usesWebTransceiver && trimmedToken.isEmpty {
             present(
@@ -1271,24 +1005,16 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // **Connecting may add a channel; it never overwrites one** (BU-9).
-        // An operator who typed a node into an empty app, or picked a
-        // reflector out of the directory, and pressed Connect has said "this
-        // is a place I go" — but an edit to a channel already in the list
-        // stays a pending draft until `saveDraft()` is asked for, so the list
-        // goes on describing where it actually goes.
+        // Connecting may add a channel; it never overwrites one (BU-9). An
+        // edit to a stored channel stays a draft until `saveDraft()`.
         if !channels.channels.contains(where: { $0.id == validated.id }) {
             channels.add(validated)
             persistChannels()
         }
 
-        // Either way the draft is stashed: a channel just added has no
-        // difference left to remember, and an edited one keeps the validated
-        // form of the edit.
         stashDraft()
 
-        // The single-node key too, so a downgrade still finds the node that
-        // was last connected to.
+        // The legacy single-node key too, so a downgrade finds the last node.
         settingsStore.save(validated)
 
         do {
@@ -1298,26 +1024,20 @@ final class RadioSession: ObservableObject {
                     trimmedToken, for: validated.webTransceiverAccount(for: validatedIdentity))
             }
 
-            // **APP-14.** What gets written is decided by whose secret it is —
-            // see ``NodeSettings/SecretOwnership`` — not just by whether this
-            // is Web Transceiver.
+            // What is written depends on whose secret it is (APP-14).
             switch validated.secretOwnership(for: validatedIdentity) {
             case .channel(let account):
-                // **Never empty.** `SecretStore` deletes on an empty value, and
-                // the account string is shared by every channel with the same
-                // username, host, port and node — a blank field would take
-                // another channel's password with it.
+                // Never empty: `SecretStore` deletes on an empty value, and the
+                // account may be shared with another channel.
                 guard !secret.isEmpty else { break }
                 try secretStore.setSecret(secret, for: account)
 
             case .appWide:
-                // EchoLink. The settings screen owns this password (APP-12);
-                // connecting only *reads* it (`credentialSecret` below).
+                // EchoLink: Settings owns it; connecting only reads it.
                 break
 
             case .none:
-                // M17, and a Web Transceiver channel whose token is written
-                // above. Nothing to store, nothing can fail.
+                // M17, or Web Transceiver (token written above).
                 break
             }
         } catch {
@@ -1337,11 +1057,9 @@ final class RadioSession: ObservableObject {
         sentDTMF = ""
         receivedDTMF = ""
 
-        // Before the session, not after: this is the call that makes iOS show
-        // the microphone prompt (`AudioIO.requestRecordPermission()`).
-        // Refusing to connect without it is deliberate — a connected node with
-        // a dead transmit path looks like a working QSO until somebody needs
-        // to hear you.
+        // Before the session: this raises iOS's microphone prompt. Refusing to
+        // connect without it is deliberate — a dead transmit path looks like a
+        // working QSO until somebody needs to hear you.
         guard await audio.requestRecordPermission() else {
             connection = .disconnected
             present(
@@ -1363,26 +1081,16 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // **BU-22: wake the input device now, not into the operator's first
-        // over.** The device delivers exact zeros for its first seconds, which
-        // no amount of waiting for the *route* to settle can see (see
-        // `AudioIO.warmUpInput()`).
+        // BU-22: wake the input device now rather than on the first over (see
+        // `AudioIO.warmUpInput()`), overlapped with placing the call.
         //
-        // Started here and awaited below rather than awaited here, since
-        // everything between — DNS, building the link, placing and answering
-        // the call — gives it room to finish for free.
-        //
-        // **Awaited before `connection` becomes `.connected`**, which keeps it
-        // from racing a key-down: `beginTransmit` refuses a press that is not
-        // connected, so the microphone is free by the time one is possible.
-        // Every exit below awaits it, including the failures, so a failed
-        // connect cannot leave the microphone open behind an unread alert.
+        // Every exit below awaits it before `connection` can be `.connected`,
+        // so it cannot race a key-down, and a failed connect cannot leave the
+        // microphone open.
         let warmUp = Task { @MainActor [audio] in await audio.warmUpInput() }
 
-        // The directory server may be a host name, and the library takes four
-        // octets. Resolved here, into a *copy*, rather than in the link
-        // factory (synchronous) or the channel (would cache a stale address
-        // under the name the operator typed).
+        // The library takes four octets. Resolved into a copy, so the channel
+        // keeps the name rather than a stale address.
         let resolved: NodeSettings
         do {
             resolved = try await resolveDirectoryServer(in: validated)
@@ -1422,15 +1130,12 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // BU-22's other half, awaited before a press is possible. The outcome
-        // is recorded but does not gate the connect (BU-24; see ``inputWarmUp``).
+        // Recorded, but does not gate the connect (see ``inputWarmUp``).
         inputWarmUp = await warmUp.value
 
         connection = .connected
         transmitState = newLink.transmitState()
-        // Recorded here, not earlier: this is the first line at which a call
-        // is known to have been answered, so Reconnect means "back to where I
-        // just was", not "retry the thing that failed".
+        // Only now is the call known to have been answered.
         lastConnectedChannel = validated
     }
 
@@ -1444,19 +1149,14 @@ final class RadioSession: ObservableObject {
         guard connection == .disconnected, let last = lastConnectedChannel else { return false }
         guard settings.id != last.id else { return true }
 
-        // Still in the list — the normal case. Going through `select(_:)`
-        // keeps the channel list's selection and the draft in step, which
-        // setting `settings` alone would not.
+        // Through `select(_:)`, to keep the selection and the draft in step.
         if channels.channels.contains(where: { $0.id == last.id }) {
             select(last.id)
             return channels.selectedID == last.id
         }
 
-        // Deleted since. The draft can still describe it (``chooseChannel(_:)``);
-        // refusing to reconnect because a list entry went away would be worse
-        // than calling the place the operator was just talking to. Stashed,
-        // not saved: this is not the operator asking to rewrite the channel
-        // they are leaving.
+        // Deleted since: point the draft at it anyway, stashing (not saving)
+        // the draft being left.
         stashDraft()
         settings = last
         secret = storedSecret(for: last)
@@ -1464,11 +1164,8 @@ final class RadioSession: ObservableObject {
     }
 
     /// A copy of `settings` whose directory server is an address rather than a
-    /// name.
-    ///
-    /// Only EchoLink has a directory server, and an empty one means "do not log
-    /// in to the directory" — a supported way to run — so both of those return
-    /// unchanged rather than resolving nothing.
+    /// name. Unchanged outside EchoLink, or when the server is empty (no
+    /// directory login).
     private func resolveDirectoryServer(in settings: NodeSettings) async throws -> NodeSettings {
         guard settings.mode.usesProxy, !settings.directoryServer.isEmpty else { return settings }
 
@@ -1499,15 +1196,10 @@ final class RadioSession: ObservableObject {
     // MARK: - PTT (PT-1)
 
     /// Touch-down on the PTT button, or a press edge from any other input.
+    /// `source` lets the UI say whether letting go will unkey (PT-4).
     ///
-    /// `source` is recorded so the UI can tell the operator whether letting go
-    /// will unkey (PT-4). It has a default because the on-screen button is the
-    /// caller that has no choice about it.
-    ///
-    /// A press with no connection is only worth an alert when the operator is
-    /// looking at the button they just pressed. A Bluetooth fob or a headset
-    /// button pressed in a pocket must not stack up modal alerts — it gets the
-    /// same refusal, silently.
+    /// Unconnected, only an on-screen press raises an alert: a fob pressed in
+    /// a pocket must not stack up modal alerts.
     func beginTransmit(from source: PTTSource = .onScreen) {
         guard connection.isConnected else {
             if source == .onScreen {
@@ -1518,17 +1210,11 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // **APP-33.** The one gate between a press and the air, placed here
-        // deliberately: after the connected guard, so the notice is not shown
-        // to someone not even connected, and before everything below, so a
-        // press that will not transmit costs nothing — no hold bookkeeping, no
-        // `scheduleTransmitWork()`, and no perturbation of the BU-15/BU-16
-        // key-down ordering.
-        //
-        // Not branched on `source`: a fob press raises the sheet exactly as a
-        // screen press does, so an operator whose phone was in their pocket
-        // finds out why nothing happened the moment they look. Either way the
-        // radio stays unkeyed.
+        // **APP-33** licence gate. After the connected guard, so it is not
+        // shown to someone not connected; before everything below, so a
+        // refused press does no hold bookkeeping and cannot perturb the
+        // BU-15/BU-16 key-down ordering. Any source raises the sheet; the
+        // radio stays unkeyed either way.
         guard hasAcknowledgedLicence else {
             needsLicenceAcknowledgement = true
             return
@@ -1537,8 +1223,7 @@ final class RadioSession: ObservableObject {
         guard !transmitDesired else { return }
 
         safetyNotice = nil
-        // A press the operator made, rather than one this class made for them,
-        // starts a fresh hold — and a fresh allowance of automatic resumes.
+        // An operator press, not an automatic resume, starts a fresh hold.
         if heldSource == nil {
             automaticResumes = 0
             keyDownsInCurrentHold = 0
@@ -1546,8 +1231,7 @@ final class RadioSession: ObservableObject {
             routeSignalsWhileTransmitting = 0
             holdTrace = []
         }
-        // SF-4's elapsed clock measures the *hold*, so an automatic resume
-        // under a button that was never released keeps the original stamp.
+        // SF-4's clock times the hold, so a resume keeps the original stamp.
         if holdBegan == nil { holdBegan = now() }
         trace(heldSource == nil ? "press" : "resume")
         heldSource = source
@@ -1567,10 +1251,8 @@ final class RadioSession: ObservableObject {
         audio.stopCapture()
 
         if transmitDesired || isTransmitting {
-            // Only when something was actually up, so this does not fire on the
-            // many defensive calls. The reason is the point: it is how an SF-1
-            // watchdog unkey becomes visible (BU-7, never observed), and how a
-            // route-change drop is told from an operator release.
+            // Only when something was up, not on defensive calls. Logs why,
+            // so a watchdog or route-change drop is told from a release.
             Diagnostics.keying(
                 "endTransmit reason=\(reason) wasTransmitting=\(isTransmitting) "
                     + "held=\(heldSource != nil)")
@@ -1586,34 +1268,24 @@ final class RadioSession: ObservableObject {
         isKeyDown = false
         activeSource = nil
         watchdogDeadline = nil
-        // Only a route change may leave a repair pending; every other reason
-        // settles the question, so anything left over from an earlier route
-        // change is stale and must not keep the indicator up — nor key back
-        // down, which is what cancelling the task prevents. A watchdog unkey
-        // (SF-1) is the case that matters: it must not be undone by a resume
-        // that was already in the air when it fired.
+        // Only a route change may leave a resume pending. Any other reason
+        // cancels one already in flight, so it cannot key back down — above
+        // all after an SF-1 watchdog unkey.
         if reason != .routeChanged {
             routeResumeInFlight = false
             resumeWork?.cancel()
             resumeWork = nil
         }
-        // **Synchronously, with the microphone, and not behind the task
-        // chain.** This is the call that takes the lock-screen banner down, and
-        // it must not queue behind a key-down that is still in flight to the
-        // client — an indicator that lags an unkey is the stale state SF-4
-        // cannot afford. `routeResumeInFlight` is what keeps a route-change
-        // recovery's banner up across this; every other reason ends it.
+        // Synchronously, not behind the task chain: the lock-screen indicator
+        // must not lag an unkey (SF-4). `routeResumeInFlight` keeps it up for a
+        // route-change recovery.
         refreshActivity()
         scheduleTransmitWork()
     }
 
-    /// ``endTransmit(reason:)`` plus a wait for it to reach the client. Used
-    /// by ``disconnect()`` and by the tests.
-    ///
-    /// A separate name rather than an `async` overload: an overload pair
-    /// differing only in `async` resolves by context, and "which one did that
-    /// call site get?" is not a question worth having about the code that
-    /// stops transmission.
+    /// ``endTransmit(reason:)`` plus a wait for it to reach the client. A
+    /// separate name, not an `async` overload, so no call site is ambiguous
+    /// about which stop it got.
     func endTransmitAndWait(reason: TransmitStopReason) async {
         endTransmit(reason: reason)
         await settle()
@@ -1654,32 +1326,23 @@ final class RadioSession: ObservableObject {
             guard connection.isConnected, !isTransmitting else { return }
             do {
                 // **BU-15: everything that moves the audio route happens
-                // before anything is keyed.** Escalating to the radio policy
-                // and opening the microphone both disturb the audio route, so
-                // if either happened after keying, SF-3 would (correctly) drop
-                // the transmission they were disturbing. Doing them first means
-                // nothing is on air yet for SF-3 to drop.
+                // before anything is keyed.** Escalating the session policy and
+                // opening the microphone both disturb the route; after keying,
+                // SF-3 would drop the transmission they disturbed.
                 //
-                // **BU-16's fast path is intact.** `settleRoute()` returns
-                // immediately unless something really was disturbed, which for
-                // an over inside the 3 s hand-back linger is nothing at all —
-                // the session is already on radio and the input unit already
-                // up. Only the first over after a pause pays the wait.
+                // BU-16: `settleRoute()` returns at once unless the route was
+                // actually disturbed, so only the first over after a pause
+                // pays the wait.
                 routePreparationInFlight = true
                 let preparationBegan = now()
                 trace("prep")
                 await audio.prepareForCapture()
 
-                // Gain, then meter, then the wire: the meter reports what
-                // actually leaves, so the operator sets the gain against the
-                // thing it changes. Runs on the audio thread fifty times a
-                // second — every step is bounded work on 160 samples with no
-                // awaits (`TransmitGainBox`, `TransmitGain.apply(to:)`,
-                // `AudioLevelMeter.note(_:)`).
+                // Gain, then meter, then the wire, so the meter shows what
+                // leaves. Audio thread, 50 times a second: bounded work only.
                 //
-                // **`onAir` is what makes opening the microphone early safe.**
-                // Nothing captured before the carrier may reach the wire or
-                // the meter, since the meter reports what actually left.
+                // **`onAir` is what makes opening the microphone early safe:**
+                // nothing captured before the carrier reaches the wire.
                 let gainBox = self.gainBox
                 let meter = transmitMeter
                 let onAir = OnAirGate()
@@ -1698,12 +1361,9 @@ final class RadioSession: ObservableObject {
                     now().timeIntervalSince(preparationBegan) * 1000)
                 trace("prepped")
 
-                // The release may have arrived at either suspension above.
-                // `endTransmit` runs synchronously and has already closed the
-                // microphone and cleared the hold, so nothing here has to
-                // unkey — there is no carrier yet to take down. BU-16's best
-                // case: a tap shorter than the route takes to settle never
-                // goes on air at all.
+                // A release at either suspension above has already closed the
+                // microphone and cleared the hold, and there is no carrier yet,
+                // so a short tap never goes on air.
                 guard transmitDesired, connection.isConnected else {
                     audio.stopCapture()
                     Diagnostics.keying(
@@ -1724,11 +1384,9 @@ final class RadioSession: ObservableObject {
                 transmitDesired = false
                 isKeyDown = false
                 isTransmitting = false
-                // **The hold ends here too**, even though this path does not go
-                // through `endTransmit`: `leavesTheHoldAlive` is false for
-                // `.transmitFailed`, and leaving the hold alive would let an
-                // automatic resume fire off a hold nobody had renewed, with a
-                // lock-screen indicator with no way down.
+                // The hold ends here too, though this bypasses `endTransmit`:
+                // a live hold could let an automatic resume re-key, and would
+                // leave the lock-screen indicator with no way down.
                 heldSource = nil
                 holdBegan = nil
                 routeResumeInFlight = false
@@ -1746,30 +1404,22 @@ final class RadioSession: ObservableObject {
             lastKeyDownRoute = Self.routeField(of: audio.audioStateDescription)
             lastCaptureStartMilliseconds = audio.lastCaptureStartMilliseconds
             Diagnostics.keying("key-down on air: \(audio.audioStateDescription)")
-            // Each key-down starts its own watchdog, including one this class
-            // made after a route change.
+            // Each key-down, including a resume, starts its own watchdog.
             watchdogDeadline = now().addingTimeInterval(transmitTimeout.seconds)
             routeResumeInFlight = false
             transmitState = link.transmitState()
             refreshActivity()
         } else {
-            // Captured before the stop, for the log below only: this branch runs
-            // on every apply with `transmitDesired == false`, including ones
-            // where nothing was ever keyed, and a key-up line for those is noise
-            // that buries the real ones.
+            // For the log only, so defensive applies do not log a key-up.
             let wasTransmitting = isTransmitting
-            // Unconditional rather than guarded by `isTransmitting`. Both
-            // calls are documented as safe when nothing is running, and the
-            // failure mode of a redundant stop is nothing at all, while the
-            // failure mode of a missed one is an open microphone.
+            // Unconditional: a redundant stop costs nothing, a missed one is an
+            // open microphone.
             audio.stopCapture()
             await link.stopTransmit()
             isTransmitting = false
             transmitState = link.transmitState()
             refreshActivity()
-            // After the stop, deliberately: the interesting question is what the
-            // route looks like once the engine has gone down, which is where
-            // BU-13 expects to see `oldDeviceUnavailable`.
+            // After the stop, to log the route with the engine down (BU-13).
             if wasTransmitting {
                 lastTransmitEndedAt = now()
                 Diagnostics.keying("key-up: \(audio.audioStateDescription)")
@@ -1781,15 +1431,9 @@ final class RadioSession: ObservableObject {
 
     /// The app left, or returned to, the foreground.
     ///
-    /// Anything that is not fully active unkeys. `.inactive` counts: the
-    /// control centre being dragged down, a call banner, an app switcher
-    /// preview — the operator is not looking at the PTT button in any of them.
-    /// The *connection* survives (PD-2 gives the app the `audio` background
-    /// mode); only transmission stops.
-    ///
-    /// Transmission is never resumed on returning to the foreground. A
-    /// microphone that reopens without a fresh press is exactly the surprise
-    /// this app exists to avoid.
+    /// Anything not fully active unkeys, `.inactive` included (control centre,
+    /// a call banner, the app switcher). The connection survives (PD-2); only
+    /// transmission stops, and it is never resumed without a fresh press.
     func setForeground(_ isForeground: Bool) {
         guard !isForeground else { return }
         endTransmit(reason: .appBackgrounded)
@@ -1803,9 +1447,8 @@ final class RadioSession: ObservableObject {
     // MARK: - SF-3
 
     private func handle(_ signal: AudioSessionSignal) {
-        // Logged before the switch, so a signal that is deliberately ignored
-        // still leaves a trace. "Arriving and being ignored" versus "not
-        // arriving at all" is the distinction BU-13 turns on.
+        // Logged before the switch, so an ignored signal still leaves a trace
+        // (BU-13).
         Diagnostics.route(
             "signal \(signal) isTransmitting=\(isTransmitting) "
                 + "held=\(heldSource != nil) resumes=\(automaticResumes) "
@@ -1814,14 +1457,9 @@ final class RadioSession: ObservableObject {
         case .interruptionBegan:
             endTransmit(reason: .audioInterrupted)
         case .routeChanged:
-            // **`BU-15`.** The app is between the press and the key-down,
-            // waiting out the cascade its own escalation and microphone caused.
-            // Nothing is on air — the link is not keyed, and anything the
-            // microphone produces is dropped by `OnAirGate` — so there is no
-            // transmission for SF-3 to drop, and the key-down that follows will
-            // happen on a route that has stopped moving. See
-            // ``routePreparationInFlight`` for why this is an ordering fix and
-            // not a suppression.
+            // BU-15: during preparation nothing is on air, so there is nothing
+            // for SF-3 to drop; the key-down follows once the route settles.
+            // See ``routePreparationInFlight``.
             if routePreparationInFlight, !isTransmitting {
                 routeSignalsDuringPreparation += 1
                 trace("sigPrep")
@@ -1832,77 +1470,55 @@ final class RadioSession: ObservableObject {
             if isTransmitting { routeSignalsWhileTransmitting += 1 }
             trace(isTransmitting ? "sigTx" : "sigIdle")
             resumeAcrossRouteChange()
-            // Checked *after* `resumeAcrossRouteChange`, because that is what
-            // decides whether a resume is in flight. See
-            // ``isIdleForAccessoryRepair`` for what "idle" has to mean here.
+            // After `resumeAcrossRouteChange`, which decides whether a resume
+            // is in flight.
             if isIdleForAccessoryRepair {
                 onIdleAudioRouteChange?()
             }
         case .interruptionEnded:
-            // Deliberately does not resume. `shouldResume` is a hint about
-            // *playback*; keying a transmitter because a phone call ended is
-            // not a thing a radio should do on its own. The stop is repeated
-            // for safety and records no reason, because nothing new happened.
+            // Never resumes: `shouldResume` is about playback, and a radio must
+            // not key itself because a call ended. The stop is repeated for
+            // safety.
             endTransmit(reason: .audioInterrupted)
         }
     }
 
-    /// SF-3 for a route change, with the recovery the operator would
-    /// otherwise have to perform by hand.
+    /// SF-3 for a route change: transmission always stops. If the button is
+    /// still held, this keys back down once the route settles; the safety
+    /// banner is shown only when that cannot happen (no hold, no link, or a
+    /// route that keeps changing).
     ///
-    /// Transmission stops — that part is not negotiable, and the audio graph
-    /// has just been rebuilt underneath us in any case. What changes is what
-    /// happens next: if the button is still down, this keys back down once the
-    /// route has settled instead of leaving a banner that says "press and hold
-    /// to transmit again" to somebody who never stopped holding.
-    ///
-    /// The banner is kept for the cases that cannot be repaired — no hold, no
-    /// link, or a route that will not stop changing. Then it is telling the
-    /// operator something they can act on, which is the only reason to show it.
-    ///
-    /// **Bounded on purpose.** A flapping route must not become an unbounded
-    /// series of key-downs: after ``maximumAutomaticResumes`` in one hold this
-    /// gives up and says so. Each resume is a real key-down and starts its own
-    /// SF-1 watchdog, and the watchdog firing ends the hold outright, so this
-    /// cannot be used to hold a transmitter open past the timeout.
+    /// **Bounded:** after ``maximumAutomaticResumes`` in one hold it gives up
+    /// and says so. Each resume starts its own SF-1 watchdog, and the watchdog
+    /// ends the hold outright, so this cannot hold a transmitter open past the
+    /// timeout.
     private func resumeAcrossRouteChange() {
         let resumable = heldSource.flatMap { source in
             connection.isConnected && automaticResumes < Self.maximumAutomaticResumes
                 ? source : nil
         }
 
-        // Set **before** the stop, because `endTransmit` is what refreshes the
-        // lock-screen indicator (SF-4) and this is the flag that tells it the
-        // hold is being repaired rather than ended. A route change that cannot
-        // be recovered from leaves this false and the activity ends with the
-        // transmission, which is the honest answer: nothing is going to key
-        // back down.
+        // Set before the stop, since `endTransmit` refreshes the lock-screen
+        // indicator (SF-4) and this tells it the hold is being repaired. If
+        // unrecoverable, it stays false and the activity ends.
         routeResumeInFlight = resumable != nil
         endTransmit(reason: .routeChanged, explain: resumable == nil)
         guard let source = resumable else { return }
 
         automaticResumes += 1
-        // **Cancelled, not merely replaced.** A later signal in the same
-        // cascade must not leave an earlier resume task keying back down after
-        // the budget has run out and the operator has been told to press
-        // again.
+        // Cancelled, not merely replaced: an earlier resume task must not key
+        // back down after the budget has run out.
         resumeWork?.cancel()
         resumeWork = Task { @MainActor [weak self] in
-            // Let the graph settle before asking for the microphone again:
-            // the route change is the notification that it is *being* rebuilt,
-            // not that it is finished.
             try? await Task.sleep(nanoseconds: Self.routeSettleNanoseconds)
-            // `try?` swallows the cancellation, so it has to be asked about
-            // explicitly: a cancelled sleep returns *early* rather than
-            // throwing out of here, and keying back down would be exactly the
-            // thing the cancellation was for. Whoever cancelled has already
-            // cleared `routeResumeInFlight` and refreshed the indicator.
+            // `try?` swallows the cancellation, so a cancelled sleep returns
+            // early and must be checked, or it would key back down. The
+            // canceller has already cleared `routeResumeInFlight`.
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.heldSource == source, self.connection.isConnected else {
-                // The hold ended, or the link did, while the graph settled.
-                // Nothing will key back down, so the indicator must not go on
-                // saying otherwise.
+                // The hold or the link ended while settling: nothing will key
+                // back down, so the indicator must stop saying so.
                 self.routeResumeInFlight = false
                 self.refreshActivity()
                 return
@@ -1911,9 +1527,7 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Where to turn the microphone back on, which is not the same place on
-    /// the two platforms — and telling a macOS operator to look in Settings →
-    /// Currawong sends them somewhere that does not exist.
+    /// Where to turn the microphone back on, which differs by platform.
     private var micPermissionAdvice: String {
         #if os(iOS)
         return "Currawong cannot transmit without the microphone. Turn it on in Settings → "
@@ -1953,18 +1567,13 @@ final class RadioSession: ObservableObject {
 
     // MARK: - SF-4 (APP-3)
 
-    /// What the lock screen should be showing right now, or `nil` for nothing.
+    /// What the lock screen should show right now, or `nil`. A pure function
+    /// of session state, so no path has its own idea of how to take the banner
+    /// down.
     ///
-    /// A pure function of the state above it, which is the point: there is one
-    /// answer to "is the radio keyed?", every path that changes it calls
-    /// ``refreshActivity()``, and no path has its own idea of how to take the
-    /// banner down.
-    ///
-    /// **The `isOnAir` flag follows ``isTransmitting`` and nothing else.** Not
-    /// ``isKeyDown``, which leads the client by a round trip, and not
-    /// ``transmitDesired``. An indicator that goes red before the far end is
-    /// keyed is a small lie, and it is the same kind of lie as one that stays red
-    /// after the microphone shuts.
+    /// **`isOnAir` follows ``isTransmitting`` only** — not ``isKeyDown`` or
+    /// ``transmitDesired``, which lead the client — so it is neither red early
+    /// nor red late.
     private var desiredActivity: TransmitActivityRequest? {
         guard connection.isConnected else { return nil }
         let channel = lastConnectedChannel ?? settings
@@ -1981,9 +1590,8 @@ final class RadioSession: ObservableObject {
                     watchdogDeadline: watchdogDeadline))
         }
 
-        // A route-change recovery, mid-gap. Nothing is on air and the activity
-        // says so — but it stays up, because the operator has not let go and a
-        // banner that blinks off and back on teaches them to disbelieve it.
+        // A route-change recovery, mid-gap: not on air, but kept up rather
+        // than blinking off under a held button.
         if routeResumeInFlight, let source = heldSource {
             return TransmitActivityRequest(
                 channel: channel.displayName,
@@ -1998,31 +1606,24 @@ final class RadioSession: ObservableObject {
                     watchdogDeadline: nil))
         }
 
-        // Nothing is keyed, so nothing is shown. **Open question (BU-10):**
-        // the activity is scoped to a *transmission*, so it is requested at
-        // key-down — for an accessory keying a backgrounded app, a request
-        // made from the background. Apple documents `Activity.request` as a
-        // foreground operation; Currawong is running rather than suspended in
-        // that moment (PD-2's `audio` mode), which is not the same thing, and
-        // no simulator settles it.
+        // Nothing is keyed, so nothing is shown.
         //
-        // If a device says no, the fix is here: return a not-on-air state
-        // whenever `connection.isConnected`, so the activity is created by the
-        // operator tapping Connect — unambiguously foreground — and merely
-        // goes red here. `TransmitActivityController` does not care which of
-        // the two it is handed.
+        // **Open question (BU-10):** the activity is requested at key-down,
+        // which for an accessory keying a backgrounded app is a background
+        // request. `Activity.request` is documented as foreground-only; the app
+        // is running (PD-2's `audio` mode), not suspended, which may or may not
+        // count. If a device refuses, return a not-on-air state whenever
+        // connected, so the activity is created at Connect in the foreground.
         return nil
     }
 
-    /// Hands ``desiredActivity`` to the controller. Cheap and idempotent, so it
-    /// is called from every transition rather than from the ones that were
-    /// thought to matter.
+    /// Hands ``desiredActivity`` to the controller. Cheap and idempotent, so
+    /// every transition calls it.
     private func refreshActivity() {
         activity.show(desiredActivity)
     }
 
-    /// Waits for the lock-screen indicator to catch up. Test support only —
-    /// nothing in the app needs to know when a banner has been drawn.
+    /// Waits for the lock-screen indicator to catch up. Test support only.
     func settleActivity() async {
         await activity.settle()
     }
@@ -2053,11 +1654,10 @@ final class RadioSession: ObservableObject {
             receivedDTMF = Self.appending(digit, to: receivedDTMF)
 
         case .transmitWatchdogExpired(let timeout):
-            // SF-1. The client has already unkeyed itself; the app still has a
+            // SF-1. The client has unkeyed itself; the app still has a
             // microphone open and a button that thinks it is held.
             endTransmit(reason: .watchdogExpired)
-            // Including, possibly, an accessory whose release will never
-            // arrive — see `onWatchdogUnkey`.
+            // And possibly an accessory whose release will never arrive.
             onWatchdogUnkey?()
             safetyNotice = SafetyNotice(
                 kind: .transmitWatchdog,
@@ -2111,25 +1711,21 @@ final class RadioSession: ObservableObject {
         let gainBox = self.receiveGainBox
         meter.reset()
 
-        // Detached: playback enqueue takes a lock and allocates, fifty times a
-        // second, and none of that belongs on the main actor. Only the
-        // throttled activity note hops back.
+        // Detached: playback locks and allocates 50 times a second, off the
+        // main actor. Only the throttled activity note hops back.
         receiveTask = Task.detached(priority: .userInitiated) { [weak self] in
             var lastNoted = Date.distantPast
             for await pcm in stream {
-                // Read per frame rather than snapshotted here, so dragging the
-                // slider is audible on the next 20 ms of audio instead of on the
-                // next connection. The meter reads the amplified frame, because
-                // what the operator is judging is what they can hear.
+                // Gain read per frame, so a slider drag is heard at once; the
+                // meter shows the amplified frame, as heard.
                 let pcm = gainBox.gain.apply(to: pcm)
                 audio.enqueuePlayback(pcm)
                 meter.note(pcm)
                 let arrival = Date()
                 if arrival.timeIntervalSince(lastNoted) >= window / 2 {
                     lastNoted = arrival
-                    // Bound to a local first: `self?.…` inside the nested
-                    // closure would capture the weak variable itself across an
-                    // isolation boundary, which is a hard error under Swift 6.
+                    // Bound first: capturing the weak `self` across the
+                    // isolation boundary is an error under Swift 6.
                     guard let session = self else { return }
                     await MainActor.run { session.noteReceivedAudio(at: arrival) }
                 }
@@ -2137,18 +1733,14 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Records inbound audio activity. Throttled by the caller — publishing
-    /// fifty times a second would redraw the whole screen fifty times a
-    /// second, for an indicator that only has two states.
+    /// Records inbound audio activity. Throttled by the caller, so the screen
+    /// does not redraw 50 times a second.
     func noteReceivedAudio(at date: Date) {
         lastReceivedAudioAt = date
     }
 
-    /// Whether audio is arriving right now, as of `date`.
-    ///
-    /// A function of a caller-supplied instant rather than a timer, so the
-    /// view can drive it from a `TimelineView` and the tests can drive it from
-    /// a fixed date.
+    /// Whether audio is arriving as of `date`, which a `TimelineView` or a
+    /// test supplies.
     func isReceivingAudio(asOf date: Date) -> Bool {
         guard let last = lastReceivedAudioAt else { return false }
         let age = date.timeIntervalSince(last)
@@ -2162,14 +1754,12 @@ final class RadioSession: ObservableObject {
 
     /// Sends one DTMF digit to the node.
     ///
-    /// **Does not key the radio.** DTMF is signalling and travels as its own
-    /// reliable frame, so there is no transmission to start and — importantly —
-    /// pressing a keypad key cannot put the operator on air. It is refused when
-    /// there is no connection rather than queued.
+    /// **Does not key the radio:** DTMF travels as its own signalling frame,
+    /// so a keypad press cannot put the operator on air. Refused, not queued,
+    /// when unconnected.
     ///
-    /// Lower-case `a`–`d` are upper-cased on the way through: the library is
-    /// deliberately strict about the RFC's alphabet and says the layer owning a
-    /// keypad should normalise, and this is that layer.
+    /// Upper-cases `a`–`d`: the library is strict about the alphabet and
+    /// leaves normalising to the keypad's owner.
     func sendDTMF(_ digit: Character) async {
         guard let link, connection.isConnected else {
             present(
@@ -2178,11 +1768,8 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // `Character(digit.uppercased())` would be the obvious spelling and it
-        // traps: upper-casing is not one-to-one — "ß" upper-cases to "SS" — and
-        // `Character.init` refuses a multi-character string. Unreachable from
-        // the keypad, which only offers `0`–`9`, `*` and `#`, but this method is
-        // callable with anything and a trap is not an acceptable answer.
+        // Not `Character(digit.uppercased())`, which traps when upper-casing
+        // lengthens a character ("ß" → "SS").
         let uppercased = digit.uppercased()
         let normalised = uppercased.count == 1 ? Character(uppercased) : digit
 
@@ -2203,23 +1790,20 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Alerts
 
-    /// **APP-33.** The operator says they hold a licence. Stored, so this is
-    /// asked once per install.
+    /// The operator says they hold a licence (APP-33). Stored, so it is asked
+    /// once per install.
     ///
-    /// It does **not** begin transmitting. The press that raised the sheet is
-    /// spent — the operator has let go of the button by the time they have read
-    /// three paragraphs, and keying a radio as a side effect of dismissing a
-    /// dialogue is the last thing this app should do. The next press transmits.
+    /// Does **not** begin transmitting: the press that raised the sheet is
+    /// spent, and dismissing a dialogue must never key a radio. The next press
+    /// transmits.
     func acknowledgeLicence() {
         acknowledgedLicenceVersion = LicenceAcknowledgement.currentVersion
         settingsStore.saveLicenceAcknowledgement(LicenceAcknowledgement.currentVersion)
         needsLicenceAcknowledgement = false
     }
 
-    /// **APP-33.** The operator declines, and keeps a listening radio.
-    ///
-    /// Nothing is stored: declining is not a decision that needs remembering,
-    /// and the next press asks again. The connection is left alone.
+    /// The operator declines (APP-33), keeping a receive-only radio. Nothing
+    /// is stored, so the next press asks again.
     func declineLicence() {
         needsLicenceAcknowledgement = false
     }
@@ -2235,15 +1819,9 @@ final class RadioSession: ObservableObject {
 
     /// Says something to the operator, behind whatever is already being said.
     ///
-    /// **Queued rather than assigned, because one attempt can raise two.** The
-    /// view presents a single alert bound to ``alert``, and SwiftUI does not
-    /// re-present when the value behind a showing alert is replaced — so a
-    /// second message would be dropped and never shown once the first was
-    /// dismissed.
-    ///
-    /// Duplicates are dropped. Retrying a connection that fails the same way
-    /// twice should not build a stack of identical alerts to dismiss one by
-    /// one — `OperatorAlert` compares on its words, not its id, for this.
+    /// Queued, not assigned: SwiftUI does not re-present an alert whose value
+    /// is replaced while showing, so a second message would be lost. Duplicates
+    /// are dropped; `OperatorAlert` compares on its words for this.
     private func present(title: String, message: String) {
         let next = OperatorAlert(title: title, message: message)
 
@@ -2259,13 +1837,8 @@ final class RadioSession: ObservableObject {
     // MARK: - Teardown
 
     private func tearDownLink() {
-        // **APP-13.** The sitting is over, so the public proxy goes back. Here
-        // rather than in `disconnect()` because both ways a link ends come
-        // through this — the operator hanging up, and the link dropping by itself
-        // — and a lease surviving one of them would send the next session back to
-        // a machine somebody else has since taken. The library has already closed
-        // the proxy connection itself by this point: `EchoLinkClient` sends the
-        // RTCP farewell, then `CLOSE`, then closes the transport.
+        // Release the public proxy lease (APP-13). Here, not in `disconnect()`,
+        // because both a hang-up and a dropped link end up here.
         releaseProxyLease()
         eventTask?.cancel()
         eventTask = nil
@@ -2292,24 +1865,16 @@ final class RadioSession: ObservableObject {
 
 // MARK: - PTTSink
 
-/// **The one consumer of every PTT input.**
-///
-/// The Bluetooth accessory (PT-2/PT-3) and the remote-command button (PT-4)
-/// reach the microphone through here and nowhere else, which is the whole point
-/// of ``PTTSink``: three inputs, one path to ``RadioSession/endTransmit(reason:)``,
-/// so a release path that works for the on-screen button works for all of them.
+/// **The one consumer of every PTT input.** The accessory (PT-2/PT-3) and the
+/// remote-command button (PT-4) reach the microphone only through here, so
+/// every input shares ``RadioSession/endTransmit(reason:)``.
 ///
 /// ## Releases are honoured unconditionally
 ///
-/// None of these methods checks whether the input asking to stop is the input
-/// that started. That is deliberate, and it is the same reasoning
-/// ``RadioSession/applyTransmit()`` uses about calling `stopTransmit` twice: the
-/// cost of an unnecessary stop is nothing at all, and the cost of a swallowed
-/// one is an open microphone. An accessory release that arrives while the
-/// on-screen button holds the key stops transmission; the operator presses
-/// again. The reverse arrangement — matching source before releasing — would
-/// mean writing down the conditions under which the app ignores a release, and
-/// there are no such conditions worth having.
+/// No method checks that the input stopping is the one that started: an
+/// unnecessary stop costs nothing, a swallowed one is an open microphone. An
+/// accessory release while the on-screen button holds the key stops
+/// transmission; the operator presses again.
 extension RadioSession: PTTSink {
 
     func pttPressed(from source: PTTSource) {
@@ -2323,11 +1888,9 @@ extension RadioSession: PTTSink {
     /// **PT-4.** A remote command with no release edge: press to key, press
     /// again to unkey.
     ///
-    /// The "is it already keyed?" test is `transmitDesired || isTransmitting`,
-    /// not `isTransmitting` alone. They differ for as long as it takes the
-    /// client to answer a key-up, and a second toggle arriving inside that
-    /// window must unkey rather than be read as a fresh press — otherwise a
-    /// quick double-press latches instead of cancelling.
+    /// Tests `transmitDesired || isTransmitting`, not `isTransmitting` alone,
+    /// so a second toggle before the client answers unkeys rather than
+    /// latching.
     func pttToggled(from source: PTTSource) {
         if transmitDesired || isTransmitting {
             endTransmit(reason: .remoteCommandToggled)
@@ -2338,11 +1901,9 @@ extension RadioSession: PTTSink {
 
     /// **SF-2.** The Bluetooth accessory's link dropped.
     ///
-    /// Called unconditionally by ``BLEPTTController`` on every disconnection,
-    /// whether or not the accessory was the thing holding the key, so this
-    /// method has to be safe when nothing is transmitting — which it is, because
-    /// `endTransmit` is. It records a reason and raises a notice only when it
-    /// actually stopped something.
+    /// Called by ``BLEPTTController`` on every disconnection, whether or not
+    /// the accessory held the key; `endTransmit` is safe when nothing is
+    /// transmitting and notes a reason only when it stopped something.
     func accessoryLinkLost() {
         endTransmit(reason: .accessoryLinkLost)
     }
@@ -2350,20 +1911,13 @@ extension RadioSession: PTTSink {
 
 /// A one-way latch the capture tap reads, and the key-down opens.
 ///
-/// **`BU-15`.** The microphone now opens *before* the link is keyed, so that the
-/// route change instantiating the input audio unit causes lands while nothing is
-/// on air (see `applyTransmit()`). That leaves a window — as long as the route
-/// takes to settle — in which frames arrive from the audio thread with no
-/// carrier to put them on. They are dropped here rather than sent, and the
-/// transmit meter never sees them either: the meter's contract is that it
-/// reports what actually left, and until the link is keyed nothing has.
+/// The microphone opens before the link is keyed (BU-15), so frames captured
+/// while the route settles have no carrier; they are dropped here, before the
+/// wire and the transmit meter.
 ///
-/// Closed once and opened once, from the main actor, read fifty times a second
-/// from the audio thread behind an uncontended lock — the same arrangement
-/// ``GainBox`` uses. There is deliberately no way to close it again: the release
-/// path closes the *microphone*, which is the stronger guarantee, and a gate
-/// that could be shut would be one more thing that has to be shut on every
-/// safety path.
+/// Opened once from the main actor, read from the audio thread behind a lock,
+/// as ``GainBox`` is. It cannot be closed again: the release path closes the
+/// microphone, which is the stronger guarantee.
 final class OnAirGate: @unchecked Sendable {
     private let lock = NSLock()
     private var opened = false
