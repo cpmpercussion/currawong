@@ -85,6 +85,10 @@ final class BU15FirstOverTests: XCTestCase {
             }
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
+        // Asked once more past the deadline, as `waitUntil` does (`BU-26`).
+        if await MainActor.run(body: { session.routeSignalsDuringPreparation }) >= n {
+            return
+        }
         XCTFail(
             "the session never handled signal \(n) of the cascade as a preparation signal",
             file: file, line: line)
