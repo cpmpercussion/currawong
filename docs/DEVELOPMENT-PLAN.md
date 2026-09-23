@@ -1735,7 +1735,7 @@ path dependency, which the check does not apply to. So the version-resolved
 build is the only new thing tested here.
 
 
-### APP-35 — a comment pass over `Sources/`
+### APP-35 — a comment pass over `Sources/` ✅ DONE 2026-09-23
 **Where:** `currawong`. **Needs:** nothing.
 
 On 2026-09-23, 47% of the non-blank lines in `Sources/` were comments (7,818
@@ -1761,16 +1761,20 @@ redundant. That is a design question and gets its own task.
 **Done when:** `Sources/` is at or under roughly 30% comment lines, no comment
 retells history, and every PR in the pass passes the comment-only check.
 
-**First pass, 2026-09-23: 47% to 40%** (7,818 comment lines to 5,794, code
-unchanged). One commit per area. `RadioSession` had a second pass, to 38%. The
-other areas stopped at 35–47%, mostly SF-reasoning and per-case contracts. The
-pass also found seven comments that were false or attached to the wrong
-declaration, and fixed them.
+**Done 2026-09-23: 47% to 27%** (7,818 comment lines to 3,218, code
+unchanged). Two passes, one commit per area per pass. The pass also fixed
+about twenty comments that were false or attached to the wrong declaration,
+rather than merely long. Examples: M17 described as never validated on air,
+sandbox and permission claims contradicted by APP-32, and unsaved drafts
+said to survive a quit.
 
 Code issues it found, for a separate task:
 
 - `RadioSession.lastTransmitEndedAt` is written and never read. It served the
   withdrawn `repairQuietPeriodAfterTransmit`, which is also dead code.
 - `BLEPTTController.lastRepairAt` is written and never read.
+- `RootView.connectTitle` is declared and never used.
+- The three link factories in `CompositionRoot` repeat the same event pump,
+  frame relay and `close` block almost line for line.
 - The link factories map each client's `events` rather than `radioEvents`
   (above).
