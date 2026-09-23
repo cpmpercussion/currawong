@@ -13,9 +13,8 @@ import SwiftUI
 /// that faded on its own would be a banner that is reliably gone by the time
 /// anybody looks.
 ///
-/// The pane split moved this out of ``RootView`` unchanged: it renders a notice
-/// and reports a dismissal, and the session remains the only thing that decides
-/// when there is one.
+/// Renders a notice and reports a dismissal; the session is the only thing
+/// that decides when there is one.
 struct SafetyBanner: View {
     let notice: RadioSession.SafetyNotice
     let onDismiss: () -> Void

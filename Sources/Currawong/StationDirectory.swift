@@ -8,8 +8,7 @@ import Foundation
 /// are library types, and only `CompositionRoot` is allowed to see them. This
 /// is what the browser displays and what a channel is built from.
 struct DirectoryStation: Identifiable, Equatable, Sendable {
-    /// The callsign, which is also the identity — the directory is keyed by it,
-    /// and two entries with one callsign would be the same station listed twice.
+    /// The callsign, which is also the identity — the directory is keyed by it.
     var callsign: String
 
     /// Free text from the listing: a town, a repeater's frequency, a note.
@@ -18,8 +17,8 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
     /// The node number, when the listing carries one.
     var nodeNumber: Int?
 
-    /// The station's IPv4 address. This is the field the whole browser exists
-    /// to obtain — see ``RadioMode``.
+    /// The station's IPv4 address — the field the whole browser exists to
+    /// obtain. See ``RadioMode``.
     var address: String
 
     /// Whether the station said it was on and free, as opposed to busy or off.
@@ -32,11 +31,9 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
 
     /// Whether this station is one of the network's own test services.
     ///
-    /// `*ECHOTEST*` echoes audio back, so one operator alone can prove the path
-    /// end to end without troubling anybody. It is worth surfacing first in a
-    /// browser of six thousand entries, and worth a nudge for a first
-    /// connection, which is why the app knows this rather than leaving the
-    /// operator to find it by scrolling.
+    /// `*ECHOTEST*` echoes audio back, letting one operator prove the path
+    /// end to end alone. Worth surfacing first in a browser of six thousand
+    /// entries.
     var isTestService: Bool {
         callsign.hasPrefix("*") && callsign.uppercased().contains("TEST")
     }
@@ -44,19 +41,15 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
     /// Whether ``address`` is something the proxy could actually be asked to
     /// open — four octets, and not one of the two that mean "nowhere".
     ///
-    /// Deliberately *not* the library's `isConnectable`, which also requires a
-    /// node number. A conference is listed without one often enough, and
-    /// `*ECHOTEST*` is exactly the entry an operator reaches for first, so
-    /// refusing to save it for want of a number it was never going to have
-    /// would block the one station this browser most needs to hand over. The
-    /// only thing a channel needs from a listing is the address; that is what
-    /// is checked.
+    /// Deliberately not the library's `isConnectable`, which also requires a
+    /// node number: a conference or `*ECHOTEST*` is often listed without one,
+    /// and a channel only needs the address.
     ///
-    /// `0.0.0.0` and `127.0.0.1` appear in real listings for stations that are
-    /// registered but not reachable. Both pass ``NodeSettings/isDottedQuad(_:)``
-    /// and so survive `validated()`, which is why they are caught here instead:
-    /// otherwise the channel saves cleanly and fails much later, inside the
-    /// proxy, with an error that names neither the station nor the reason.
+    /// `0.0.0.0` and `127.0.0.1` appear in real listings for registered but
+    /// unreachable stations. Both pass ``NodeSettings/isDottedQuad(_:)`` and so
+    /// survive `validated()`, which is why they are caught here instead —
+    /// otherwise the channel saves cleanly and fails later, inside the proxy,
+    /// with an error naming neither the station nor the reason.
     var hasDialableAddress: Bool {
         NodeSettings.isDottedQuad(address) && address != "0.0.0.0" && address != "127.0.0.1"
     }
@@ -64,11 +57,10 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
     /// A channel pointed at this station, filled in from an existing channel's
     /// directory server.
     ///
-    /// Takes a template rather than building from nothing because the part a
-    /// station cannot supply — which directory server listed it — is one the
-    /// operator has already configured once and should never type twice. The
-    /// proxy is not among them any more: it is app-wide (APP-13), so a new
-    /// channel inherits it by not naming it.
+    /// Takes a template rather than building from nothing: which directory
+    /// server listed the station is not something a station can supply, and
+    /// the operator has already configured it once. The proxy is app-wide
+    /// (APP-13) and so is not part of the template.
     func channel(basedOn template: NodeSettings) -> NodeSettings {
         var channel = template
         channel.id = UUID()
@@ -82,23 +74,21 @@ struct DirectoryStation: Identifiable, Equatable, Sendable {
 
 /// Fetches an EchoLink directory listing.
 ///
-/// A protocol so the browser can be tested — and so the app can be built and
-/// run — without a proxy, a directory server or a network. The real one is
-/// `CompositionRoot.EchoLinkStationDirectory`, and it is the only thing that
-/// knows a listing arrives through a tunnelled TCP session rather than, say,
-/// an HTTP request.
+/// A protocol so the browser can be tested, and the app built and run,
+/// without a proxy, a directory server or a network. The real implementation
+/// is `CompositionRoot.EchoLinkStationDirectory`; a listing arrives through a
+/// tunnelled TCP session, not an HTTP request.
 protocol StationDirectory: Sendable {
     /// Every station the directory server lists.
     ///
     /// - Parameters:
-    ///   - settings: supplies the directory server. The node fields are ignored:
-    ///     this opens a directory-only session and never contacts a node.
+    ///   - settings: supplies the directory server; the node fields are ignored,
+    ///     since this opens a directory-only session and never contacts a node.
     ///   - accountPassword: the operator's EchoLink account password.
-    ///   - identity: the operator's callsign, which is who the directory server
-    ///     is asked to log in as.
-    ///   - proxy: the proxy to tunnel the directory session through, resolved by
-    ///     ``ProxyPicker`` (APP-13). The listing does not arrive over HTTP; it
-    ///     comes down a proxy connection like a QSO does.
+    ///   - identity: the operator's callsign, which the directory server is
+    ///     asked to log in as.
+    ///   - proxy: the proxy to tunnel the directory session through, resolved
+    ///     by ``ProxyPicker`` (APP-13).
     func stations(
         for settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
         proxy: EchoLinkProxyRoute
@@ -109,9 +99,9 @@ protocol StationDirectory: Sendable {
 enum StationDirectoryError: Error, Equatable, CustomStringConvertible {
     case notEchoLink
 
-    /// The directory server logs us in *as* a callsign, so an anonymous browse
-    /// is not a thing that exists. Reported first, because the callsign is
-    /// app-wide and a missing one is wrong for every channel.
+    /// The directory server logs us in as a callsign; there is no anonymous
+    /// browse. Reported first: the callsign is app-wide, so a missing one is
+    /// wrong for every channel.
     case missingCallsign
 
     case missingProxy
@@ -159,8 +149,7 @@ final class StationBrowser: ObservableObject {
     /// Why the last fetch failed, in words the operator can act on.
     @Published private(set) var failure: String?
 
-    /// When the listing was fetched. A directory listing goes stale — stations
-    /// come and go, and addresses change — so the browser says how old it is
+    /// When the listing was fetched, so the browser can say how old it is
     /// rather than presenting yesterday's list as fact.
     @Published private(set) var fetchedAt: Date?
 
@@ -168,8 +157,8 @@ final class StationBrowser: ObservableObject {
     private let now: @MainActor () -> Date
     private var fetchTask: Task<Void, Never>?
 
-    /// Bumped by every ``load(for:identity:accountPassword:proxy:)``, so a fetch that has been
-    /// superseded can tell that it has.
+    /// Bumped by every ``load(for:identity:accountPassword:proxy:)``, so a
+    /// superseded fetch can tell that it is.
     private var generation = 0
 
     init(directory: StationDirectory, now: @escaping @MainActor () -> Date = { Date() }) {
@@ -190,20 +179,15 @@ final class StationBrowser: ObservableObject {
                     || $0.nodeNumber.map { String($0).contains(query) } == true
             }
 
-        // A stable partition rather than a sort: the directory's own order is
-        // meaningful to nobody, but re-ordering six thousand rows on every
-        // keystroke is felt. Only the test services move.
+        // A stable partition, not a sort: re-ordering six thousand rows on
+        // every keystroke is felt, so only the test services move.
         return matching.filter(\.isTestService) + matching.filter { !$0.isTestService }
     }
 
-    /// Fetches the listing. A second call while one is in flight replaces it —
-    /// the operator has changed something and wants the new answer.
-    /// The same load, from the session's own ``RadioSession/DirectoryRequest``.
-    ///
-    /// **APP-14.** The view used to assemble the arguments itself and reached for
-    /// `session.secret` — the channel's secret — instead of the app-wide account
-    /// password. Taking the request whole leaves nothing for a call site to pick
-    /// wrongly.
+    /// Fetches the listing, from the session's own ``RadioSession/DirectoryRequest``
+    /// (APP-14): taking the request whole leaves no call site free to pick the
+    /// wrong password out of `NodeSettings`. A second call while one is in
+    /// flight replaces it.
     func load(_ request: RadioSession.DirectoryRequest, proxy: EchoLinkProxyRoute?) {
         load(
             for: request.settings, identity: request.identity,
@@ -225,10 +209,9 @@ final class StationBrowser: ObservableObject {
             return
         }
 
-        // `whatIsMissing` answers `.missingProxy` for a nil proxy, so this cannot
-        // fail — unwrapped with `guard` rather than `!` so that an edit to that
-        // check degrades into "no fetch" instead of a crash on a screen the
-        // operator opened to look for a station.
+        // `whatIsMissing` already answers `.missingProxy` for a nil proxy, so
+        // this cannot fail — `guard`, not `!`, so a future edit to that check
+        // degrades to "no fetch" rather than a crash.
         guard let proxy else { return }
 
         isLoading = true
@@ -239,16 +222,13 @@ final class StationBrowser: ObservableObject {
         fetchTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
-            // `defer`, not a line at the end: three of the paths out of this
-            // task are early returns on cancellation, and a spinner left
-            // turning because the enclosing task was torn down is a screen the
-            // operator can only fix by leaving it.
-            //
-            // The generation check is what makes that safe. A cancelled task
-            // observes its cancellation *later* than the `load` that cancelled
-            // it — after that `load` has already set `isLoading` back to true —
-            // so an unguarded `defer` here would clear the spinner belonging to
-            // the fetch that replaced this one.
+            // `defer`, not a line at the end: several paths out of this task
+            // are early returns on cancellation, and an unguarded spinner would
+            // be stuck on. The generation check guards it because a cancelled
+            // task observes its cancellation later than the `load` that
+            // cancelled it — after that `load` has already set `isLoading`
+            // back to true — so without the check this `defer` would clear the
+            // spinner belonging to the fetch that replaced this one.
             defer { if self.generation == generation { self.isLoading = false } }
 
             do {
@@ -276,11 +256,10 @@ final class StationBrowser: ObservableObject {
 
     /// The complaint to show instead of attempting a fetch that cannot work.
     ///
-    /// Checked here rather than left to the library so the operator is told
-    /// which field is empty, instead of watching a spinner end in a protocol
-    /// error that names none of them.
-    /// `nonisolated` because the directory implementation checks it too, off the
-    /// main actor, and one copy of the rule is the point.
+    /// Checked here rather than left to the library, so the operator is told
+    /// which field is empty rather than watching a spinner end in a protocol
+    /// error that names none of them. `nonisolated` because the directory
+    /// implementation checks it too, off the main actor.
     nonisolated static func whatIsMissing(
         in settings: NodeSettings, identity: OperatorIdentity, accountPassword: String,
         proxy: EchoLinkProxyRoute?
@@ -289,10 +268,9 @@ final class StationBrowser: ObservableObject {
         if identity.callsign.trimmingCharacters(in: .whitespaces).isEmpty {
             return .missingCallsign
         }
-        // `nil` here is not an empty field the operator can go and fill in: it
-        // means the app tried to source a proxy and could not (APP-13). The
-        // wording says so, and it is the last thing checked before the fetch
-        // because it is the one thing nobody typed.
+        // `nil` here is not an empty field: it means the app tried to source a
+        // proxy and could not (APP-13). Checked last because it's the one
+        // thing nobody typed.
         guard let proxy, !proxy.host.isEmpty else { return .missingProxy }
         if settings.directoryServer.trimmingCharacters(in: .whitespaces).isEmpty {
             return .missingDirectoryServer

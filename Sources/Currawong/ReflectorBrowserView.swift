@@ -5,27 +5,22 @@ import SwiftUI
 /// The M17 reflector chooser: which reflectors exist, and which modules they
 /// have.
 ///
-/// The M17 equivalent of ``StationBrowserView``, and it exists for a milder
-/// version of the same reason. An EchoLink station cannot be reached without
-/// the directory, because only the directory knows its address. An M17
-/// reflector can — the host names are stable and an operator who knows one can
-/// type it. But knowing one means having read a list on a website, and a
-/// hundred and twenty-five reflectors across twenty countries is not something
-/// to hold in your head.
+/// The M17 equivalent of ``StationBrowserView``, for a milder version of the
+/// same reason: an M17 reflector's host name is stable and dialable directly,
+/// but a hundred and twenty-five reflectors across twenty countries is not
+/// something to hold in your head.
 ///
-/// Tapping a module **fills in the connect screen and takes you to it**. It
-/// does not save a channel and it does not go on the air: browsing is looking
-/// around, and looking around should leave nothing behind. The channel is saved
-/// when the connection succeeds, so the list means "places I have been" rather
-/// than "reflectors I once tapped".
+/// Tapping a module fills in the connect screen and takes you to it — it does
+/// not save a channel or go on the air. The channel is saved only when the
+/// connection succeeds, so the list means "places I have been", not
+/// "reflectors I once tapped".
 struct ReflectorBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: ReflectorBrowser
 
     /// Called after a module is chosen, so the container can show the connect
-    /// screen. Choosing somewhere to go and then being left in the list reads
-    /// as nothing having happened — which is exactly what the operator reported
-    /// before this existed.
+    /// screen — otherwise choosing somewhere to go and being left in the list
+    /// reads as nothing having happened.
     var onChosen: () -> Void = {}
 
     /// Repointing the draft is refused while a link is up, by `RadioSession`.
@@ -139,13 +134,9 @@ struct ReflectorBrowserView: View {
         }
     }
 
-    /// **Required, not decorative.** DVRef publishes the reflector data under
-    /// CC BY 4.0, and attribution is the condition: "If you publish or
-    /// redistribute DVRef data, provide reasonable credit to DVRef." Their
-    /// policy accepts it in documentation, a README, app credits or a
-    /// data-sources page — it is here as well as in the README because this is
-    /// the screen the data is actually on, and it is the honest answer to an
-    /// operator wondering where the list came from.
+    /// Required, not decorative: DVRef publishes this data under CC BY 4.0,
+    /// conditioned on credit. Shown here, on the screen the data is actually
+    /// on, as well as in the README.
     private var attribution: some View {
         Text("Reflector data provided by DVRef (dvref.com), CC BY 4.0, via the M17 Project.")
             .font(.caption2)
@@ -167,11 +158,10 @@ struct ReflectorBrowserView: View {
                 })
         }
         .listStyle(.plain)
-        // A floor rather than a size — the list takes the space going spare.
-        // Kept low on purpose: this pane is the tallest of them, and every
-        // point of rigid minimum here is a point the detail column can overflow
-        // by in a short window. The list scrolls internally, so a small one is
-        // cramped rather than broken.
+        // A floor, not a size. Kept low: this pane is the tallest of them, and
+        // every point of rigid minimum is a point the detail column can
+        // overflow by in a short window; the list scrolls internally, so small
+        // is cramped rather than broken.
         .frame(minHeight: 140)
     }
 }
@@ -228,17 +218,13 @@ private struct ReflectorRow: View {
 
     /// The reflector's own dashboard, opened in the browser.
     ///
-    /// **Why a link and not a panel.** What an operator wants before calling is
-    /// the thing the host file does not carry: who was last heard, on which
-    /// module, and how long ago. Every reflector publishes that on its own
-    /// dashboard and no two publish it the same way — there is no feed to read,
-    /// only a hundred-odd pages of hand-rolled HTML. Scraping them would mean
-    /// the list quietly going wrong whenever somebody restyles theirs. A link
-    /// hands the operator the page the information is actually on, and stays
-    /// right by doing nothing.
+    /// A link, not a scraped panel: every reflector publishes who was last
+    /// heard on its own dashboard, in its own HTML, with no common feed to
+    /// read, so a link hands the operator the real page instead of a copy
+    /// that can go stale.
     ///
-    /// Absent rather than disabled when the listing has no URL: a greyed link
-    /// invites a tap that will not happen.
+    /// Absent rather than disabled when the listing has no URL — a greyed
+    /// link invites a tap that will not happen.
     @ViewBuilder
     private var dashboardLink: some View {
         if let dashboard = reflector.dashboard {

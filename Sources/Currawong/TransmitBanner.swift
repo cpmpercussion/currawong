@@ -5,50 +5,34 @@ import SwiftUI
 /// **SF-4.** The "you are on air" strip, full bleed — red while transmitting,
 /// muted otherwise.
 ///
-/// It lives in its own file because of *where* it has to be placed rather than
-/// what it draws: it sits above the pane container in ``RootView``, outside the
-/// `TabView` and outside the `NavigationSplitView`, so that no amount of tab
-/// switching, column collapsing or scrolling can take it off the screen. A copy
-/// inside a pane would be a copy that some other pane does not have, and the
-/// operator would learn that the strip is sometimes absent while transmitting —
-/// which is the one thing SF-4 exists to prevent.
+/// In its own file because of where it has to sit: above the pane container in
+/// ``RootView``, outside the `TabView` and the `NavigationSplitView`, so no tab
+/// switch, column collapse or scroll can take it off screen. A copy inside a
+/// pane would be a copy some other pane lacks, and the one thing SF-4 exists to
+/// prevent is the strip being absent while transmitting.
 ///
 /// (The lock-screen half of SF-4 is the Live Activity, APP-3 — see
-/// ``TransmitActivityController``. This is still the half that matters when the
-/// app *is* on screen, and it is the whole of SF-4 on macOS and for an operator
-/// who has turned Live Activities off.)
+/// ``TransmitActivityController``. This is the half that matters while the app
+/// is on screen, and the whole of SF-4 on macOS or with Live Activities off.)
 ///
-/// ## APP-23: it is always here, and only its colour changes
+/// **Always present; only colour and wording change (APP-23).** Inserting and
+/// removing the strip at key-down/key-up would move every control below it,
+/// including the PTT button under the operator's finger — a button that slides
+/// out from under a held finger is a drag-off release
+/// (``TransmitStopReason/draggedOffButton``). Keeping the strip permanent keeps
+/// the PTT button still while held.
 ///
-/// It used to be inserted into the hierarchy at key-down and removed at key-up.
-/// That made keying **move every control below it down the screen — including
-/// the PTT button under the operator's finger**, which is the one control that
-/// must not move while it is being held. A finger that lands on a button which
-/// then slides out from under it is a finger that drags off, and dragging off is
-/// a release (``TransmitStopReason/draggedOffButton``).
+/// One line in both states: a subtitle restating the word beside it teaches the
+/// eye to skip the strip.
 ///
-/// So the strip is permanent and the *state* is carried by colour and wording
-/// alone. Nothing about SF-4 is weakened by this: what makes the strip
-/// unhideable is its position as a sibling of the pane container, not its coming
-/// and going. What is gained beyond the layout is that "am I on air?" is now
-/// answered in the same place at all times, rather than by the presence or
-/// absence of something the operator has to remember the meaning of.
+/// **`source` exists for PT-4.** A latched transmission is the one case where
+/// letting go does not stop the radio, and an operator who believes a latched
+/// key is momentary is how this app leaves a microphone open. The latched case
+/// says so in the space "ON AIR" already occupies; momentary sources say
+/// nothing extra, because TRANSMITTING is the whole truth for them.
 ///
-/// **One line, in both states.** It carried a subtitle at first — "Transmitting
-/// while held", "The transmitter is not keyed" — which the operator asked for
-/// and then asked to have removed, rightly: both restate what the word beside
-/// them already says, and a safety strip that spends half its height saying
-/// nothing teaches the eye to skip it.
-///
-/// **The exception is PT-4, and it is why `source` is still here.** A *latched*
-/// transmission is the one case where letting go does not stop the radio, and an
-/// operator who believes a latched key is momentary is how this app would leave
-/// a microphone open. So the latched case says so, in the space "ON AIR" already
-/// occupies — the fact, not a sentence about the fact. Momentary sources say
-/// nothing extra, because for them the word TRANSMITTING is the whole truth.
-///
-/// The height is the same in every state either way. That is what the tests
-/// pin, and it is the property the layout depends on.
+/// The height is identical in every state — the tests pin it, and the layout
+/// depends on it.
 struct TransmitBanner: View {
     /// Whether the radio is on air. The strip is drawn either way.
     let isTransmitting: Bool
@@ -58,18 +42,16 @@ struct TransmitBanner: View {
     /// as momentary, which is the presentation that claims least.
     let source: PTTSource?
 
-    /// **`BU-15`, and DEBUG only.** How many times the radio was keyed during
-    /// the current or most recent hold — see
-    /// ``RadioSession/keyDownsInCurrentHold``.
+    /// **`BU-15`, DEBUG only.** How many times the radio was keyed during the
+    /// current or most recent hold — see ``RadioSession/keyDownsInCurrentHold``.
     ///
-    /// It reaches the screen as this element's accessibility *value*, which
-    /// nothing else uses, so the label VoiceOver reads — and which SF-4's own
-    /// tests pin — is untouched. It is the only way an XCUITest can count the
-    /// key-downs inside a hold: the test cannot look at the app during its own
-    /// gesture, so the count has to be readable after the release.
+    /// Reaches the screen as this element's accessibility *value*, leaving the
+    /// label VoiceOver reads (which SF-4's tests pin) untouched. This is the
+    /// only way an XCUITest can count key-downs inside a hold, since the test
+    /// cannot look at the app mid-gesture and the count must be readable after
+    /// release.
     ///
-    /// Defaulted, because every caller but ``RootView`` is a preview or a test
-    /// of the strip's layout rather than of the session.
+    /// Defaulted: every caller but ``RootView`` is a preview or a layout test.
     var keyDownsInHold: Int = 0
 
     /// The rest of `BU-15`'s trace, DEBUG only: where the route changes landed
@@ -112,32 +94,29 @@ struct TransmitBanner: View {
 
     /// **PT-4.** Whether the key is held by something that will not release it
     /// when the operator lets go. An unknown source is not treated as latched:
-    /// only ``PTTSource/remoteCommand`` actually latches, and claiming it of an
-    /// unknown input would make the word meaningless where it matters.
+    /// only ``PTTSource/remoteCommand`` actually latches.
     private var isLatched: Bool {
         isTransmitting && source?.isMomentary == false
     }
 
-    /// The right-hand word. "LATCHED" replaces "ON AIR" rather than joining it,
-    /// because it is the more urgent of the two and the strip's colour has
-    /// already said the radio is on air.
+    /// The right-hand word. "LATCHED" replaces "ON AIR" rather than joining it:
+    /// it is the more urgent of the two, and the colour has already said the
+    /// radio is on air.
     ///
-    /// Not private, so PT-4's one drawn fact can be tested as a value: reading
-    /// it out of a rendered view would test SwiftUI rather than the rule.
+    /// Not private, so PT-4's one drawn fact can be tested as a value rather
+    /// than read out of a rendered view.
     var trailingWord: String {
         guard isTransmitting else { return "STANDBY" }
         return isLatched ? "LATCHED" : "ON AIR"
     }
 
-    /// What VoiceOver reads, and what the tests assert on. Not private: SF-4 is
-    /// "the operator can tell whether they are on air", and for an operator
-    /// using VoiceOver this string *is* the requirement, so it is worth a test
-    /// of its own rather than being inspected through a rendered view.
+    /// What VoiceOver reads, and what the tests assert on. Not private: for an
+    /// operator using VoiceOver, this string *is* SF-4, so it gets a test of
+    /// its own rather than being inspected through a rendered view.
     ///
-    /// **Longer than the strip, deliberately.** A glance at red is instant and a
-    /// screen reader has no colour, so what the eye gets from the background,
-    /// VoiceOver gets from these words — including PT-4's full sentence, which
-    /// is worth the extra second when spoken and was clutter when drawn.
+    /// Longer than the strip, deliberately: a screen reader has no colour, so
+    /// these words carry what the eye gets from red — including PT-4's full
+    /// sentence, worth the extra second spoken though it was clutter drawn.
     var accessibilityDescription: String {
         guard isTransmitting else { return "Not transmitting. Standby." }
         guard let source else { return "Transmitting. On air." }

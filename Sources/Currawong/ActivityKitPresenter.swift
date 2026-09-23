@@ -14,27 +14,20 @@ import Foundation
 /// ``TransmitActivityControllerTests`` and by the six end-path tests in
 /// ``RadioSessionActivityTests``.
 ///
-/// ## Why the deployment floor is 16.2 and not 16.1
+/// ## Why the deployment floor is 16.2, not 16.1
 ///
-/// ActivityKit itself arrived in iOS 16.1, and the maintainer's decision of
-/// 2026-08-16 was to raise the app's floor to 16.1 rather than scatter
-/// availability guards. The plan asked for the floor to be whatever the
-/// implementation actually calls, and it calls three things that landed in
-/// **16.2**:
+/// ActivityKit itself arrived in 16.1, but the floor is 16.2 because this file
+/// calls three things that landed there, all about the activity not lying:
 ///
-/// * `ActivityContent`, which is the only way to set a **stale date** — and a
-///   stale date is the app-termination half of the stale-state hazard. A
-///   Live Activity outlives its process, so an activity with no stale date on a
-///   Currawong that was killed mid-over is a red TRANSMITTING banner with
-///   nothing behind it, indefinitely.
+/// * `ActivityContent`, the only way to set a **stale date**. A Live Activity
+///   outlives its process, so with no stale date a Currawong killed mid-over
+///   leaves a red TRANSMITTING banner with nothing behind it, indefinitely.
 /// * `update(_:)` taking that content, so the stale date moves with each
 ///   key-down instead of being fixed at the start of the over.
 /// * `end(_:dismissalPolicy:)`, so an ended activity is **dismissed** rather
 ///   than left on the lock screen showing its final state.
 ///
-/// All three are about the activity not lying. The 16.1-only API set would meet
-/// the letter of SF-4 and lose its point, so the floor is 16.2 — one patch
-/// release further, on an OS four years old.
+/// The 16.1-only API set would meet the letter of SF-4 and lose its point.
 @MainActor
 final class ActivityKitPresenter: TransmitActivityPresenting {
 
