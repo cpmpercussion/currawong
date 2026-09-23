@@ -2,50 +2,36 @@
 
 import SwiftUI
 
-/// **APP-12.** The app-level settings screen: who you are, how long you may
-/// transmit, the two accounts that are yours rather than a channel's, and the
-/// PTT accessory.
+/// The app-wide settings screen (APP-12): identity, the SF-1 watchdog, the
+/// operator's own accounts and proxy, and the PTT accessory. Nothing here is
+/// per channel. The connect form edits the same callsign.
 ///
-/// Everything here is app-wide, not per channel: the callsign and the two
-/// credentials (EchoLink password, Web Transceiver token) are facts about the
-/// operator, not the destination; the watchdog (SF-1, ``TransmitTimeout``) must
-/// answer "how long will it let me talk?" the same regardless of which channel
-/// is selected; the EchoLink proxy (APP-13) is the operator's station
-/// infrastructure, set up once, not a per-destination field. The connect form
-/// keeps the callsign field too, so an operator filling in their first channel
-/// does not have to go looking for it — both edit the same app-wide value.
-///
-/// OQ-1b: "EchoLink" is nominative use only. The pane says what the account is
-/// for and no more — no logo, no styling, nothing implying the app is an
-/// EchoLink product.
+/// "EchoLink" is nominative use only (OQ-1b): no logo, nothing implying the
+/// app is an EchoLink product.
 struct SettingsView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var accessory: BLEPTTController
     @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var portalLogin: PortalLoginController
 
-    /// The token, as typed or pasted. Committed to the Keychain on `onSubmit`
-    /// and when the field loses focus rather than on every keystroke, so a
-    /// half-pasted token is never what gets stored.
+    /// The token, as typed or pasted. Committed on submit or loss of focus, so
+    /// a half-pasted token is never stored.
     @State private var tokenText = ""
 
     /// Likewise the EchoLink password.
     @State private var echoLinkPasswordText = ""
 
-    /// The private proxy, as typed. Committed together, on the button:
-    /// ``RadioSession/setEchoLinkProxy(_:password:)`` takes both, since a host
-    /// stored without its password is a proxy that refuses every session.
+    /// The private proxy, as typed. Host and password are committed together
+    /// by ``RadioSession/setEchoLinkProxy(_:password:)``.
     @State private var proxyHostText = ""
     @State private var proxyPortText = ""
     @State private var proxyPasswordText = ""
 
-    /// What went wrong saving the proxy, if anything. Shown beside the fields
-    /// rather than as an alert: it is a complaint about something on screen.
+    /// What went wrong saving the proxy, shown beside the fields.
     @State private var proxyComplaint: String?
 
-    /// The watchdog timeout as typed. Committed on every keystroke that parses,
-    /// unlike the two credentials above: a safety limit that only takes effect
-    /// if you remember to press something is not one.
+    /// The watchdog timeout as typed. Committed on every keystroke that parses:
+    /// a safety limit must not wait for a button press.
     @State private var timeoutText = ""
 
     var body: some View {
@@ -119,10 +105,8 @@ struct SettingsView: View {
 
     // MARK: - Safety
 
-    /// **SF-1.** The transmit watchdog. App-wide, like the callsign: the one
-    /// control here that exists to stop something bad rather than make
-    /// something work, so an operator must be able to answer "how long will it
-    /// let me talk?" without opening a particular channel. See ``TransmitTimeout``.
+    /// **SF-1.** The transmit watchdog, app-wide so "how long will it let me
+    /// talk?" never depends on the channel. See ``TransmitTimeout``.
     private var safetySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Safety")
@@ -147,8 +131,7 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // The number is read when a link is built, so this is the honest
-            // description of a change made mid-call rather than a hedge.
+            // The number is read when a link is built.
             Text("A change applies to the next connection, not the one that is up.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -158,12 +141,8 @@ struct SettingsView: View {
 
     // MARK: - AllStarLink portal
 
-    /// Pane 1: portal login → token.
-    ///
-    /// The paste field is present whether or not logging in is available, and is
-    /// not a fallback: it is what still works if allstarlink.org replaces its
-    /// login service (OQ-10). The button is what may be missing; see
-    /// ``PortalLoginController/isAvailable``.
+    /// Portal login → token. The paste field is always present: it still works
+    /// if allstarlink.org replaces its login service (OQ-10).
     private var portalSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("AllStarLink portal")
@@ -181,9 +160,7 @@ struct SettingsView: View {
             if portalLogin.isAvailable {
                 loginControls
             } else {
-                // Not the shipping wiring — `CompositionRoot` supplies a live
-                // login. Shown by a preview, or a build with the login
-                // deliberately withheld.
+                // Only in previews or builds without a login.
                 Label(
                     "Logging in is not available in this build. Paste a token below instead — "
                     + "`hamvoip-cli wt-token` prints one.",
@@ -194,9 +171,8 @@ struct SettingsView: View {
             }
 
             LabelledField(label: "Token", systemImage: "key") {
-                // Not a SecureField: mistakes with 12 characters of hex are
-                // visible ones, and hiding them would make a truncated paste
-                // undiagnosable. Stored in the Keychain either way.
+                // Not a SecureField, so a truncated paste is visible. Stored in
+                // the Keychain either way.
                 TextField("1b59df18107e", text: $tokenText)
                     .textFieldStyle(.roundedBorder)
                     #if os(iOS)
@@ -226,8 +202,7 @@ struct SettingsView: View {
         }
     }
 
-    /// The callsign is not repeated here: it is the field at the top of this same
-    /// screen, and a second copy would be two controls for one value on one page.
+    /// The callsign is not repeated here; it is at the top of the screen.
     @ViewBuilder
     private var loginControls: some View {
         LabelledField(label: "Portal password", systemImage: "lock") {
@@ -343,12 +318,8 @@ struct SettingsView: View {
 
     // MARK: - EchoLink proxy (APP-13)
 
-    /// **APP-13.** The operator's own proxy, if they run one.
-    ///
-    /// Its own section, not part of the account above: one is who you are to
-    /// echolink.org, the other is which machine your packets leave through, and
-    /// an operator with an account and no proxy is the ordinary case. Empty is
-    /// a working configuration, and the copy says so — nothing here is required.
+    /// The operator's own proxy, if they run one (APP-13). Optional; empty is
+    /// the ordinary case.
     private var proxySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Your own proxy")
@@ -432,16 +403,14 @@ struct SettingsView: View {
         }
     }
 
-    /// Whether the fields differ from what is stored, which is what makes the
-    /// Save button live. The password counts: changing only that is a real edit.
+    /// Whether the fields, password included, differ from what is stored.
     private var proxyHasChanges: Bool {
         proxyHostText != session.echoLinkProxy.host
             || proxyPortText != String(session.echoLinkProxy.port)
             || proxyPasswordText != session.echoLinkProxyPassword
     }
 
-    /// Commits the three fields, and re-reads them from the session afterwards so
-    /// the screen shows what was actually stored, not what was typed.
+    /// Commits the fields, then re-reads what was actually stored.
     private func saveProxy() {
         let port =
             UInt16(proxyPortText.trimmingCharacters(in: .whitespaces))
@@ -456,8 +425,7 @@ struct SettingsView: View {
 
     // MARK: - PTT accessory
 
-    /// Pane 3. The existing screen, embedded rather than reimplemented — it is a
-    /// learn-mode state machine and a second copy of it would drift.
+    /// The accessory screen, embedded rather than reimplemented.
     private var accessorySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("PTT accessories")

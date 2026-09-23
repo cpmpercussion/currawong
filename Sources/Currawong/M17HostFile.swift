@@ -4,83 +4,45 @@ import Foundation
 
 /// Reads the M17 Project's published reflector host file.
 ///
-/// <https://m17-project.github.io/hostfiles/M17Hosts.json> — lets clients offer
-/// a reflector list instead of asking an operator to remember host names.
+/// Its `reflectors` array mixes two shapes, told apart by `modules` rather
+/// than the designator prefix: native M17 reflectors list module letters and
+/// a `port`; URF multiprotocol reflectors list module objects with a `mode`
+/// and no port. Only URF modules in `M17` or `All` (transcoding) mode are
+/// offered; any other mode would fail or link into silence.
 ///
-/// ## Two shapes in one array
-///
-/// The `reflectors` array holds two kinds of entry, told apart by the shape of
-/// `modules` rather than a type field:
-///
-/// - **Native M17 reflectors** (`M17-…`) carry `modules` as an array of letter
-///   strings, plus `port` and `encrypted`.
-/// - **URF reflectors** (`URF…`) are multiprotocol bridges. Their `modules` is
-///   an array of objects with a per-module `mode`, and they carry no `port` —
-///   the M17 port is the default 17000.
-///
-/// Decoding tries the string form and falls back to the object form, rather
-/// than trusting the designator prefix, which is a naming convention and not a
-/// guarantee.
-///
-/// A URF module has a `mode`: `M17`, `All` (transcoding — the far end may be on
-/// another mode, but the reflector converts), or something we cannot speak,
-/// such as `DMR`. Only `M17` and `All` are offered; linking a DMR module from
-/// an M17 client would fail, or worse, succeed into silence.
-///
-/// Entries carry an `encrypted` array of module letters, not decoded here: on
-/// most reflectors it lists all twenty-six letters, which reads as "encryption
-/// is permitted" rather than "this traffic is encrypted", so surfacing it would
-/// put a scary word on nearly every row and tell the operator nothing true. The
-/// library reports `playability == .encrypted` for a stream it actually cannot
-/// decode instead. FR-2.5 forbids an encryption UI regardless.
+/// The `encrypted` field is not decoded: it usually lists every letter,
+/// meaning "permitted", not "encrypted". FR-2.5 forbids an encryption UI.
 enum M17HostFile {
     /// Where the published list lives.
     static let url = URL(string: "https://m17-project.github.io/hostfiles/M17Hosts.json")!
 
-    /// The port a URF entry's M17 modules are on, since those entries carry no
-    /// port of their own. 17000 is the M17 default and what every native entry
-    /// in the list but eight uses.
+    /// The port for entries that carry none (URF): the M17 default.
     static let defaultPort: UInt16 = 17000
 
     /// Module modes on a multiprotocol reflector that an M17 client can use.
-    /// `All` is a transcoding module — the far end may be on another mode, but
-    /// the reflector will convert.
     private static let usableModes: Set<String> = ["M17", "ALL"]
 
-    /// The URL schemes a dashboard link may use.
-    ///
-    /// A filter, not a formality: this field is fetched from a third party and
-    /// becomes something the operator can tap, and handing an arbitrary string
-    /// to the system opener lets a `mailto:` or another app's custom scheme go
-    /// through as readily as a web page. So a dashboard is a web page or
-    /// nothing. `http` stays alongside `https` because roughly half the
-    /// published dashboards are plain HTTP; App Transport Security does not
-    /// object since the URL goes to the browser, not a connection this app makes.
+    /// The URL schemes a dashboard link may use. The link comes from a third
+    /// party and becomes tappable, so anything but a web page is refused.
+    /// `http` is allowed because many dashboards use it, and the browser, not
+    /// this app, opens it.
     private static let dashboardSchemes: Set<String> = ["http", "https"]
 
     /// A tappable dashboard link from the listing's `url` field, if it is one.
-    ///
-    /// Internal rather than private so the rule is testable on its own — what
-    /// gets rejected here matters more than what gets through.
+    /// Internal so the rule is testable.
     static func dashboard(from listed: String?) -> URL? {
         guard let text = listed?.nonEmpty,
             let url = URL(string: text),
             let scheme = url.scheme?.lowercased(),
             dashboardSchemes.contains(scheme),
-            // A scheme and no host is `http:` followed by nothing useful. It
-            // would open the browser onto an error page rather than fail here,
-            // which is a worse way to find out.
+            // A scheme with no host would open an error page.
             url.host?.isEmpty == false
         else { return nil }
         return url
     }
 
-    /// Parses the host file.
-    ///
-    /// Entries that survive parsing but have nowhere to connect to — no host
-    /// name and no address — are kept rather than dropped, and the row says so.
-    /// Dropping them silently would leave an operator who knows a reflector
-    /// exists searching a list that does not admit it.
+    /// Parses the host file. Entries with no host or address are kept, and
+    /// the row says so, rather than silently missing from the list.
     ///
     /// - Throws: ``ReflectorDirectoryError/malformed(detail:)`` if the file is
     ///   not JSON in the documented shape.
@@ -126,8 +88,7 @@ enum M17HostFile {
             return M17Reflector(
                 designator: designator,
                 name: name,
-                // A name first: see `M17Reflector.host`. Both may be absent —
-                // one entry in the published list currently has neither.
+                // A name first (see `M17Reflector.host`); both may be absent.
                 host: dns?.nonEmpty ?? ipv4?.nonEmpty ?? "",
                 port: port ?? M17HostFile.defaultPort,
                 sponsor: sponsor?.nonEmpty,
@@ -137,9 +98,7 @@ enum M17HostFile {
                 isMultiprotocol: isMultiprotocol)
         }
 
-        /// A URF entry is the one that describes its modules as objects. The
-        /// `URF` designator prefix agrees with this today, but the shape is the
-        /// thing the decoder actually depends on, so it is the thing this asks.
+        /// A URF entry is one that describes its modules as objects.
         private var isMultiprotocol: Bool {
             if case .detailed = modules { return true }
             return false
@@ -155,8 +114,7 @@ enum M17HostFile {
                     guard let mode = module.mode,
                         M17HostFile.usableModes.contains(mode.uppercased())
                     else { return nil }
-                    // "All modes" rather than the file's bare "All", which on a
-                    // row by itself reads as a module named All.
+                    // A bare "All" reads as a module's name.
                     let note = mode.uppercased() == "ALL" ? "All modes" : mode
                     return ReflectorModule(letter: module.module, note: note)
                 }
@@ -190,23 +148,16 @@ enum M17HostFile {
 }
 
 extension String {
-    /// The string, or `nil` when it is empty or only whitespace.
-    ///
-    /// The host file uses `null` and `""` interchangeably for "not given", and
-    /// a row reading `M17-XYZ ·  · 1.2.3.4` is the result of believing the
-    /// second one.
+    /// The trimmed string, or `nil` when empty: the host file uses `null` and
+    /// `""` interchangeably for "not given".
     fileprivate var nonEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 }
 
-/// Fetches the reflector list over HTTPS.
-///
-/// The only thing in the app that downloads it. Kept separate from parsing so
-/// that every rule about the file's shape is testable against bytes, with no
-/// network in the test (AU-5 in spirit — that rule is about the radio protocols,
-/// but a unit test that needs the internet is just as flaky).
+/// Fetches the reflector list over HTTPS. Separate from parsing so the
+/// parsing rules are testable without a network.
 struct HostFileReflectorDirectory: ReflectorDirectory {
     private let url: URL
     private let load: @Sendable (URL) async throws -> (Data, URLResponse)
@@ -214,8 +165,7 @@ struct HostFileReflectorDirectory: ReflectorDirectory {
     init(
         url: URL = M17HostFile.url,
         load: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
-            // Not `.shared`: an operator pressing Refresh wants the current
-            // file, not a cached one from last week.
+            // Ephemeral, so Refresh never gets a cached file.
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForRequest = 15
             configuration.waitsForConnectivity = false
