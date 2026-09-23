@@ -2,21 +2,16 @@
 
 import Foundation
 
-/// What AllStarLink's directory knows about a node number.
-///
-/// The app's own vocabulary, and deliberately a fraction of what the API
-/// returns — it also carries server affiliation, registration timestamps,
-/// key-up statistics and a linked-node tree, none of which help an operator
-/// decide whether to call.
+/// What AllStarLink's directory knows about a node number: the fraction of
+/// the API's answer that helps an operator decide whether to call.
 struct NodeRegistration: Equatable, Sendable {
     /// The node number that was looked up.
     var node: String
 
-    /// Where it registered from. This is the field the whole lookup exists to
-    /// obtain.
+    /// Where it registered from: what the lookup is for.
     var host: String
 
-    /// The port it registered on — 4569 almost always, and not worth assuming.
+    /// The port it registered on.
     var port: UInt16
 
     /// The callsign the node is licensed under.
@@ -28,14 +23,9 @@ struct NodeRegistration: Equatable, Sendable {
     /// Whether the directory calls the node active.
     var isActive: Bool
 
-    /// The node's page on AllStarLink's stats site, the counterpart to an M17
-    /// reflector's dashboard.
-    ///
-    /// `https://stats.allstarlink.org/nodeinfo.cgi?node=<node>` — carries what
-    /// this lookup deliberately does not: current connections, last key-up,
-    /// uptime. Built from the node number, not returned by the API, since the
-    /// URL is a fixed shape; `nil` unless the number is digits, so free text the
-    /// operator typed can never be spliced into a URL.
+    /// The node's page on AllStarLink's stats site, built from the node
+    /// number. `nil` unless the number is digits, so typed text never reaches
+    /// a URL.
     var dashboard: URL? {
         let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.allSatisfy(\.isASCII), trimmed.allSatisfy(\.isNumber)
@@ -43,14 +33,9 @@ struct NodeRegistration: Equatable, Sendable {
         return URL(string: "https://stats.allstarlink.org/nodeinfo.cgi?node=\(trimmed)")
     }
 
-    /// `settings` with what the directory answered filled in.
-    ///
-    /// Here rather than in the connect form's closure so the rule is testable.
-    /// Host and port always win — pressing the lookup again is how an operator
-    /// refreshes a node that re-registered elsewhere. The channel name is filled
-    /// in from the callsign only when the operator has not named the channel
-    /// themselves: a bare node number says nothing about which node it is, but
-    /// a name the operator typed is theirs, and a refresh must not overwrite it.
+    /// `settings` with the answer filled in. Host and port always overwrite,
+    /// so a lookup refreshes a moved node; the callsign fills the name only if
+    /// the operator has not named the channel.
     func applied(to settings: NodeSettings) -> NodeSettings {
         var settings = settings
         settings.host = host
@@ -66,10 +51,6 @@ struct NodeRegistration: Equatable, Sendable {
     }
 
     /// "WB6NIL · ASL Public Hub · 18.224.69.177", skipping whatever is missing.
-    ///
-    /// One line rather than a row of fields: the operator is confirming that
-    /// the number they typed is the node they meant, and the callsign and the
-    /// description are what tell them.
     var summary: String {
         var parts: [String] = []
         if let callsign, !callsign.isEmpty { parts.append(callsign) }
@@ -79,14 +60,9 @@ struct NodeRegistration: Equatable, Sendable {
     }
 }
 
-/// Turns an AllStarLink node number into an address.
-///
-/// A lookup, not a browser like EchoLink's and M17's: an operator already knows
-/// the node number they want, because it is what gets quoted on the air, and
-/// what they do not know is the address behind it. So this answers one question
-/// about one node rather than offering a register to scroll.
-///
-/// A protocol so the button can be tested without the network.
+/// Turns an AllStarLink node number into an address. A lookup rather than a
+/// browser, because operators already know the number. A protocol so tests
+/// need no network.
 protocol NodeLookup: Sendable {
     func registration(forNode node: String) async throws -> NodeRegistration
 }
@@ -99,8 +75,7 @@ enum NodeLookupError: Error, Equatable, CustomStringConvertible {
     /// The directory has no such node.
     case notListed(node: String)
 
-    /// The node exists but has no address on file — private nodes and nodes
-    /// that have never registered both look like this.
+    /// Listed, but with no address on file (private or never registered).
     case notRegistered(node: String)
 
     case unreachable(detail: String)
@@ -131,20 +106,13 @@ enum NodeLookupError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Looks a node up through AllStarLink's public stats API.
-///
-/// `https://stats.allstarlink.org/api/stats/<node>` — unauthenticated, one node
-/// per request, `404` with an empty array for a number it does not know.
-///
-/// Registration data, not a live probe: `ipaddr` is where the node last
-/// registered, not a promise anybody is home. A stale answer produces a call
-/// that times out — no worse than dialling a stale address by hand.
+/// Looks a node up through AllStarLink's public stats API: unauthenticated,
+/// one node per request, `404` with `[]` for an unknown number. The address is
+/// where the node last registered, not proof it is up.
 struct AllStarLinkNodeLookup: NodeLookup {
     static let endpoint = URL(string: "https://stats.allstarlink.org/api/stats/")!
 
-    /// The registered IAX2 port, if the directory does not say. Duplicated from
-    /// `NodeSettings.defaultPort` rather than imported: this layer does not
-    /// import `IAX2Kit`.
+    /// The registered IAX2 port, if the directory does not say.
     static let defaultPort: UInt16 = 4569
 
     private let endpoint: URL
@@ -167,9 +135,7 @@ struct AllStarLinkNodeLookup: NodeLookup {
         let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw NodeLookupError.missingNode }
 
-        // Percent-encoded rather than interpolated: the field is free text
-        // until it is validated, and a stray slash or space would otherwise
-        // build a URL pointing somewhere else entirely.
+        // Percent-encoded: a stray slash in free text would change the URL.
         guard
             let encoded = trimmed.addingPercentEncoding(
                 withAllowedCharacters: .alphanumerics),
@@ -187,8 +153,7 @@ struct AllStarLinkNodeLookup: NodeLookup {
         }
 
         if let http = response as? HTTPURLResponse {
-            // 404 with `[]` is how the directory says "no such node", which is
-            // an ordinary answer rather than a fault.
+            // 404 is an ordinary "no such node".
             if http.statusCode == 404 { throw NodeLookupError.notListed(node: trimmed) }
             guard (200..<300).contains(http.statusCode) else {
                 throw NodeLookupError.unreachable(detail: "the server answered \(http.statusCode)")
@@ -198,13 +163,10 @@ struct AllStarLinkNodeLookup: NodeLookup {
         return try Self.parse(data, node: trimmed)
     }
 
-    /// Reads the `node` object out of a stats response.
-    ///
-    /// Separate from the fetch so every rule about the payload is testable
-    /// against bytes, with no network in the test.
+    /// Reads the `node` object out of a stats response. Separate from the
+    /// fetch so it is testable against bytes.
     static func parse(_ data: Data, node: String) throws -> NodeRegistration {
-        // An empty array is the 404 body, and also what a 200 with no node
-        // looks like if the API ever changes its mind about the status code.
+        // `[]` is the 404 body; handled here too in case a 200 ever carries it.
         if let empty = try? JSONDecoder().decode([String].self, from: data), empty.isEmpty {
             throw NodeLookupError.notListed(node: node)
         }
@@ -226,9 +188,7 @@ struct AllStarLinkNodeLookup: NodeLookup {
             port: entry.port ?? defaultPort,
             callsign: entry.callsign?.nonBlank,
             description: entry.node_frequency?.nonBlank,
-            // Anything other than an explicit "Active" is treated as not
-            // active, rather than guessing at a vocabulary we have only seen
-            // one value of.
+            // Only an explicit "Active" counts.
             isActive: entry.Status?.caseInsensitiveCompare("Active") == .orderedSame)
     }
 
@@ -236,9 +196,7 @@ struct AllStarLinkNodeLookup: NodeLookup {
         var node: NodeEntry
     }
 
-    /// Named as the API names them, including the capital `S` and the
-    /// underscore, so the mapping between this and a response an operator might
-    /// paste into a bug report is obvious.
+    /// Named exactly as the API names them.
     private struct NodeEntry: Decodable {
         var Status: String?
         var ipaddr: String?
@@ -255,11 +213,8 @@ extension String {
     }
 }
 
-/// The state behind the "look it up" button.
-///
-/// Kept out of the view for the reason ``ProxyPicker`` is: it is a network
-/// round trip, it can fail in ways the operator needs told about, and a second
-/// press while one is in flight must replace it rather than race it.
+/// The state behind the "look it up" button. A second press replaces a
+/// lookup in flight rather than racing it.
 @MainActor
 final class NodeLocator: ObservableObject {
     @Published private(set) var isSearching = false
@@ -273,18 +228,15 @@ final class NodeLocator: ObservableObject {
     private let lookup: NodeLookup
     private var task: Task<Void, Never>?
 
-    /// Bumped by every ``find(node:then:)``, so a superseded lookup can tell
-    /// that it is one. Same guard as `ProxyPicker` and the two browsers.
+    /// Bumped by every ``find(node:then:)``, so a superseded lookup can tell.
     private var generation = 0
 
     init(lookup: NodeLookup) {
         self.lookup = lookup
     }
 
-    /// Looks `node` up and hands the answer to `apply`.
-    ///
-    /// Passed out rather than written to settings here: this type does not own
-    /// the connect form's fields.
+    /// Looks `node` up and hands the answer to `apply`, which owns the form's
+    /// fields.
     func find(node: String, then apply: @escaping @MainActor (NodeRegistration) -> Void) {
         task?.cancel()
 
@@ -318,9 +270,7 @@ final class NodeLocator: ObservableObject {
         isSearching = false
     }
 
-    /// Forgets the last answer. Called when the node number changes, so a
-    /// summary describing a node the operator has since typed over does not
-    /// sit there looking authoritative.
+    /// Forgets the last answer, when the node number changes.
     func clear() {
         cancel()
         found = nil

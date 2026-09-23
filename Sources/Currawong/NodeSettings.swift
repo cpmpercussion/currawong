@@ -6,29 +6,16 @@ import Foundation
 /// guest presenting a portal token.
 ///
 /// Not a fourth ``RadioMode``: Web Transceiver is the same protocol to the same
-/// nodes over the same port, differing only in which credentials the call
-/// carries. A fourth mode would duplicate the whole AllStarLink form and store
-/// for one substitution, and would imply WT reaches somewhere else. The two are
-/// not interchangeable from the operator's side, so it is a choice they make:
+/// nodes, differing only in which credentials the call carries.
 ///
-/// | | Node secret | Web Transceiver |
-/// |---|---|---|
-/// | You need | an entry in that node's `iax.conf` | an allstarlink.org portal account |
-/// | Set up by | the node's owner, per node, for you | nobody — the owner enables WT once, for everyone |
-/// | You supply | a username and a secret | a token, which stands for your callsign |
-///
-/// The raw values land in `UserDefaults`, and `.nodeSecret`'s is deliberately
-/// not `"nodeSecret"`: a test asserts that a channel's persisted encoding
-/// contains no occurrence of the word "secret", and a raw value carrying it
-/// would need an exception in that check.
+/// The raw values are persisted. `.nodeSecret`'s is not `"nodeSecret"` because
+/// a test asserts a channel's encoding never contains the word "secret".
 enum AllStarLinkAccess: String, Codable, Sendable, CaseIterable, Identifiable {
-    /// A username and secret the node's owner configured for us. The route the
-    /// app has always taken.
+    /// A username and secret the node's owner configured for us.
     case nodeSecret = "nodeLogin"
 
-    /// A Web Transceiver token from an allstarlink.org portal account (IAX-12,
-    /// IAX-13). Reaches any node whose owner has enabled WT, with no per-node
-    /// arrangement at all.
+    /// A token from an allstarlink.org portal account (IAX-12, IAX-13). Reaches
+    /// any node whose owner has enabled WT, with no per-node arrangement.
     case webTransceiver
 
     var id: String { rawValue }
@@ -41,51 +28,35 @@ enum AllStarLinkAccess: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 }
 
-/// Everything the app needs to reach a node, except the secret.
+/// A channel (APP-4): everything the app needs to reach one destination,
+/// except the secret.
 ///
-/// The split is load-bearing: this value is `Codable` and written to
-/// `UserDefaults`, and the secret is not part of it, so there is no way to
-/// accidentally persist a password by persisting the settings — it lives in
-/// the Keychain, keyed by ``secretAccount``.
+/// Written to `UserDefaults`; the secret is deliberately not part of it, so
+/// persisting settings can never persist a password. The secret lives in the
+/// Keychain under ``secretAccount(for:)``.
 ///
-/// Names no library type: it carries a ``RadioMode`` and the union of all
-/// three modes' fields, and the composition root turns one of these plus a
-/// secret into a concrete destination. One type plus a mode, rather than one
-/// type per mode, keeps the cost of a differing field (``node`` versus
-/// ``module``) to a single `if` in ``validated()`` and one form; the price is
-/// that a value always has one field that means nothing for its mode.
-///
-/// **This is a channel** (APP-4): one saved place the operator can go back to,
-/// held in a list by ``ChannelSet``, named by ``name`` and identified by
-/// ``id``. It was a single node before APP-4, which is why the type is still
-/// called `NodeSettings` and why ``init(from:)`` copes with a blob that has
-/// neither of those two fields.
+/// Names no library type. It carries a ``RadioMode`` and the union of all three
+/// modes' fields, so some field always means nothing for the current mode; the
+/// composition root turns it into a concrete destination. Held in a list by
+/// ``ChannelSet``.
 struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
-    /// Stable identity, so a channel survives being renamed or re-pointed.
-    ///
-    /// Generated when a channel is created, never derived from its contents. A
-    /// blob with no id is given a fresh one at decode. Not what the Keychain
-    /// secret is filed under; see ``secretAccount``.
+    /// Stable identity, so a channel survives being renamed or re-pointed. Not
+    /// what the Keychain secret is filed under; see ``secretAccount(for:)``.
     var id: UUID
 
     /// What the operator calls this channel. May be empty, in which case the UI
     /// falls back to ``displayName``.
     var name: String
 
-    /// Which network this node is reached over, and therefore which of the
-    /// fields below are live.
+    /// Which network, and therefore which of the fields below are live.
     var mode: RadioMode
 
-    /// Hostname or literal address of the node.
-    ///
-    /// Empty and unused in EchoLink (APP-13): the proxy is the operator's
-    /// station infrastructure, not a property of one destination, and lives in
-    /// ``EchoLinkProxySettings`` instead. An EchoLink node is named by ``peer``
-    /// and ``node`` alone.
+    /// Hostname or literal address of the node. Empty in EchoLink, where the
+    /// proxy is app-wide (``EchoLinkProxySettings``, APP-13) and the node is
+    /// named by ``peer`` and ``node``.
     var host: String
 
-    /// UDP port. 4569 is the registered IAX2 port and the default everywhere.
-    /// Unused in EchoLink, with ``host``.
+    /// UDP port. Unused in EchoLink, with ``host``.
     var port: UInt16
 
     /// The number being called — an AllStar node number such as `"55553"`.
@@ -96,51 +67,30 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
     /// in AllStarLink.
     var module: String
 
-    /// **EchoLink.** The far node's IPv4 address, as a dotted quad.
-    ///
-    /// The node at the far end of the proxy tunnel — the proxy itself is
-    /// ``EchoLinkProxySettings``, not part of a channel. The library takes this
-    /// as four literal octets and resolves nothing, so a name will not do; the
-    /// station browser fills it in from the directory listing.
+    /// **EchoLink.** The far node's IPv4 address, as a dotted quad. The
+    /// library takes four literal octets and resolves nothing, so a name will
+    /// not do; the station browser fills it in.
     var peer: String
 
-    /// **EchoLink.** The directory server's IPv4 address, or a host name.
-    ///
-    /// The library takes only a dotted quad and resolves nothing, but the app
-    /// resolves a name before handing it over (see ``HostResolver``) — typing an
-    /// IP address from memory is not something to ask of somebody with a phone.
-    ///
-    /// The directory login registers the station as available; skip it and
-    /// every step still reports success while no node ever answers, so this
-    /// being empty matters more than an empty optional usually does.
+    /// **EchoLink.** The directory server's IPv4 address, or a host name the
+    /// app resolves first (``HostResolver``). Empty skips the directory login,
+    /// after which every step still reports success but no node ever answers.
     var directoryServer: String
 
-    /// The account the node authenticates us as. May be empty.
-    ///
-    /// Unused when ``allStarAccess`` is `.webTransceiver`: a WT call
-    /// authenticates as a shared guest account the app fills in, and this field
-    /// is hidden in that case. See `CompositionRoot`, where the guest
-    /// credentials are named.
+    /// The account the node authenticates us as. May be empty. Unused for Web
+    /// Transceiver, which uses a guest account named in `CompositionRoot`.
     var username: String
 
-    /// **AllStarLink.** Whether this channel is reached with a node secret or as
-    /// a Web Transceiver guest. Ignored in the other two modes.
-    ///
-    /// Part of the channel, not an app-wide setting: it is a fact about the
-    /// node, since one may give us an `iax.conf` entry while the next has only
-    /// WT switched on.
+    /// **AllStarLink.** Node secret or Web Transceiver guest. Per channel,
+    /// because it is a fact about the node. Ignored in the other modes.
     var allStarAccess: AllStarLinkAccess
 
-    /// The registered IAX2 port. Duplicated rather than imported from
-    /// `IAX2Kit`: this type does not know which protocol is underneath it, and
-    /// `IAX2Destination`'s own default is the authority on the wire.
+    /// The registered IAX2 port, duplicated so this type need not import
+    /// `IAX2Kit`.
     static let defaultPort: UInt16 = 4569
 
-    /// The directory server a new EchoLink channel starts with.
-    ///
-    /// `servers`, not a regional name, since it round-robins the whole pool and
-    /// they all serve the same directory. A name, not an address: the addresses
-    /// behind it are cloud-hosted with no promise of stability.
+    /// The directory server a new EchoLink channel starts with: the pool's
+    /// round-robin name, since the addresses behind it are not stable.
     static let defaultDirectoryServer = "servers.echolink.org"
 
     init(
@@ -169,40 +119,26 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.username = username
     }
 
-    /// Whether this channel is a Web Transceiver guest call.
-    ///
-    /// The mode is checked as well as the access, so the field cannot mean
-    /// anything in a mode that has no such route: an M17 channel carrying a
-    /// stale `.webTransceiver` from having once been an AllStar one is still
-    /// just an M17 channel.
+    /// Whether this channel is a Web Transceiver guest call. Checks the mode
+    /// too, so a stale `.webTransceiver` on a non-AllStar channel means nothing.
     var usesWebTransceiver: Bool {
         mode == .allStarLink && allStarAccess == .webTransceiver
     }
 
-    /// The Keychain account the Web Transceiver token is filed under.
-    ///
-    /// Per callsign, not per channel: the portal issues the token to an
-    /// operator, and it resolves to their callsign on any WT-enabled node, so
-    /// one token serves every WT channel. Separate from ``secretAccount(for:)``
-    /// because a token is not a node secret — sharing the slot would file a
-    /// portal credential under a node's name.
-    ///
-    /// Filled in by APP-12's portal login; typed or pasted until then.
+    /// The Keychain account the Web Transceiver token is filed under: per
+    /// callsign, since one portal token serves every WT channel, and separate
+    /// from ``secretAccount(for:)`` because a token is not a node secret.
     func webTransceiverAccount(for identity: OperatorIdentity) -> String {
         NodeSettings.webTransceiverAccount(for: identity)
     }
 
-    /// The same slot, reachable without a channel: APP-12's settings screen
-    /// stores a token before any channel has been chosen to use it on.
+    /// The same slot, for the settings screen, which has no channel in hand.
     static func webTransceiverAccount(for identity: OperatorIdentity) -> String {
         "wt-token:\(identity.normalisedCallsign)"
     }
 
-    /// The Keychain account an EchoLink account password is filed under.
-    ///
-    /// Per callsign: EchoLink issues one account password with the callsign, so
-    /// every EchoLink channel for that callsign shares it. A `static` because
-    /// APP-12's settings screen edits the account with no channel in hand.
+    /// The Keychain account an EchoLink account password is filed under: one
+    /// per callsign, shared by every EchoLink channel.
     static func echoLinkAccount(for identity: OperatorIdentity) -> String {
         "echolink:\(identity.normalisedCallsign)"
     }
@@ -223,25 +159,16 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// **APP-22.** What the channel list calls this channel, including before it
-    /// has anything in it.
-    ///
-    /// ``displayName`` is empty for a channel with no name, no host and no
-    /// node — exactly what `Add channel` hands over — so this falls back to
-    /// "New channel", the same wording the connect form's placeholder uses,
-    /// rather than a name that reads as a fault.
+    /// What the channel list calls this channel: ``displayName``, or "New
+    /// channel" for a blank one, matching the connect form's placeholder.
     var listDisplayName: String {
         let name = displayName
         return name.isEmpty ? "New channel" : name
     }
 
-    /// Where this channel actually points, in the terms the mode uses.
-    ///
-    /// The companion to ``displayName``, not a fallback for it: `displayName`
-    /// prefers the operator's own name, so "Sunday net" says nothing about
-    /// where it goes, the way a radio still shows the frequency it is tuned to
-    /// whether or not the memory has a name. Also makes an unsaved edit
-    /// visible — the name stays put while the address underneath it changes.
+    /// Where this channel points, in the mode's terms. Shown alongside
+    /// ``displayName``, which prefers the operator's own name and so says
+    /// nothing about the destination.
     var addressDescription: String {
         switch mode {
         case .allStarLink:
@@ -251,23 +178,16 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             let target = host.isEmpty ? "no reflector" : host
             return module.isEmpty ? target : "\(target) · module \(module)"
         case .echoLink:
-            // The proxy is not a channel field (APP-13); the peer address is
-            // the whole of where this goes.
             let target = peer.isEmpty ? "no address" : peer
             return node.isEmpty ? target : "\(node) · \(target)"
         }
     }
 
-    /// Decodes settings, including a blob written before this type had a mode
-    /// or a module.
+    /// Decodes settings, including older blobs missing later fields.
     ///
-    /// Hand-written because the synthesised initialiser treats a missing key as
-    /// a failure: a non-optional field would make an older stored blob
-    /// undecodable, `SettingsStore.load()` would return `nil`, and the operator
-    /// would find their node details wiped by an app update. A missing mode
-    /// decodes as `.allStarLink` — the only mode that existed when it was
-    /// written — and a missing module is simply a field that mode never asks
-    /// for, not corruption.
+    /// Hand-written because the synthesised decoder fails on a missing key,
+    /// which would wipe the operator's channels on an app update. A missing
+    /// mode is `.allStarLink`, the only mode older blobs can have meant.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -281,46 +201,27 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.directoryServer =
             try container.decodeIfPresent(String.self, forKey: .directoryServer) ?? ""
         self.username = try container.decode(String.self, forKey: .username)
-        // Absent means a channel saved before Web Transceiver existed: a
-        // node-secret channel, not a corrupt one.
+        // Absent in blobs older than Web Transceiver.
         self.allStarAccess =
             try container.decodeIfPresent(AllStarLinkAccess.self, forKey: .allStarAccess)
             ?? .nodeSecret
-        // APP-13: a channel must not name a proxy, so a `host` surviving from a
-        // build that kept the proxy there is dropped on read, same as in
-        // ``validated()``. `UserDefaultsSettingsStore.loadEchoLinkProxy()`
-        // rescues a private proxy from these blobs separately, as raw JSON.
+        // A channel never names a proxy (APP-13), so an old EchoLink `host` is
+        // dropped, as in ``validated()``. `loadEchoLinkProxy()` rescues it.
         if self.mode.usesProxy {
             self.host = ""
             self.port = self.mode.defaultPort
         }
 
-        // `callsign`, `operatorName`, `location` and `transmitTimeout` may be
-        // present in an older blob; not read here, since the type no longer has
-        // those fields and an unknown key is ignored. `loadIdentity()` and
-        // `loadTransmitTimeout()` in `UserDefaultsSettingsStore` harvest them
-        // once instead.
+        // Older blobs may carry identity and timeout fields; `SettingsStore`
+        // harvests those separately.
     }
 
-    /// The Keychain account the secret for this node is filed under.
+    /// The Keychain account the secret for this node is filed under. Derived,
+    /// so it cannot drift from the settings, and not secret itself.
     ///
-    /// Derived rather than stored, so it cannot drift out of step with the
-    /// settings, and contains no secret material — it is an identifier, visible
-    /// in a Keychain attribute.
-    ///
-    /// **The AllStarLink form is frozen** at `username@host:port/node`: changing
-    /// that string by so much as a separator orphans every secret already
-    /// stored under it. M17's `m17:` prefix keeps an unauthenticated link to a
-    /// host from being mistaken for an authenticated AllStarLink connection to
-    /// the same host.
-    ///
-    /// Takes the identity rather than a stored callsign — the callsign is the
-    /// operator's, not the channel's — but the account strings are unchanged,
-    /// so secrets already in the Keychain are still found. Uses
-    /// ``OperatorIdentity/normalisedCallsign``, not `callsign`: the identity is
-    /// stored as typed and only uppercased at `connect()`, and the secret is
-    /// filed under the validated form, so reading under the typed form would
-    /// lose a lower-case callsign's password every relaunch.
+    /// **These strings are frozen:** changing one by so much as a separator
+    /// orphans every secret stored under it. The callsign is the normalised
+    /// form, because secrets are filed under the validated callsign.
     func secretAccount(for identity: OperatorIdentity) -> String {
         switch mode {
         case .allStarLink:
@@ -332,22 +233,17 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// **APP-14.** Whose secret a channel connects with, if anyone's.
+    /// Whose secret a channel connects with, if anyone's (APP-14).
     ///
-    /// A property of the mode, not a single "is this Web Transceiver?" check in
-    /// `connect()`: M17 has no secret at all, and EchoLink's password is one
-    /// app-wide value the settings screen owns (APP-12), not a per-channel one
-    /// — writing either through the AllStarLink node-secret path would store a
-    /// secret in the wrong slot, or delete the EchoLink password by writing an
-    /// empty field over it (``SecretStore`` treats empty as a removal).
+    /// Writing through the wrong slot would misfile a secret, or delete the
+    /// EchoLink password by writing an empty field over it (``SecretStore``
+    /// treats empty as a removal).
     enum SecretOwnership: Equatable {
-        /// The channel's own, filed per destination: an AllStarLink node secret.
+        /// An AllStarLink node secret, filed per destination.
         case channel(account: String)
-        /// One password for the whole app, which **only the settings screen
-        /// writes**. Connecting reads it and must never write it.
+        /// One app-wide password, which **only the settings screen writes**.
         case appWide(account: String)
-        /// Nothing to store. M17 does not authenticate, and a Web Transceiver
-        /// channel's token is not a secret and has a slot of its own.
+        /// Nothing to store: M17, or a Web Transceiver token (its own slot).
         case none
     }
 
@@ -362,13 +258,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Whether two channels point at the same place on the same network.
-    ///
-    /// Identity, name and the operator's own preferences are excluded: a
-    /// channel renamed "Sunday net" is still the same reflector module, and
-    /// offering to save it again under a different name fills the list with
-    /// entries an operator cannot tell apart. Compared per mode, since the
-    /// fields that name a destination differ.
+    /// Whether two channels point at the same place on the same network,
+    /// ignoring identity and name.
     func isSamePlace(as other: NodeSettings) -> Bool {
         guard mode == other.mode else { return false }
 
@@ -377,10 +268,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
 
         switch mode {
         case .allStarLink:
-            // The access route counts: the same node reached with a secret and
-            // reached as a WT guest carry different credentials, so collapsing
-            // them would let a directory browse silently re-point a working
-            // node-secret channel at the guest account.
+            // Access counts: collapsing it would let a directory browse
+            // re-point a node-secret channel at the guest account.
             return sameEndpoint && node.trimmed == other.node.trimmed
                 && allStarAccess == other.allStarAccess
         case .m17:
@@ -428,16 +317,9 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Trimmed, normalised settings, or an error naming the empty field.
-    ///
-    /// `username` and the secret are not required: a node with no account
-    /// configured expects neither. The callsign is required but is no longer a
-    /// field here — see ``OperatorIdentity/validated()``, called alongside this
-    /// by `RadioSession.connect()`.
-    ///
-    /// Which of ``node`` and ``module`` is insisted on is the mode's business
-    /// (`RadioMode.usesNodeNumber`, `usesModule`): demanding both would make one
-    /// a field the operator fills in for no effect on the wire.
+    /// Trimmed, normalised settings, or an error naming the bad field. Only the
+    /// mode's own fields are required; the callsign is checked separately by
+    /// ``OperatorIdentity/validated()``.
     func validated() throws -> NodeSettings {
         var trimmed = NodeSettings(
             id: id,
@@ -452,9 +334,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             username: username.trimmed,
             allStarAccess: allStarAccess)
 
-        // EchoLink names no host: the proxy is app-wide (APP-13) and the node is
-        // `peer`. Cleared rather than merely unchecked, so a stale proxy in
-        // `host` cannot survive the next save.
+        // Cleared, not just unchecked, so a stale proxy in `host` cannot
+        // survive the next save.
         if mode.usesProxy {
             trimmed.host = ""
             trimmed.port = mode.defaultPort
@@ -479,13 +360,9 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
             guard Self.isDottedQuad(trimmed.peer) else {
                 throw ValidationError.invalidPeerAddress
             }
-            // Empty is allowed and means "do not log in to the directory" — the
-            // form warns rather than refuses, since the library treats an
-            // absent directory server and an absent account password as the
-            // pair they are. A host name is allowed too; the app resolves it
-            // before the library sees it (``HostResolver``). What is refused is
-            // neither: a typo that would otherwise resolve to nothing, much
-            // later and further from the field it was typed in.
+            // Empty means no directory login (the form warns). Otherwise it
+            // must be an address or a plausible host name, so a typo is caught
+            // here rather than at resolution.
             if !trimmed.directoryServer.isEmpty {
                 guard Self.isDottedQuad(trimmed.directoryServer)
                     || Self.isPlausibleHostName(trimmed.directoryServer)
@@ -500,33 +377,22 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         return trimmed
     }
 
-    /// The length of every Web Transceiver token observed so far: 12 lowercase
-    /// hexadecimal characters.
+    /// The length of every Web Transceiver token seen so far.
     static let webTransceiverTokenLength = 12
 
-    /// Whether a token looks like the ones the portal has issued.
+    /// Whether a token looks like the portal's: 12 lowercase hex characters.
     ///
-    /// Advisory, never a gate, like the library's own check: only the node
-    /// decides whether a token works, and the login endpoint is expected to
-    /// change (OQ-10), so refusing an unfamiliar format would turn a widened one
-    /// into an app that cannot connect. The form warns and lets the operator
-    /// press Connect anyway.
-    ///
-    /// Case matters: the portal issues lowercase, and this catches a token
-    /// upper-cased by a field with autocapitalisation on.
+    /// Advisory, never a gate, as in the library: only the node decides, and
+    /// the format may change (OQ-10). Case matters, to catch autocapitalisation.
     static func isPlausibleWebTransceiverToken(_ text: String) -> Bool {
         let trimmed = text.trimmed
         return trimmed.count == webTransceiverTokenLength
             && trimmed.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
-    /// Whether a string is four decimal octets separated by dots.
-    ///
-    /// The same shape `EchoLinkPeerAddress(_ dottedQuad:)` accepts, checked here
-    /// so the operator hears about a typo while they are still looking at the
-    /// field rather than as a failed connection later. Duplicating the rule is
-    /// the price of this layer not importing the library; the rule itself is
-    /// four small numbers and is not going to drift.
+    /// Whether a string is four decimal octets separated by dots: the shape
+    /// the library's `EchoLinkPeerAddress` accepts, checked here to catch a
+    /// typo at the field.
     static func isDottedQuad(_ text: String) -> Bool {
         let parts = text.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 4 else { return false }
@@ -535,24 +401,15 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Whether a string could be a host name worth trying to resolve.
-    ///
-    /// Deliberately permissive: this exists to catch `129.213.119` and
-    /// `naeast.echolink` typed as `naeast..echolink.org`, not to police the DNS.
-    /// Anything that gets past here and does not exist fails at resolution with
-    /// a message that names it, which is a perfectly good place to find out.
-    ///
-    /// Requires a dot, because a single label is far more likely to be a
-    /// half-typed address than a real host somebody meant.
+    /// Whether a string could be a host name worth resolving. Permissive: it
+    /// catches typos like `129.213.119` or `naeast..echolink.org`, and requires
+    /// a dot, since a single label is more likely a half-typed address.
     static func isPlausibleHostName(_ text: String) -> Bool {
         guard text.count <= 253, text.contains(".") else { return false }
         let labels = text.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.count >= 2 else { return false }
 
-        // All-numeric labels are an address being typed, not a name. `129.213.119`
-        // is otherwise a perfectly well-formed host name as far as the rules
-        // below are concerned, and treating it as one would send a dropped octet
-        // off to the resolver instead of reporting it here.
+        // All-numeric labels are an address with an octet missing, not a name.
         if labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) { return false }
 
         return labels.allSatisfy { label in
@@ -562,13 +419,8 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Parses a port the operator typed. Empty means "the default", not zero —
-    /// a cleared field should connect to the mode's own port, not fail.
-    ///
-    /// **The mode has to be passed in**, because "the default" is 4569, 17000 or
-    /// 8100 depending on it. An earlier version took no mode and returned 4569
-    /// for every one of them, so clearing the port field in EchoLink mode
-    /// silently pointed the proxy connection at the IAX2 port.
+    /// Parses a port the operator typed. Empty means the mode's own default
+    /// port, which differs per mode, not zero.
     static func parsePort(_ text: String, for mode: RadioMode) -> UInt16? {
         let trimmed = text.trimmed
         if trimmed.isEmpty { return mode.defaultPort }
