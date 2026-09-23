@@ -4,47 +4,28 @@ import Foundation
 
 /// **APP-13.** The operator's own EchoLink proxy, if they run one.
 ///
-/// **App-wide, not per channel.** A proxy is the operator's station
-/// infrastructure — the machine their traffic leaves through, the same one for
-/// every node they call, set up once. `isSamePlace(as:)` already ignores the
-/// host in EchoLink and `secretAccount(for:)` has no host in it, so
-/// ``NodeSettings`` was never really treating a proxy as channel state; see
-/// ``ProxyPicker/lease`` for how a probed public proxy is kept from being
-/// reused forever instead.
-///
-/// **The password is not in here.** It goes in the Keychain, under
-/// ``passwordAccount``, so an operator running a private proxy is not storing
-/// its password in `UserDefaults`, less carefully than their account password.
-/// A *public* proxy's password is the protocol literal ``publicPassword`` and
-/// is not stored at all.
+/// App-wide, not per channel: a proxy is station infrastructure, the same for
+/// every node called. The password is not in here — it is in the Keychain
+/// under ``passwordAccount``; a public proxy's is the literal ``publicPassword``.
 struct EchoLinkProxySettings: Equatable, Codable, Sendable {
     /// The proxy's host name or address. Empty means "no private proxy" — find
     /// a public one instead.
     var host: String
 
-    /// The proxy's TCP port. 8100 everywhere observed.
+    /// The proxy's TCP port.
     var port: UInt16
 
-    /// Nothing configured, which is the state every operator starts in and most
-    /// stay in.
+    /// Nothing configured: find a public proxy.
     static let none = EchoLinkProxySettings()
 
-    /// The proxy port. Duplicated from `RadioMode.echoLink.defaultPort` rather
-    /// than read from it, because this type is about the proxy and not about a
-    /// mode — but they are the same number and must stay so.
+    /// Must equal `RadioMode.echoLink.defaultPort`.
     static let defaultPort: UInt16 = 8100
 
-    /// The literal every public proxy expects, and the only proxy password ever
-    /// seen on the wire. Not a secret, which is why it is a constant here rather
-    /// than something the operator is asked for.
+    /// The literal every public proxy expects. Not a secret.
     static let publicPassword = "PUBLIC"
 
-    /// The Keychain account the private proxy's password is filed under.
-    ///
-    /// **Not per callsign**, unlike the EchoLink account and the Web Transceiver
-    /// token. Those are credentials issued *to an operator*; this is the
-    /// password of a machine, and it does not change when the callsign it is
-    /// used from does. One string, no interpolation, so it cannot drift.
+    /// The Keychain account for the private proxy's password. Not per callsign,
+    /// unlike the operator's credentials: it is a machine's password.
     static let passwordAccount = "echolink-proxy"
 
     init(host: String = "", port: UInt16 = EchoLinkProxySettings.defaultPort) {
@@ -52,8 +33,7 @@ struct EchoLinkProxySettings: Equatable, Codable, Sendable {
         self.port = port
     }
 
-    /// Whether a private proxy is set. `false` is the ordinary case and means
-    /// "probe for a public one".
+    /// Whether a private proxy is set; `false` means probe for a public one.
     var isConfigured: Bool {
         !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -75,15 +55,10 @@ struct EchoLinkProxySettings: Equatable, Codable, Sendable {
 
     /// Trimmed settings, or an error naming what is wrong.
     ///
-    /// **Deliberately more permissive than ``NodeSettings/isPlausibleHostName``**,
-    /// which insists on a dot — right for a directory server's handful of
-    /// published names, wrong here: a private proxy is often a single-label
-    /// machine name like `pi` or `shackpi`. What is caught is what is actually
-    /// a mistake: a URL pasted in whole, or a name with a space in it.
-    ///
-    /// A colon is refused too, which rules out a bare IPv6 literal — a
-    /// deliberate trade, since the port has its own field and `shackpi:8100` is
-    /// far likelier to be typed here.
+    /// More permissive than ``NodeSettings/isPlausibleHostName``: a private
+    /// proxy is often a single-label name like `shackpi`. It refuses spaces, a
+    /// pasted URL, and a colon — the last rules out bare IPv6 in exchange for
+    /// catching `shackpi:8100`.
     func validated() throws -> EchoLinkProxySettings {
         var trimmed = EchoLinkProxySettings(
             host: host.trimmingCharacters(in: .whitespacesAndNewlines), port: port)
@@ -100,9 +75,7 @@ struct EchoLinkProxySettings: Equatable, Codable, Sendable {
         return trimmed
     }
 
-    /// This proxy as something a session can tunnel through. `nil` when no
-    /// private proxy is configured, which is the caller's signal to find a
-    /// public one.
+    /// This proxy as a route, or `nil` when none is configured.
     func route(password: String) -> EchoLinkProxyRoute? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -112,16 +85,9 @@ struct EchoLinkProxySettings: Equatable, Codable, Sendable {
     }
 }
 
-/// The proxy one EchoLink session actually goes through.
-///
-/// Resolved at the moment of use — connecting, or reading the directory — from
-/// the private proxy if there is one and from a probe if there is not, and
-/// **never stored in a channel**. It exists so the thing a session tunnels
-/// through is a value passed to the code that needs it rather than three fields
-/// on a saved destination that outlive the session.
-///
-/// The app's own vocabulary: `EchoLinkProxyPassword` and the library's
-/// `.proxy(host:port:password:)` route belong to `CompositionRoot`.
+/// The proxy one EchoLink session goes through: resolved when connecting or
+/// reading the directory, from the private proxy or a probe, and never stored
+/// in a channel.
 struct EchoLinkProxyRoute: Equatable, Sendable {
     var host: String
     var port: UInt16
@@ -131,9 +97,6 @@ struct EchoLinkProxyRoute: Equatable, Sendable {
     var password: String
 
     /// Whether this is the operator's own proxy rather than a stranger's.
-    ///
-    /// Display only, and it earns its place: "your proxy" and "somebody else's
-    /// machine, briefly" are different obligations, and the operator should be
-    /// able to see which one is carrying their traffic.
+    /// Display only.
     var isPrivate: Bool
 }

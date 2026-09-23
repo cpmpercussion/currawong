@@ -2,16 +2,10 @@
 
 import Foundation
 
-/// One public EchoLink proxy, in the app's own vocabulary.
-///
-/// `EchoLinkPublicProxy` is a library type and only `CompositionRoot` may see
-/// it — the same rule that keeps `EchoLinkStation` out of the browser. What a
-/// view needs from a proxy is a host, a port, and enough to say why *this* one
-/// was picked; the library's version also carries a version string, an operator
-/// comment and a status word that the app has no use for.
+/// One public EchoLink proxy, in the app's own vocabulary; the library's
+/// `EchoLinkPublicProxy` stays in `CompositionRoot`.
 struct ProxyCandidate: Equatable, Sendable, Identifiable {
-    /// The proxy's advertised name. Display only — the connection uses
-    /// ``host``.
+    /// The proxy's advertised name. Display only.
     var name: String
 
     var host: String
@@ -20,16 +14,12 @@ struct ProxyCandidate: Equatable, Sendable, Identifiable {
     /// How far away the directory said it is, when it said.
     var distanceKilometres: Double?
 
-    /// The measured round trip to it. This is the reason it was chosen over the
-    /// others, so it is worth showing.
+    /// The measured round trip, which is why it was chosen.
     var latencyMilliseconds: Int?
 
     var id: String { "\(host):\(port)" }
 
-    /// This candidate as something a session can tunnel through.
-    ///
-    /// Every public proxy takes the same password, which is a protocol literal
-    /// rather than a secret, so nothing is asked of the operator here.
+    /// This candidate as a route, with the public proxy password.
     var route: EchoLinkProxyRoute {
         EchoLinkProxyRoute(
             host: host, port: port, password: EchoLinkProxySettings.publicPassword,
@@ -37,10 +27,6 @@ struct ProxyCandidate: Equatable, Sendable, Identifiable {
     }
 
     /// "Sydney · 465 km · 38 ms", skipping whatever the listing did not give.
-    ///
-    /// A single line rather than a row of labelled fields: the operator is
-    /// deciding whether to accept a machine the app picked for them, and the
-    /// three facts that bear on that are who it is, how far, and how quick.
     var summary: String {
         var parts: [String] = []
         if !name.isEmpty { parts.append(name) }
@@ -54,33 +40,24 @@ struct ProxyCandidate: Equatable, Sendable, Identifiable {
     }
 }
 
-/// Picks a public proxy on the operator's behalf.
-///
-/// A protocol so the picker can be tested without touching echolink.org or
-/// probing strangers' machines. The real one is
-/// `CompositionRoot.EchoLinkPublicProxyFinder`.
+/// Picks a public proxy on the operator's behalf. A protocol so tests need not
+/// probe real machines; the real one is `EchoLinkPublicProxyFinder`.
 protocol ProxyFinder: Sendable {
     /// Fetches the public proxy list, probes the nearest few, and returns the
     /// quickest that answered.
     ///
-    /// - Parameter onProgress: the running count of proxies probed, so the UI
-    ///   can say what it is doing during the second or two this takes. Called
+    /// - Parameter onProgress: the running count of proxies probed. Called
     ///   from an arbitrary task.
     func fastestProxy(onProgress: @escaping @Sendable (Int) -> Void) async throws -> ProxyCandidate
 }
 
-/// Why no proxy was found.
-///
-/// Both cases are ordinary outcomes rather than faults — public proxies carry
-/// one client at a time and are heavily contended, so "they were all busy" is
-/// a normal Tuesday and the right response is to try again, not to report a
-/// defect. The wording says so, and ``ProxyPicker`` offers a retry for both.
+/// Why no proxy was found. Usually contention rather than a fault — a public
+/// proxy carries one client at a time — so the wording says to try again.
 enum ProxyFinderError: Error, Equatable, CustomStringConvertible {
     /// Nothing in the list was public and ready.
     case noneAvailable
 
-    /// Candidates were probed and none answered — listed as ready, but already
-    /// taken by the time we knocked.
+    /// Candidates were probed and none answered.
     case noneAnswered(probed: Int)
 
     /// The list itself could not be fetched or made sense of.
@@ -105,33 +82,21 @@ enum ProxyFinderError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Which proxy an EchoLink session goes through, and the search that finds one.
+/// Which proxy an EchoLink session goes through, and the search that finds one
+/// (a list fetch, then TCP probes of several machines: a second or two).
 ///
-/// Kept out of the view because finding a proxy is not instant: it fetches a
-/// list over HTTPS and then opens real TCP connections to several strangers'
-/// machines, which takes a second or two. That is long enough that the operator
-/// needs to see it happening, and long enough that they may want to stop.
-///
-/// **This is where a proxy comes from, and the only place** (APP-13). Nothing
-/// stores one in a channel; ``route(privateProxy:privatePassword:)`` is what
-/// connecting and reading the directory both call.
+/// The only place a proxy comes from (APP-13): connecting and reading the
+/// directory both call ``route(privateProxy:privatePassword:)``.
 @MainActor
 final class ProxyPicker: ObservableObject {
     @Published private(set) var isSearching = false
 
-    /// How many proxies have been probed so far. Shown rather than a bare
-    /// spinner: the count moving is the difference between "working" and
-    /// "hung", and this is the part that takes the time.
+    /// How many proxies have been probed, shown so a search visibly progresses.
     @Published private(set) var probedCount = 0
 
-    /// The public proxy this sitting is using, if one has been found.
-    ///
-    /// **A lease, not a setting** (APP-13): held in memory for as long as the
-    /// operator is doing one thing — a directory refresh and the connect that
-    /// follows it should go through the same proxy, rather than taking a
-    /// second stranger's machine to do one operator's work — and dropped by
-    /// ``releaseLease()`` when the link is torn down, so the next session
-    /// probes afresh.
+    /// The public proxy this sitting is using: a lease, not a setting. Shared
+    /// by a directory read and the connect after it, and dropped by
+    /// ``releaseLease()`` at teardown.
     @Published private(set) var lease: ProxyCandidate?
 
     /// Why the last search found nothing, in words the operator can act on.
@@ -140,38 +105,25 @@ final class ProxyPicker: ObservableObject {
     private let finder: ProxyFinder
     private var searchTask: Task<ProxyCandidate?, Never>?
 
-    /// Bumped by every search, however it was started, so a superseded one can
-    /// tell that it is — the same hazard, and the same guard, as
-    /// `StationBrowser`.
+    /// Bumped by every search, so a superseded one can tell that it is.
     private var generation = 0
 
     init(finder: ProxyFinder) {
         self.finder = finder
     }
 
-    /// Probes for a public proxy and takes it as the sitting's ``lease``.
-    ///
-    /// Fire-and-forget, for the "find another proxy" button: the operator has
-    /// looked at the proxy the app picked and wants a different one — usually
-    /// because it has gone away mid-sitting. The result lands in ``lease``, which
-    /// is what the next connect or directory read will use; nothing is written
-    /// into a form, because there is no longer a form field to write into.
+    /// Drops the ``lease`` and probes for another, fire-and-forget: the
+    /// "find another proxy" button.
     func findAnother() {
         lease = nil
         beginSearch()
     }
 
-    /// The same search, awaited.
-    ///
-    /// The button path above fires and forgets; ``route(privateProxy:privatePassword:)``
-    /// has to *wait*, since the thing it is finding a proxy for cannot start
-    /// until there is one. Both go through ``beginSearch()``, so a search
-    /// started either way is the same single search rather than a second one
-    /// racing the first for the same strangers' machines.
+    /// The same search, awaited. Both paths go through ``beginSearch()``, so
+    /// there is only ever one search.
     ///
     /// - Returns: the proxy, or nil if none was found, the search failed, or it
-    ///   was superseded. In the failure case ``failure`` says why, which is
-    ///   what the caller should be showing rather than a message of its own.
+    ///   was superseded. On failure ``failure`` says why; show that.
     @discardableResult
     func findProxy() async -> ProxyCandidate? {
         await beginSearch().value
@@ -179,20 +131,13 @@ final class ProxyPicker: ObservableObject {
 
     /// The search itself, and the one place that touches the picker's state.
     ///
-    /// **Everything up to `searchTask = task` happens synchronously**, before
-    /// this returns: the spinner going up is the caller's own effect, not
-    /// something that lands a hop later, so a second button press before the
-    /// first search has registered cannot start a second search.
-    ///
-    /// The lease is set *inside* the task, so by the time the spinner comes down
-    /// the proxy the next operation will use is already the one on screen.
+    /// Everything up to `searchTask = task` is synchronous, so a second press
+    /// cannot start a second search. The lease is set inside the task, so it
+    /// is on screen by the time the spinner comes down.
     @discardableResult
     private func beginSearch() -> Task<ProxyCandidate?, Never> {
-        // Cancelled *and* waited for, below: a superseded search can be probing
-        // the very proxy the new one is about to pick, which would present as
-        // the winner being busy — from our own app, not a stranger. Probing
-        // touches other operators' equipment, so the overlap is worth removing
-        // even though it is brief.
+        // Cancelled *and* waited for, below: an overlapping probe could make the
+        // new search's winner look busy — because of our own app.
         let superseded = searchTask
         superseded?.cancel()
 
@@ -206,15 +151,12 @@ final class ProxyPicker: ObservableObject {
             guard let self else { return ProxyCandidate?.none }
             defer { if self.generation == generation { self.isSearching = false } }
 
-            // Short wait: the probe closes its transport even on the cancelled
-            // path, so this is what keeps the two from probing at once.
-            // `Never` as the failure type, so awaiting it cannot throw.
+            // Short: the probe closes its transport even when cancelled.
             _ = await superseded?.value
 
             do {
                 let candidate = try await self.finder.fastestProxy { probed in
-                    // Hops back to the main actor: the library calls this from
-                    // whichever task ran the batch.
+                    // Called from an arbitrary task.
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == generation else { return }
                         self.probedCount = probed
@@ -236,29 +178,13 @@ final class ProxyPicker: ObservableObject {
         return task
     }
 
-    /// The proxy this sitting's EchoLink traffic goes through, finding a public
-    /// one if there is nothing else to use.
+    /// The proxy this sitting's EchoLink traffic goes through (FR-3.3), resolved
+    /// when needed: the operator's own proxy (never overridden here), else the
+    /// ``lease``, else a fresh probe.
     ///
-    /// **A proxy is not a preference, it is plumbing** (FR-3.3): EchoLink
-    /// cannot be reached from a phone without one, and a probe fills the field
-    /// better than an operator could. So the two places that need a
-    /// proxy — reading the directory, and placing a call — resolve one at the
-    /// moment they need it; "connect to a proxy" is not a step anybody performs.
-    ///
-    /// The order is the whole of the policy:
-    ///
-    /// 1. **The operator's own proxy**, if they have configured one. Theirs beats
-    ///    a stranger's every time, and nothing here ever overrides or re-points
-    ///    it — that setting is changed in Settings and nowhere else.
-    /// 2. **The ``lease``**, if this sitting already holds one. Same proxy for
-    ///    the directory read and the call that follows it.
-    /// 3. **A fresh probe**, and that is where the second or two goes.
-    ///
-    /// - Returns: the proxy, or `nil` when a public one was needed and the probe
-    ///   found nothing — in which case ``failure`` says why, and the caller
-    ///   should stop rather than substitute a message of its own. Callers check
-    ///   `RadioMode.usesProxy` before asking; this does not, because a proxy for
-    ///   a mode that does not use one is not a question with an answer.
+    /// - Returns: the proxy, or `nil` when the probe found nothing; then
+    ///   ``failure`` says why and the caller should stop. Callers check
+    ///   `RadioMode.usesProxy` first.
     func route(
         privateProxy: EchoLinkProxySettings, privatePassword: String
     ) async -> EchoLinkProxyRoute? {
@@ -267,12 +193,8 @@ final class ProxyPicker: ObservableObject {
         return await findProxy()?.route
     }
 
-    /// Gives up the public proxy this sitting was using.
-    ///
-    /// Called when the link is torn down. A public proxy carries one client at
-    /// a time, so holding the name of one past its session risks reconnecting
-    /// to a machine somebody else has since taken. The private proxy is
-    /// untouched: it is a setting, not a lease.
+    /// Gives up the public proxy at teardown: somebody else may take it before
+    /// the next session.
     func releaseLease() {
         lease = nil
         failure = nil

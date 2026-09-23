@@ -2,21 +2,10 @@
 
 import Foundation
 
-/// Turns a host name into an IPv4 address.
-///
-/// **Why the app does this and the library does not.** The EchoLink proxy's
-/// `OPEN` frame carries four raw octets, so nothing below `EchoLinkDestination`
-/// resolves a name — deliberately, since baking a third party's server into a
-/// protocol library would be a guess about infrastructure rather than the
-/// protocol (`docs/CLI.md`). That is the right call for a library and the
-/// wrong one for a phone, where the alternative is "know an IP address off the
-/// top of your head" for cloud-hosted addresses that do change. So the app
-/// resolves, and hands the library the octets it asked for.
+/// Turns a host name into an IPv4 address. The app resolves because the
+/// EchoLink library takes raw octets and deliberately resolves nothing.
 protocol HostResolver: Sendable {
-    /// The IPv4 address for `host`.
-    ///
-    /// A host that is already dotted quad is returned unchanged, so callers can
-    /// pass whatever the operator typed without inspecting it first.
+    /// The IPv4 address for `host`; a dotted quad is returned unchanged.
     func ipv4Address(for host: String) async throws -> String
 }
 
@@ -43,36 +32,26 @@ enum HostResolverError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Resolves through the system resolver.
-///
-/// `getaddrinfo` rather than `Network.framework`: PD-1 governs how the app
-/// moves *packets*, and this opens no connection — it is a name lookup, and
-/// `NWConnection` would mean standing up a whole connection to a port nobody
-/// wants to talk to just to read the address back out of it.
+/// Resolves with `getaddrinfo`. PD-1 governs moving packets, and this opens no
+/// connection.
 struct SystemHostResolver: HostResolver {
     init() {}
 
     func ipv4Address(for host: String) async throws -> String {
         let trimmed = host.trimmingCharacters(in: .whitespaces)
 
-        // Already an address. Cheap, and it means a channel saved before this
-        // existed still works without a lookup.
+        // Already an address: no lookup.
         if NodeSettings.isDottedQuad(trimmed) { return trimmed }
 
-        // Off the calling actor: `getaddrinfo` blocks, and the callers are the
-        // main actor (connecting) and a directory fetch. A blocked main actor
-        // during a DNS timeout is a frozen app.
+        // Off the calling actor: `getaddrinfo` blocks, and a DNS timeout on
+        // the main actor freezes the app.
         return try await Task.detached(priority: .userInitiated) {
             try SystemHostResolver.lookUp(trimmed)
         }.value
     }
 
-    /// The blocking lookup. Returns the first IPv4 answer.
-    ///
-    /// First rather than a choice among them: `servers.echolink.org` answers
-    /// with several addresses and round-robins the order, so taking the first is
-    /// how the operator gets spread across the pool rather than everybody
-    /// landing on whichever one sorted lowest.
+    /// The blocking lookup. Returns the first IPv4 answer, which keeps
+    /// round-robin DNS spreading operators across a pool.
     private static func lookUp(_ host: String) throws -> String {
         var hints = addrinfo()
         hints.ai_family = AF_INET  // IPv4 only: four octets is what the proxy takes.
