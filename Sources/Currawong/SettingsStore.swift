@@ -8,14 +8,12 @@ import Foundation
 /// defaults database — a unit test that writes to `UserDefaults.standard`
 /// leaks into every later run on the same machine.
 ///
-/// **Three shapes, deliberately.** ``load()``/``save(_:)`` are the single-node
-/// store this app had before APP-4, and they are still here because they are
-/// what the migration reads: an operator updating the app has exactly one node
-/// in that key, and it must come forward as their first channel rather than
-/// vanish. ``loadChannels()``/``saveChannels(_:)`` are the list everything
-/// above this file now uses, and ``loadDrafts()``/``saveDrafts(_:)`` are the
-/// unsaved edits to it (BU-9), which are deliberately a third thing rather than
-/// a state the channel list can be in.
+/// Three shapes, deliberately: ``load()``/``save(_:)`` are the pre-APP-4
+/// single-node store, kept because the migration reads it forward as the
+/// operator's first channel; ``loadChannels()``/``saveChannels(_:)`` are the
+/// list everything above this file now uses; ``loadDrafts()``/``saveDrafts(_:)``
+/// are the unsaved edits to it (BU-9) — a third thing, not a state the channel
+/// list can be in.
 protocol SettingsStore: AnyObject, Sendable {
     func load() -> NodeSettings?
     func save(_ settings: NodeSettings)
@@ -35,26 +33,22 @@ protocol SettingsStore: AnyObject, Sendable {
     /// **BU-9.** The unsaved edits, one per channel they belong to, or `nil` if
     /// none has ever been written.
     ///
-    /// A draft *is* a channel value — the same ``NodeSettings``, carrying the
-    /// same ``NodeSettings/id`` as the stored channel it was edited from — so
-    /// this is a plain array and each element is its own key. A draft whose id is
-    /// in no channel is a channel that has never been saved, which needs no
-    /// special case here or anywhere above.
-    ///
-    /// Kept apart from ``loadChannels()`` because the whole point is that the
-    /// two disagree: the channel list is what the operator saved, and this is
-    /// what they were in the middle of typing when the app went away. Merging
-    /// them would be the overwrite BU-9 exists to stop.
+    /// A draft is a channel value — the same ``NodeSettings``, carrying the
+    /// same ``NodeSettings/id`` as the stored channel it was edited from — so a
+    /// draft whose id is in no channel is simply one never saved. Kept apart
+    /// from ``loadChannels()`` because the two are meant to disagree: the
+    /// channel list is what the operator saved, and this is what they were
+    /// mid-typing when the app went away. Merging them is the overwrite BU-9
+    /// exists to stop.
     func loadDrafts() -> [NodeSettings]?
     func saveDrafts(_ drafts: [NodeSettings])
 
     /// The operator — callsign, name and location — which is app-wide rather
     /// than per channel.
     ///
-    /// `nil` means none has ever been saved *under its own key* — which is the
-    /// signal to go looking for one in the channels written before the callsign
-    /// was hoisted out of them. See
-    /// ``UserDefaultsSettingsStore/loadIdentity()``.
+    /// `nil` means none has been saved under its own key, which is the signal
+    /// to look for one in channels written before the callsign was hoisted out
+    /// of them. See ``UserDefaultsSettingsStore/loadIdentity()``.
     func loadIdentity() -> OperatorIdentity?
     func saveIdentity(_ identity: OperatorIdentity)
 
@@ -69,39 +63,31 @@ protocol SettingsStore: AnyObject, Sendable {
     func loadReceiveGain() -> ReceiveGain?
     func saveReceiveGain(_ gain: ReceiveGain)
 
-    /// **SF-1.** The transmit watchdog timeout, app-wide. `nil` means none has
-    /// ever been saved *under its own key*, which — as with ``loadIdentity()`` —
-    /// is the signal to go looking for one in the channels written before the
-    /// watchdog was hoisted out of them.
+    /// **SF-1.** The transmit watchdog timeout, app-wide. `nil` means the same
+    /// as ``loadIdentity()``'s `nil`: look for one hoisted out of older channels.
     func loadTransmitTimeout() -> TransmitTimeout?
     func saveTransmitTimeout(_ timeout: TransmitTimeout)
 
-    /// **APP-13.** The operator's own EchoLink proxy, app-wide. `nil` means none
-    /// has ever been saved *under its own key*, which — as with
-    /// ``loadIdentity()`` — is the signal to go looking for one in the channels
-    /// written before the proxy was hoisted out of them.
+    /// **APP-13.** The operator's own EchoLink proxy, app-wide, with the same
+    /// `nil`-means-look-in-older-channels rule as ``loadIdentity()``.
     func loadEchoLinkProxy() -> StoredEchoLinkProxy?
     func saveEchoLinkProxy(_ proxy: EchoLinkProxySettings)
 
     /// **APP-33.** Which version of the licence acknowledgement the operator has
-    /// accepted, or `nil` if they never have.
-    ///
-    /// A version rather than a flag, for the reason given on
-    /// ``LicenceAcknowledgement``. There is no migration behind this one: an
-    /// operator updating into the version that introduced it has acknowledged
-    /// nothing, which is the correct answer — there was no wording for them to
-    /// have agreed to.
+    /// accepted, or `nil` if they never have. A version, not a flag — see
+    /// ``LicenceAcknowledgement``. No migration behind this one: an operator
+    /// updating into the version that introduced it has correctly acknowledged
+    /// nothing, since there was no wording yet to agree to.
     func loadLicenceAcknowledgement() -> Int?
     func saveLicenceAcknowledgement(_ version: Int)
 }
 
 /// What ``SettingsStore/loadEchoLinkProxy()`` found, and where.
 ///
-/// The password is separate from the settings and optional because it is
-/// **migration output, not stored state**: the private proxy's password lives in
-/// the Keychain, which this type cannot reach, so a password harvested out of an
-/// old channel blob has to be handed up to whoever can write it. Non-`nil` means
-/// exactly "this came from a pre-APP-13 channel and has not been filed yet".
+/// The password is separate and optional because it is migration output, not
+/// stored state: it lives in the Keychain, which this type cannot reach, so a
+/// password harvested from an old channel blob is handed up to whoever can
+/// write it. Non-`nil` means "from a pre-APP-13 channel, not yet filed".
 struct StoredEchoLinkProxy: Equatable {
     var settings: EchoLinkProxySettings
     var harvestedPassword: String?
@@ -109,22 +95,17 @@ struct StoredEchoLinkProxy: Equatable {
 
 /// `UserDefaults`-backed settings, stored as JSON under one key per concern.
 ///
-/// **No secret ever reaches this type.** ``NodeSettings`` does not have a
-/// secret field, which is the point: the password cannot be persisted here by
-/// accident, only deliberately, and nobody is going to do that deliberately.
-/// There is no longer an exception: the EchoLink proxy password used to be one,
-/// and APP-13 moved it to the Keychain where it belongs. The only proxy password
-/// this type ever sees is one it is *reading out* of a pre-APP-13 blob in order
-/// to have it filed properly.
+/// No secret ever reaches this type: ``NodeSettings`` has no secret field, so
+/// one cannot be persisted here by accident. The only proxy password this type
+/// sees is one it reads out of a pre-APP-13 blob to file properly elsewhere.
 ///
-/// One key for the whole list rather than one per channel, for the same reason
-/// the single node used one key for five fields: a partially-written set of
-/// channels is then impossible.
+/// One key for the whole channel list, not one per channel, for the same
+/// reason the single node used one key for five fields: a partially-written
+/// set of channels is then impossible.
 final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
-    /// The pre-APP-4 single-node key. **Read but never written** — the
-    /// migration in ``ChannelSet`` consumes it, and after that the channel list
-    /// is the only thing that matters. Left in place rather than deleted so an
-    /// operator who downgrades still finds their node where they left it.
+    /// The pre-APP-4 single-node key. Read but never written — the migration in
+    /// ``ChannelSet`` consumes it. Left in place, not deleted, so an operator
+    /// who downgrades still finds their node where they left it.
     private static let key = "au.charlesmartin.currawong.nodeSettings"
     private static let channelsKey = "au.charlesmartin.currawong.channels"
     private static let draftsKey = "au.charlesmartin.currawong.channelDrafts"
@@ -134,10 +115,9 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     private static let transmitTimeoutKey = "au.charlesmartin.currawong.transmitTimeoutSeconds"
     private static let receiveGainKey = "au.charlesmartin.currawong.receiveGainDB"
     private static let echoLinkProxyKey = "au.charlesmartin.currawong.echoLinkProxy"
-    /// **APP-33.** Internal rather than private, and the only key here that is:
+    /// **APP-33.** Internal, not private — the only key here that is:
     /// ``DefaultsSuite`` writes it when a UI test asks to start already
-    /// acknowledged. See the note there for why that hook cannot reach the
-    /// operator's own defaults.
+    /// acknowledged.
     static let licenceAcknowledgementKey =
         "au.charlesmartin.currawong.licenceAcknowledgement"
 
@@ -193,19 +173,12 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// The app-wide callsign, harvesting one from older per-channel settings if
     /// this is the first launch since the callsign was hoisted out of them.
     ///
-    /// **Why this reads raw JSON.** `NodeSettings` no longer has a `callsign`
-    /// property, so decoding a stored channel throws the old value away — which
-    /// is the correct behaviour for that type and the wrong behaviour exactly
-    /// once, on the launch after the update. Rather than keep a vestigial field
-    /// on `NodeSettings` for the benefit of a one-off, the migration reads the
-    /// stored blobs as dictionaries and takes the first non-empty callsign it
-    /// finds. The alternative is an operator who has to work out why the app
-    /// suddenly will not let them transmit.
-    ///
-    /// Channels first, then the pre-APP-4 single node, which is the order they
-    /// were written in. Nothing is written back here: saving is
-    /// ``saveIdentity(_:)``'s job and the session does it once the value has
-    /// been through `OperatorIdentity.validated()`.
+    /// Reads raw JSON rather than decoding through `NodeSettings`, which no
+    /// longer has a `callsign` field and would silently drop the old value.
+    /// Channels first, then the pre-APP-4 single node — the order they were
+    /// written in. Nothing is written back here: saving is
+    /// ``saveIdentity(_:)``'s job, once the value has been through
+    /// `OperatorIdentity.validated()`.
     func loadIdentity() -> OperatorIdentity? {
         if let data = defaults.data(forKey: Self.identityKey),
             let identity = try? JSONDecoder().decode(OperatorIdentity.self, from: data)
@@ -222,9 +195,8 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
             operatorName: Self.firstNonEmpty("operatorName", in: blobs) ?? "",
             location: Self.firstNonEmpty("location", in: blobs) ?? "")
 
-        // A callsign is what makes it an identity worth having. Name and
-        // location are optional everywhere else and are optional here too, so
-        // an install that had neither is simply not migrated.
+        // A callsign is what makes it an identity worth having; an install
+        // with neither is simply not migrated.
         return harvested.callsign.isEmpty ? nil : harvested
     }
 
@@ -259,20 +231,13 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
 
     /// **SF-1.** The app-wide watchdog timeout, harvesting one from older
     /// per-channel settings if this is the first launch since it was hoisted out
-    /// of them.
+    /// of them. Raw JSON, as ``loadIdentity()``: an operator who deliberately
+    /// set a short leash should not silently be given the default back.
     ///
-    /// Raw JSON for the same reason ``loadIdentity()`` reads it: `NodeSettings`
-    /// no longer has a `transmitTimeout`, so decoding a stored channel throws the
-    /// old value away, and an operator who had deliberately set a short leash
-    /// should not silently be given three minutes by an app update.
-    ///
-    /// **The shortest stored value wins**, which is the one rule here that is not
-    /// simply "the newest answer". Unlike the callsign there is no single right
-    /// answer to migrate — the operator had several — and of the choices
-    /// available this is the only one that cannot *lengthen* a limit they had
-    /// chosen. Raising a safety ceiling is not a migration's decision to make;
-    /// shortening one is visible on the settings screen and costs a keystroke to
-    /// undo.
+    /// The shortest stored value wins, not the newest: with several channels'
+    /// worth of candidates and no single right answer, this is the only choice
+    /// that cannot lengthen a limit the operator chose. Raising a safety ceiling
+    /// is not a migration's decision to make.
     func loadTransmitTimeout() -> TransmitTimeout? {
         if defaults.object(forKey: Self.transmitTimeoutKey) != nil {
             return TransmitTimeout(seconds: defaults.double(forKey: Self.transmitTimeoutKey))
@@ -307,31 +272,19 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
 
     /// **APP-13.** The app-wide private proxy, rescuing one from older
     /// per-channel settings if this is the first launch since it was hoisted out
-    /// of them.
+    /// of them. Raw JSON, as ``loadIdentity()``: `NodeSettings` no longer has a
+    /// `proxyPassword` and blanks an EchoLink `host` at decode.
     ///
-    /// Raw JSON for the reason ``loadIdentity()`` reads it that way: `NodeSettings`
-    /// no longer has a `proxyPassword`, and it blanks an EchoLink `host` at decode,
-    /// so a decoded channel has already forgotten the proxy this has to find.
-    ///
-    /// **The `PUBLIC` test, and what it can and cannot tell.** A password other
-    /// than `PUBLIC` is strong evidence: the old form *defaulted* to `PUBLIC`, so
-    /// anything else was typed by an operator who runs their own proxy, and losing
-    /// it would mean going to find those details again. That case is rescued.
-    ///
-    /// `PUBLIC` itself proves less than it looks. It is not the mark of a probe —
-    /// it is the **definition** of a public proxy, which is precisely why the app
-    /// wrote it when it captured one — but an operator who typed their own host
-    /// into the old form and left the password field at its default looks
-    /// identical. Those hosts are dropped anyway, and it is a judgement under
-    /// ambiguity rather than a deduction: the two mistakes are not the same size.
-    /// Dropping a private host costs one field re-typed in Settings, where
-    /// adopting a captured public proxy as "your own proxy" would make the fault
-    /// APP-13 exists to end permanent and invisible — a stranger's single-user
-    /// machine, named as the operator's station infrastructure, on every session
-    /// from then on.
+    /// A password other than `PUBLIC` is rescued as the operator's own proxy;
+    /// `PUBLIC` itself is dropped, deliberately, even though it is the honest
+    /// default and not proof of anything suspicious — because the alternative
+    /// failure is worse. Adopting a stray public proxy as "your own" makes it
+    /// permanent, invisible station infrastructure: a stranger's single-user
+    /// machine, treated as the operator's own on every session after. Dropping
+    /// a genuine private proxy costs one field retyped in Settings.
     ///
     /// Nothing is written back from here. The caller files the password in the
-    /// Keychain and then saves, which is what stops the harvest running twice.
+    /// Keychain and then saves, which stops the harvest running twice.
     func loadEchoLinkProxy() -> StoredEchoLinkProxy? {
         if let data = defaults.data(forKey: Self.echoLinkProxyKey),
             let stored = try? JSONDecoder().decode(EchoLinkProxySettings.self, from: data)
@@ -371,17 +324,11 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
 
     /// The first non-empty value of `key` across the stored blobs.
     ///
-    /// Each field is harvested independently rather than all three being taken
-    /// from whichever channel had a callsign. They are three facts about one
-    /// person, so mixing their sources cannot produce a wrong person — whereas
-    /// insisting they come from one channel would silently drop a name the
-    /// operator had only ever filled in on their second channel.
-    /// Trimmed, and whitespace-only counts as absent. The blobs being read here
-    /// are pre-hoist channels, whose fields were never put through
-    /// `validated()` unless that channel had been connected with — so a
-    /// callsign of three spaces is a thing they can genuinely contain. Adopting
-    /// it would make it the operator's app-wide identity, which then reads as a
-    /// filled-in field that fails validation the first time they press Connect.
+    /// Each field is harvested independently, not all three from whichever
+    /// channel had a callsign: they are three facts about one person, so mixing
+    /// sources cannot produce a wrong person. Trimmed, since these blobs
+    /// pre-date `validated()` and a callsign of three spaces is something they
+    /// can genuinely contain.
     private static func firstNonEmpty(_ key: String, in blobs: [[String: Any]]) -> String? {
         blobs.lazy
             .compactMap { ($0[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -431,10 +378,9 @@ struct ChannelSet: Equatable {
 
     /// Reads the store, bringing a pre-APP-4 single node forward as one channel.
     ///
-    /// The migration runs when no channel list has ever been written — not when
-    /// the list is empty. An operator who deletes their last channel has said
-    /// something, and resurrecting the node they deleted on the next launch
-    /// would be the app arguing with them.
+    /// The migration runs when no channel list has ever been written, not when
+    /// the list is empty: an operator who deletes their last channel should not
+    /// find it resurrected next launch.
     static func loaded(from store: SettingsStore) -> ChannelSet {
         if let stored = store.loadChannels() {
             return ChannelSet(channels: stored, selectedID: store.loadSelectedChannelID())

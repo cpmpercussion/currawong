@@ -5,47 +5,20 @@ import SwiftUI
 /// **APP-33.** The once-per-install statement that the operator holds a licence,
 /// shown the first time they try to transmit.
 ///
-/// ## What this is not
+/// Not a licence check, and must never grow into one: there is no global
+/// register to check against, and a per-country one would work for some
+/// operators and quietly exclude the rest. All three networks Currawong reaches
+/// already verify a licence to issue an account or token, so this states an
+/// obligation the operator already carries rather than duplicating that work.
 ///
-/// It is not a licence check, and it must never grow into one. There is no
-/// global register to check against; the registers that do exist are national,
-/// inconsistent, and in some countries not public at all — so a check would work
-/// for VK, US and UK operators and quietly exclude everyone else. It would also
-/// mean sending a callsign to a third party, which this app otherwise does only
-/// to the networks the operator is themselves a user of.
+/// Gated at first transmit, not launch, because listening is not transmitting —
+/// only ``RadioSession/beginTransmit(from:)`` consults it, not `connect()`, the
+/// directory browsers or the receive path.
 ///
-/// All three networks Currawong can reach — AllStarLink, EchoLink and M17 —
-/// already verify a licence when they issue the account or the token that gets
-/// an operator on the air. The gate below therefore duplicates none of their
-/// work. What it does is state an obligation the operator already carries, at
-/// the one moment it becomes real, in an app that can otherwise be installed and
-/// listened to by anybody.
-///
-/// ## Why at the first transmit, and not at launch
-///
-/// Because **listening is not transmitting**, and gating the app at launch would
-/// say it was. An operator may install Currawong, connect and listen without
-/// ever seeing this. Nothing in `connect()`, the directory browsers or the
-/// receive path consults it; only ``RadioSession/beginTransmit(from:)`` does.
-///
-/// Note what that does *not* buy, so nobody later reads more into it than is
-/// there: the three networks all require an identity on the wire to connect at
-/// all — M17 carries a base-40 callsign in `CONN`, EchoLink's directory login is
-/// callsign and password, a Web Transceiver token is issued against a callsign —
-/// so the unlicensed listener this gate permits is a case Currawong allows and
-/// the networks mostly do not. The gate is honest about Currawong's own
-/// behaviour. It does not claim to have opened a door somebody else keeps shut.
-///
-/// ## Why a version and not a `Bool`
-///
-/// So that materially changed wording can be put in front of an operator again.
-/// A `Bool` cannot distinguish "agreed to something" from "agreed to *this*", and
-/// the first time the text needs to change that distinction is the whole
-/// question. Bump ``currentVersion`` when the substance changes — not for a typo.
-///
-/// It is deliberately **not** keyed to the callsign. A contest call or a club
-/// station is a legitimate reason to change ``OperatorIdentity/callsign``, and
-/// re-asking on every such change would train the operator to dismiss it.
+/// ``currentVersion`` is an `Int`, not a `Bool`, so materially changed wording
+/// can be put in front of the operator again; bump it for a substance change,
+/// not a typo. Not keyed to the callsign: switching to a contest call or club
+/// station is legitimate and should not re-ask.
 enum LicenceAcknowledgement {
 
     /// The version of the wording below. Stored when the operator accepts; the
@@ -61,35 +34,29 @@ enum LicenceAcknowledgement {
 
     // MARK: - The wording
     //
-    // Here rather than inline in the view so the tests assert against the same
-    // strings the operator reads, and so a change to them is a change to a file
-    // whose doc comment explains what they are for.
+    // Here, not inline in the view, so the tests assert against the same
+    // strings the operator reads.
 
     static let title = "Before you transmit"
 
-    /// The obligation, stated plainly. "Does not check" is the first clause
-    /// deliberately: the operator should learn what the app does *not* do from
-    /// the app, rather than assume it has vouched for them.
+    /// "Does not check" leads deliberately: the operator should learn what the
+    /// app does not do from the app, not assume it has vouched for them.
     static let responsibility =
         "Currawong does not check licences. Transmitting on amateur frequencies requires a "
         + "licence in your country, and you are responsible for everything sent under your "
         + "callsign."
 
-    /// **The RF warning.** Some destinations are linked to a transmitter and
-    /// some are not, and the app genuinely cannot tell which: the M17 host file
-    /// does not say, an AllStar node's stats do not reliably say, and an
-    /// EchoLink conference may be bridged to a repeater at the far end without
-    /// anything in the protocol mentioning it. So this warns generally rather
-    /// than per destination — a per-channel warning would have to guess, and a
-    /// wrong guess in the reassuring direction is the one that matters.
+    /// General rather than per-destination: the app cannot reliably tell which
+    /// nodes or reflectors are linked to a transmitter, and a per-channel
+    /// warning would have to guess — wrong in the reassuring direction is the
+    /// guess that matters.
     static let overTheAir =
         "Some of the nodes and reflectors you can reach from here are linked to radio "
         + "transmitters and some are not. Currawong cannot tell which — assume anything you "
         + "send may go out over the air."
 
-    /// The declaration made concrete. The callsign is interpolated because a
-    /// notice naming *this* operator is a statement about them, where generic
-    /// boilerplate is something to tap past.
+    /// The declaration made concrete: naming the operator is harder to tap past
+    /// than generic boilerplate.
     static func identification(callsign: String) -> String {
         let trimmed = callsign.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -98,9 +65,8 @@ enum LicenceAcknowledgement {
         return "Your callsign, \(trimmed), is sent with every transmission and identifies you."
     }
 
-    /// **Not "Cancel".** The left button names the thing that remains available,
-    /// because it is a legitimate way to use the app and not an abort: an
-    /// operator who declines can still listen, browse and stay connected.
+    /// Not "Cancel": declining is a legitimate way to use the app, not an
+    /// abort — the operator can still listen, browse and stay connected.
     static let declineButton = "Listen only"
 
     static let acceptButton = "I hold a licence"
@@ -108,9 +74,9 @@ enum LicenceAcknowledgement {
 
 /// The sheet ``LicenceAcknowledgement`` is shown in.
 ///
-/// A sheet rather than an alert: it is three paragraphs, and an alert that long
-/// is one nobody reads. Its own type rather than a `@ViewBuilder` on `RootView`
-/// so that APP-21's hosted-view tests can put it on screen by itself.
+/// A sheet, not an alert: three paragraphs is longer than an alert gets read.
+/// Its own type, not a `@ViewBuilder` on `RootView`, so APP-21's hosted-view
+/// tests can put it on screen by itself.
 struct LicenceAcknowledgementView: View {
     let callsign: String
     let onAccept: () -> Void
@@ -128,9 +94,8 @@ struct LicenceAcknowledgementView: View {
 
             Spacer(minLength: 0)
 
-            // Accept last and prominent, decline first and plain: the order puts
-            // the weightier claim under the thumb, and keeps "Listen only" from
-            // reading as the discouraged choice. It is not.
+            // Accept last and prominent, decline first and plain: "Listen
+            // only" should not read as the discouraged choice.
             HStack {
                 Button(LicenceAcknowledgement.declineButton, action: onDecline)
                     .buttonStyle(.bordered)

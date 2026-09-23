@@ -31,18 +31,11 @@ struct NodeRegistration: Equatable, Sendable {
     /// The node's page on AllStarLink's stats site, the counterpart to an M17
     /// reflector's dashboard.
     ///
-    /// `https://stats.allstarlink.org/nodeinfo.cgi?node=<node>` — what is
-    /// linked to when a node number is quoted on the air. It carries the things
-    /// a lookup deliberately does not: what the node is currently connected to,
-    /// who keyed it last and when, how long it has been up. The lookup answers
-    /// "where do I dial", which is a different and smaller question; this is
-    /// where an operator goes for the rest.
-    ///
-    /// Built from the node number rather than returned by the API, because the
-    /// stats API has no field for it and the URL is a fixed shape. `nil` unless
-    /// the number is digits — everything AllStarLink issues is, and refusing
-    /// anything else means free text the operator typed can never be spliced
-    /// into a URL.
+    /// `https://stats.allstarlink.org/nodeinfo.cgi?node=<node>` — carries what
+    /// this lookup deliberately does not: current connections, last key-up,
+    /// uptime. Built from the node number, not returned by the API, since the
+    /// URL is a fixed shape; `nil` unless the number is digits, so free text the
+    /// operator typed can never be spliced into a URL.
     var dashboard: URL? {
         let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.allSatisfy(\.isASCII), trimmed.allSatisfy(\.isNumber)
@@ -52,20 +45,12 @@ struct NodeRegistration: Equatable, Sendable {
 
     /// `settings` with what the directory answered filled in.
     ///
-    /// Here rather than in the connect form's closure so it can be tested: the
-    /// rule about *not* overwriting a channel name is the kind of thing that
-    /// looks obviously right in a view and is impossible to prove there.
-    ///
-    /// - The **host** and the **port** are the answer to the question the lookup
-    ///   was asked, and always win — pressing it again is how an operator
-    ///   refreshes a node that re-registered on a new address.
-    /// - The **channel name** is filled in from the node's callsign **only when
-    ///   the operator has not named the channel themselves**. A node number is a
-    ///   number, and `55553` in a channel list says nothing about which node it
-    ///   is; the callsign is what gets quoted on the air alongside it, so it is
-    ///   the useful default. But a name the operator typed is theirs, and a
-    ///   lookup pressed to refresh an address must not rename their channel as a
-    ///   side effect.
+    /// Here rather than in the connect form's closure so the rule is testable.
+    /// Host and port always win — pressing the lookup again is how an operator
+    /// refreshes a node that re-registered elsewhere. The channel name is filled
+    /// in from the callsign only when the operator has not named the channel
+    /// themselves: a bare node number says nothing about which node it is, but
+    /// a name the operator typed is theirs, and a refresh must not overwrite it.
     func applied(to settings: NodeSettings) -> NodeSettings {
         var settings = settings
         settings.host = host
@@ -96,12 +81,10 @@ struct NodeRegistration: Equatable, Sendable {
 
 /// Turns an AllStarLink node number into an address.
 ///
-/// **Why this is a lookup and not a browser.** EchoLink and M17 got panes
-/// because their directories are lists worth reading: who is on, which
-/// reflectors exist. AllStarLink's is neither — an operator already knows the
-/// node number they want, because it is what gets quoted on the air, and what
-/// they do not know is the address behind it. So this answers one question
-/// about one node rather than offering the whole register to scroll.
+/// A lookup, not a browser like EchoLink's and M17's: an operator already knows
+/// the node number they want, because it is what gets quoted on the air, and
+/// what they do not know is the address behind it. So this answers one question
+/// about one node rather than offering a register to scroll.
 ///
 /// A protocol so the button can be tested without the network.
 protocol NodeLookup: Sendable {
@@ -151,21 +134,17 @@ enum NodeLookupError: Error, Equatable, CustomStringConvertible {
 /// Looks a node up through AllStarLink's public stats API.
 ///
 /// `https://stats.allstarlink.org/api/stats/<node>` — unauthenticated, one node
-/// per request, and it answers `404` with an empty array for a number it does
-/// not know.
+/// per request, `404` with an empty array for a number it does not know.
 ///
-/// **Registration data, not a live probe.** `ipaddr` is where the node last
-/// registered from, which is what an IAX2 client needs to dial and is not a
-/// promise that anybody is home. A stale answer produces a call that times out,
-/// which is the same outcome as dialling a stale address by hand — no worse for
-/// having been looked up.
+/// Registration data, not a live probe: `ipaddr` is where the node last
+/// registered, not a promise anybody is home. A stale answer produces a call
+/// that times out — no worse than dialling a stale address by hand.
 struct AllStarLinkNodeLookup: NodeLookup {
     static let endpoint = URL(string: "https://stats.allstarlink.org/api/stats/")!
 
     /// The registered IAX2 port, if the directory does not say. Duplicated from
-    /// `NodeSettings.defaultPort` rather than imported for the same reason that
-    /// constant is duplicated from the library: this layer does not import
-    /// `IAX2Kit`, and the destination's own default is the authority.
+    /// `NodeSettings.defaultPort` rather than imported: this layer does not
+    /// import `IAX2Kit`.
     static let defaultPort: UInt16 = 4569
 
     private let endpoint: URL
@@ -304,9 +283,8 @@ final class NodeLocator: ObservableObject {
 
     /// Looks `node` up and hands the answer to `apply`.
     ///
-    /// The result is passed out rather than written to settings here: this type
-    /// does not own the connect form's fields, and reaching into them would be
-    /// writing to a draft it cannot see the rest of.
+    /// Passed out rather than written to settings here: this type does not own
+    /// the connect form's fields.
     func find(node: String, then apply: @escaping @MainActor (NodeRegistration) -> Void) {
         task?.cancel()
 
