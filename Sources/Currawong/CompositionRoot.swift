@@ -17,12 +17,15 @@ import RadioCore
 ///
 /// ## Why the factories name concrete clients
 ///
-/// Each factory maps its client's own `events` stream into ``RadioLinkEvent``,
-/// and wires DTMF sending to the client's `send(dtmf:)`. `NetworkClient` has
-/// generic equivalents for events, received audio and captured audio
-/// (`radioEvents`, `receivedAudio`, `send(pcm:)`), which the factories do not
-/// yet use. Sending DTMF (FR-1.5) is still not on the protocol, so that one
-/// genuinely needs the concrete type.
+/// Each factory builds its client and destination, then hands them to
+/// ``assembleLink(mode:client:destination:events:translate:sendDTMF:)``, which
+/// uses `NetworkClient` for everything but two things:
+///
+/// - **Events** come from the client's own `events` stream, not
+///   `NetworkClient.radioEvents`. The app words its events itself: the codec
+///   name, its own disconnect prose, and the EchoLink node's name, which
+///   `radioEvents` drops by design.
+/// - **Sending DTMF** (FR-1.5) is not on the protocol.
 ///
 /// ## Also owned here
 ///
@@ -290,48 +293,13 @@ final class CompositionRoot {
                 secret: credentials.secret,
                 node: settings.node)
 
-        var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
-        let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
-        let eventContinuation = eventEscape!
-
-        // Translated, because `IAX2ClientEvent` must not escape this file.
-        let clientEvents = client.events
-        let eventPump = Task.detached {
-            for await event in clientEvents {
-                if let translated = RadioLinkEvent(event) {
-                    eventContinuation.yield(translated)
-                }
-            }
-            eventContinuation.finish()
-        }
-
-        // The audio thread must not await an actor, so captured frames go
-        // through a bounded relay and an ordinary task feeds them in.
-        let relay = CapturedFrameRelay()
-        let frames = relay.frames
-        let sendPump = Task.detached {
-            for await frame in frames {
-                _ = try? await client.send(pcm: frame)
-            }
-        }
-
-        return RadioLink(
+        return assembleLink(
             mode: .allStarLink,
-            connect: { try await client.connect(to: destination) },
-            disconnect: { await client.disconnect() },
-            startTransmit: { try await client.startTransmit() },
-            stopTransmit: { await client.stopTransmit() },
-            transmitState: { client.state },
-            events: events,
-            receivedAudio: client.receivedAudio,
-            sendCapturedFrame: { relay.submit($0) },
-            sendDTMF: { digit in try await client.send(dtmf: digit) },
-            close: {
-                relay.finish()
-                sendPump.cancel()
-                eventPump.cancel()
-                eventContinuation.finish()
-            })
+            client: client,
+            destination: destination,
+            events: client.events,
+            translate: { RadioLinkEvent($0) },
+            sendDTMF: { digit in try await client.send(dtmf: digit) })
     }
 
     /// Builds one M17 connection's worth of plumbing. Unlike IAX2: no secret
@@ -362,45 +330,13 @@ final class CompositionRoot {
             module: module,
             callsign: identity.callsign)
 
-        var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
-        let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
-        let eventContinuation = eventEscape!
-
-        let clientEvents = client.events
-        let eventPump = Task.detached {
-            for await event in clientEvents {
-                if let translated = RadioLinkEvent(event) {
-                    eventContinuation.yield(translated)
-                }
-            }
-            eventContinuation.finish()
-        }
-
-        let relay = CapturedFrameRelay()
-        let frames = relay.frames
-        let sendPump = Task.detached {
-            for await frame in frames {
-                _ = try? await client.send(pcm: frame)
-            }
-        }
-
-        return RadioLink(
+        return assembleLink(
             mode: .m17,
-            connect: { try await client.connect(to: destination) },
-            disconnect: { await client.disconnect() },
-            startTransmit: { try await client.startTransmit() },
-            stopTransmit: { await client.stopTransmit() },
-            transmitState: { client.state },
-            events: events,
-            receivedAudio: client.receivedAudio,
-            sendCapturedFrame: { relay.submit($0) },
-            sendDTMF: { _ in throw M17LinkError.dtmfUnsupported },
-            close: {
-                relay.finish()
-                sendPump.cancel()
-                eventPump.cancel()
-                eventContinuation.finish()
-            })
+            client: client,
+            destination: destination,
+            events: client.events,
+            translate: { RadioLinkEvent($0) },
+            sendDTMF: { _ in throw M17LinkError.dtmfUnsupported })
     }
 
     /// Builds one EchoLink connection's worth of plumbing.
@@ -466,20 +402,46 @@ final class CompositionRoot {
                 port: proxy.port,
                 password: EchoLinkProxyPassword(proxy.password)))
 
+        return assembleLink(
+            mode: .echoLink,
+            client: client,
+            destination: destination,
+            events: client.events,
+            translate: { RadioLinkEvent($0) },
+            sendDTMF: { _ in throw EchoLinkLinkError.dtmfUnsupported })
+    }
+
+    /// The plumbing every mode shares: translated events, a relay for
+    /// captured audio, and a `close` that releases both pumps.
+    ///
+    /// - Parameters:
+    ///   - events: the client's own event stream, translated rather than
+    ///     taken from `NetworkClient.radioEvents` because the app words its
+    ///     events itself (``RadioLinkEvent``).
+    ///   - sendDTMF: not on `NetworkClient`, so each mode supplies it.
+    private static func assembleLink<Client: NetworkClient, Event: Sendable>(
+        mode: RadioMode,
+        client: Client,
+        destination: Client.Destination,
+        events clientEvents: AsyncStream<Event>,
+        translate: @escaping @Sendable (Event) -> RadioLinkEvent?,
+        sendDTMF: @escaping @Sendable (Character) async throws -> Void
+    ) -> RadioLink where Client.Destination: Sendable {
         var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
         let events = AsyncStream<RadioLinkEvent> { eventEscape = $0 }
         let eventContinuation = eventEscape!
 
-        let clientEvents = client.events
         let eventPump = Task.detached {
             for await event in clientEvents {
-                if let translated = RadioLinkEvent(event) {
+                if let translated = translate(event) {
                     eventContinuation.yield(translated)
                 }
             }
             eventContinuation.finish()
         }
 
+        // The audio thread must not await an actor, so captured frames go
+        // through a bounded relay and an ordinary task feeds them in.
         let relay = CapturedFrameRelay()
         let frames = relay.frames
         let sendPump = Task.detached {
@@ -489,7 +451,7 @@ final class CompositionRoot {
         }
 
         return RadioLink(
-            mode: .echoLink,
+            mode: mode,
             connect: { try await client.connect(to: destination) },
             disconnect: { await client.disconnect() },
             startTransmit: { try await client.startTransmit() },
@@ -498,7 +460,7 @@ final class CompositionRoot {
             events: events,
             receivedAudio: client.receivedAudio,
             sendCapturedFrame: { relay.submit($0) },
-            sendDTMF: { _ in throw EchoLinkLinkError.dtmfUnsupported },
+            sendDTMF: sendDTMF,
             close: {
                 relay.finish()
                 sendPump.cancel()

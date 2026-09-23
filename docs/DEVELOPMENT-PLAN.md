@@ -1801,3 +1801,37 @@ No behaviour changes: nothing read any of these.
 
 **Done when:** none of the four names appears in `Sources/` or `Tests/`, and the
 device build and both test destinations pass.
+
+
+### APP-37 — one link assembler, and keep the app's own event wording ✅ DONE 2026-09-23
+**Where:** `currawong`. **Needs:** APP-36.
+
+APP-35 found two code issues in `CompositionRoot`'s link factories. This task
+settles both.
+
+**The duplication is gone.** The three factories repeated the same event pump,
+captured-frame relay and `close` almost line for line. They now build a client
+and destination each and hand both to one generic
+`assembleLink(mode:client:destination:events:translate:sendDTMF:)`. No
+behaviour changes: the same calls, through `NetworkClient` rather than the
+concrete type.
+
+**`radioEvents` stays unused, on purpose.** Moving the factories onto
+`NetworkClient.radioEvents` would have deleted the three translations, but it
+would have changed what the operator sees:
+
+- The library's `.connected` carries no codec, so the status panel's codec
+  name would need a separate path.
+- The app's disconnect prose ("The node ended the call: …") would become the
+  library's.
+- EchoLink's node name would no longer be shown. The app takes it from
+  `nodeAnswered`, which `radioEvents` drops by design, because it arrives
+  inside `connect(to:)`.
+
+Each of these would need checking on air again, and the saving is about 90
+lines of `switch`. The translation is the app choosing its own wording, not a
+gap in the library, and the comments in `CompositionRoot` and `RadioLink` now
+say so.
+
+**Done when:** the three factories share one assembler, and the device build and
+both test destinations pass with no test changes.

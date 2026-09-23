@@ -5,7 +5,8 @@ import RadioCore
 
 /// What the app needs to know about a connection, beyond `TransmitState`:
 /// the vocabulary each client's own `events` are mapped into by the
-/// `CompositionRoot` factories (which do not yet use `NetworkClient.radioEvents`).
+/// `CompositionRoot` factories. Deliberately not `NetworkClient.radioEvents`,
+/// whose wording and coverage are the library's (see `CompositionRoot`).
 enum RadioLinkEvent: Sendable, Equatable {
     /// The call is up. `codec` is the negotiated codec's display name, `nil`
     /// when the far end did not say; shown because an undecodable codec
