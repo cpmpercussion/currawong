@@ -2,15 +2,11 @@
 
 import Foundation
 
-/// One activity's worth of what to show: the parts that cannot change for its
-/// lifetime, and the part that can.
-///
-/// The split mirrors `ActivityKit`'s own — attributes versus content state — but
-/// this type does not import it, so the policy below can be tested on macOS.
+/// One activity's content: the fixed parts and the part that moves, mirroring
+/// ActivityKit's attributes and content state without importing it, so the
+/// policy is testable on macOS.
 struct TransmitActivityRequest: Equatable, Sendable {
-    /// The channel's display name. Changing it means a different radio, so it
-    /// ends one activity and starts another rather than being updated into
-    /// place.
+    /// The channel's display name. A change ends the activity and starts another.
     var channel: String
 
     /// The mode's display name.
@@ -19,20 +15,15 @@ struct TransmitActivityRequest: Equatable, Sendable {
     /// Everything that moves.
     var state: TransmitActivityState
 
-    /// Whether `other` describes the same activity, or a different one that
-    /// would have to be started fresh.
+    /// Whether `other` can be an update to this activity rather than a new one.
     func isSameActivity(as other: TransmitActivityRequest) -> Bool {
         channel == other.channel && mode == other.mode
     }
 }
 
-/// What ``TransmitActivityController`` talks to.
-///
-/// The seam exists for the same reason ``BLECentral`` does: the interesting part
-/// is the state logic, the framework underneath it cannot be driven from a test,
-/// and on macOS it does not exist at all. `ActivityKitPresenter` is the real
-/// conformer; `RecordingActivityPresenter` in the tests is the one the
-/// assertions read.
+/// What ``TransmitActivityController`` talks to: `ActivityKitPresenter` in the
+/// app, a recording fake in the tests. ActivityKit cannot be driven from a test
+/// and does not exist on macOS.
 @MainActor
 protocol TransmitActivityPresenting: AnyObject {
     /// Starts an activity. Called only when none is showing.
@@ -41,46 +32,32 @@ protocol TransmitActivityPresenting: AnyObject {
     /// Updates the one that is showing.
     func update(_ state: TransmitActivityState) async
 
-    /// Ends it, and dismisses it immediately rather than leaving it on the lock
-    /// screen in its final state. A transmit indicator that lingers after the
-    /// transmission is the stale-state hazard SF-4 is most exposed to.
+    /// Ends it and dismisses it immediately: a transmit indicator that lingers
+    /// after the transmission is SF-4's worst stale state.
     func end() async
 
-    /// Ends every activity this app has left running, whether or not this
-    /// process started it.
-    ///
-    /// The app-termination path: a Live Activity outlives the process that
-    /// requested it, so a Currawong killed while transmitting would otherwise
-    /// leave a red banner on the lock screen with nothing behind it. Called
-    /// once at launch, before anything else can start an activity.
+    /// Ends every activity this app has left running, including a previous
+    /// process's: a Live Activity outlives an app killed mid-transmission.
+    /// Called once at launch, before anything can start one.
     func endOrphans() async
 }
 
-/// **SF-4.** Decides when the lock screen shows a transmitter, and — the part
-/// that matters — when it stops.
+/// **SF-4.** Decides when the lock screen shows a transmitter, and when it
+/// stops.
 ///
-/// ``RadioSession`` hands over a single desired value — ``show(_:)`` with a
-/// request, or `nil` for "nothing is on air" — and knows nothing about
-/// activity identity or ordering. Every path that ends transmission (release,
-/// watchdog SF-1, accessory loss SF-2, interruption/route change SF-3,
-/// disconnection) reaches that one call, so there is no per-path teardown to
-/// forget.
+/// ``RadioSession`` passes one desired value to ``show(_:)`` — a request, or
+/// `nil` for nothing on air — from every path that ends transmission (SF-1,
+/// SF-2, SF-3, release, disconnect), so no path has its own teardown to forget.
 ///
-/// The three presenter operations are `async` and must not overtake one
-/// another — an `end()` landing before the `start()` it was meant to cancel
-/// leaves an activity nobody is tracking — so they are chained through a
-/// single task, the shape ``RadioSession/scheduleTransmitWork()`` also uses,
-/// with ``settle()`` for a test to wait on.
-///
-/// ActivityKit budgets updates, so this pushes one per transition rather than
-/// per tick: elapsed and remaining times are rendered by the widget from the
-/// two dates in ``TransmitActivityState``, so a running clock costs nothing.
+/// Presenter calls are chained through one task: an `end()` that overtook the
+/// `start()` it cancels would leave an untracked activity. One update per
+/// transition, not per tick — the widget renders the clocks from
+/// ``TransmitActivityState``'s dates, since ActivityKit budgets updates.
 @MainActor
 final class TransmitActivityController {
     private let presenter: any TransmitActivityPresenting
 
-    /// What the presenter has been asked for, not what the system has got
-    /// around to showing. `nil` means no activity.
+    /// What the presenter has been asked for (not what the system shows yet).
     private(set) var showing: TransmitActivityRequest?
 
     private var work: Task<Void, Never>?
@@ -90,30 +67,21 @@ final class TransmitActivityController {
         self.presenter = presenter
     }
 
-    /// A controller wired to nothing, for the platforms and the tests that want
-    /// no Live Activity at all. The default ``RadioSession`` is built with one
-    /// of these, so nothing gets a lock-screen banner by accident.
+    /// A controller wired to nothing: the default for ``RadioSession``, so no
+    /// test or platform gets a lock-screen banner by accident.
     static var disabled: TransmitActivityController {
         TransmitActivityController(presenter: NullActivityPresenter())
     }
 
-    /// Clears anything a previous run of the app left behind. Call once, at
-    /// launch. See ``TransmitActivityPresenting/endOrphans()``.
-    ///
-    /// Clears ``showing`` too, since `endOrphans()` ends every activity
-    /// including one this controller started — otherwise this object would
-    /// believe a banner is up that has just been taken down, and the next
-    /// ``show(_:)`` with the same content would do nothing.
+    /// Clears what a previous run left behind; call once at launch. Also clears
+    /// ``showing``, or the next identical ``show(_:)`` would be skipped.
     func adopt() {
         showing = nil
         enqueue { [presenter] in await presenter.endOrphans() }
     }
 
-    /// The single entry point: what should be on the lock screen right now.
-    ///
-    /// Idempotent — handed the same value twice it does nothing the second time,
-    /// which is what lets the session call it from every state transition
-    /// without working out which ones matter.
+    /// What should be on the lock screen now. Idempotent, so the session can
+    /// call it on every state transition.
     func show(_ desired: TransmitActivityRequest?) {
         guard let desired else {
             guard showing != nil else { return }
@@ -134,8 +102,8 @@ final class TransmitActivityController {
             showing = desired
             enqueue { [presenter] in await presenter.update(desired.state) }
         } else {
-            // A different radio. End the old one before the new one appears,
-            // rather than leaving two banners to disagree about what is keyed.
+            // A different radio: end the old one first, so two banners never
+            // disagree about what is keyed.
             showing = desired
             enqueue { [presenter] in
                 await presenter.end()
@@ -144,8 +112,7 @@ final class TransmitActivityController {
         }
     }
 
-    /// Waits for every queued presenter call to land. Test support, and the one
-    /// thing a shutdown path needs.
+    /// Waits for every queued presenter call to land.
     func settle() async {
         var seen = -1
         while generation != seen {

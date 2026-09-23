@@ -2,39 +2,18 @@
 
 import SwiftUI
 
-/// What the link is doing, in one box — laid out like a radio's front panel.
+/// What the link is doing, in one box laid out like a radio's front panel: the
+/// destination as the headline, the mode boxed beside it, the address (plus
+/// the codec while connected), the link state, and why the last transmission
+/// or link ended.
 ///
-/// **The destination is the headline**, the way a VFO frequency is the biggest
-/// thing on a rig and the mode is a small box beside it — the connection state
-/// on its own ("Connected") says nothing about connected to *what*, and in the
-/// compact layout the channel list that would answer it is a different tab.
-///
-/// The transmit watchdog is not shown here: it is a *setting* (APP-12 moved it
-/// to the settings screen), and a number that cannot change while it is being
-/// read belongs there, not echoed on a status panel. The live form of SF-1 that
-/// would help an operator — seconds remaining before it unkeys — belongs on the
-/// transmit banner instead, while it is counting; ``ActivityKitPresenter``
-/// already computes that deadline for the Live Activity.
-///
-/// The codec rides on the address line while connected, rather than holding a
-/// line of its own: worth knowing once, on first contact with an unfamiliar
-/// node, and stale the moment the link drops.
-///
-/// The two *events* that remain — why the last transmission stopped, why the
-/// link went away — are transient, answer a question the operator is actually
-/// asking at the moment they appear, and are not visible anywhere else in the
-/// app.
+/// The SF-1 timeout is a setting and is shown on the settings screen, not here.
 struct StatusPanel: View {
     @ObservedObject var session: RadioSession
 
-    /// **APP-18.** The PTT accessory light, or `nil` where there is no room for
-    /// one — the settings screen shows this panel with its own accessory section
-    /// a scroll below it.
-    ///
-    /// Passed as a value rather than observed here, because the two controllers
-    /// it is computed from are already observed by ``SessionPane``: a second
-    /// observer of the same objects buys nothing and makes this panel need to
-    /// know about Bluetooth.
+    /// The PTT accessory light, or `nil` where the screen has its own accessory
+    /// section. A value, so this panel need not observe the Bluetooth
+    /// controllers ``SessionPane`` already observes.
     let accessory: AccessoryIndicator?
 
     private var status: TransmitStatusPresentation {
@@ -62,9 +41,7 @@ struct StatusPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            // The link state and what can key it, on one line: the two things
-            // that decide whether pressing a button will put the operator on
-            // air, side by side and never more than a glance apart.
+            // The link state and what can key it, side by side.
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Circle()
@@ -92,9 +69,7 @@ struct StatusPanel: View {
                 detailLine("Last transmission ended: \(reason.rawValue).")
             }
 
-            // Why the *link* went away, as opposed to why a transmission did.
-            // Only interesting once it has: while a call is up, the previous
-            // call's ending is noise.
+            // Why the last link ended; hidden while a call is up.
             if let reason = session.lastDisconnectReason, !session.connection.isConnected {
                 detailLine("Last disconnect: \(reason)")
             }
@@ -106,18 +81,14 @@ struct StatusPanel: View {
                 .fill(Color.secondary.opacity(0.12)))
     }
 
-    /// The channel the app would dial, named the way the operator named it.
-    ///
-    /// Taken from the working copy rather than the connected link, so an edit in
-    /// progress is reflected here — this says where the PTT button would go,
-    /// which is the question a front panel answers.
+    /// The channel the app would dial. From the working copy, so an edit in
+    /// progress shows here.
     private var destinationName: String {
         let name = session.settings.displayName
         return name.isEmpty ? "No channel" : name
     }
 
-    /// The address under the name, plus the codec while there is a live one to
-    /// report. See the note on the type for why the codec lives here.
+    /// The address, plus the codec while connected.
     private var addressLine: String {
         let address = session.settings.addressDescription
         guard session.connection.isConnected, let codec = session.negotiatedCodec else {
@@ -126,8 +97,7 @@ struct StatusPanel: View {
         return "\(address) · \(codec)"
     }
 
-    /// The mode, boxed, in the place a rig puts FM / SSB / DMR. Same capsule as
-    /// the channel list row, so a channel reads the same in both places.
+    /// The mode, in the same capsule as the channel list row.
     private var modeBadge: some View {
         Text(session.settings.mode.displayName)
             .font(.caption2.weight(.medium))
@@ -143,13 +113,9 @@ struct StatusPanel: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Received-audio activity. Driven by a `TimelineView` rather than a timer
-    /// so the view model stays free of clocks: it answers "is audio arriving
-    /// as of *this* instant", and the timeline supplies instants.
-    ///
-    /// On a shared channel the session also knows *who* — `receivingFrom` is M17
-    /// only, and `nil` everywhere else, so the callsign appears when there is one
-    /// and the indicator says no more than it knows.
+    /// Received-audio activity, and the sender's callsign when known (M17
+    /// only). A `TimelineView` supplies the instants, so the view model needs
+    /// no clock.
     private var receiveIndicator: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { context in
             let active = session.isReceivingAudio(asOf: context.date)

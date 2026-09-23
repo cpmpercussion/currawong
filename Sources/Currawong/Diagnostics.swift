@@ -7,18 +7,12 @@ import OSLog
 import AVFoundation
 #endif
 
-/// **Diagnostic logging for the key path.** Named instruments for `BU-13`,
-/// `BU-14` and `BU-15`, and step 1 of the iOS harmonisation in
-/// `docs/BLUETOOTH-AUDIO.md`.
+/// **Diagnostic logging for the key path** (BU-13, BU-14, BU-15; see
+/// `docs/BLUETOOTH-AUDIO.md`).
 ///
-/// Logs every key-down and key-up, one line each from the main actor, nowhere
-/// near the audio thread — the audio state at that moment
-/// (`AudioPipelineIO.audioStateDescription()`) is otherwise only reachable from
-/// the "Could not transmit" alert, once a failure is already total.
-///
-/// Every line goes to both the unified log and, in `DEBUG` builds, standard
-/// output — `DEBUG` only, so a release build carries the unified-log path and
-/// nothing else.
+/// One line per key-down and key-up, from the main actor, with the audio state
+/// at that moment. Every line goes to the unified log and, in DEBUG builds
+/// only, to standard output.
 ///
 /// * **macOS**: `log stream --predicate 'subsystem == "au.charlesmartin.currawong"' --style compact --info`
 ///   interleaves with the Bluetooth side (`subsystem == "com.apple.bluetooth"`,
@@ -27,17 +21,10 @@ import AVFoundation
 ///   `devicectl device process launch --console` forwards only stdout and
 ///   stderr, not `os_log` lines. Hence the stdout mirror, read with
 ///   `xcrun devicectl device process launch --console --device <name> au.charlesmartin.currawong`.
-///   Console.app also works but is a GUI; this keeps the phone readable from a
-///   terminal.
 ///
-/// **Nothing here changes behaviour.** No branch reads these logs and removing
-/// this file leaves the transmit path identical — an instrument that
-/// participates in the thing it measures is not an instrument.
-/// ``startRouteLogging()`` in particular adds a *second* observer of the
-/// route-change notification, purely to record the reason code the library's
-/// `AudioSessionSignal` does not carry; it must never be the thing that drops
-/// transmit. SF-3 is served by `RadioSession.handle(_:)` and nothing in this
-/// file.
+/// **Nothing here changes behaviour**; no branch reads these logs.
+/// ``startRouteLogging()``'s route-change observer only records reasons and
+/// must never drop transmit — SF-3 is `RadioSession.handle(_:)`'s alone.
 enum Diagnostics {
 
     private static let subsystem = "au.charlesmartin.currawong"
@@ -56,9 +43,8 @@ enum Diagnostics {
         mirror("keying", message)
     }
 
-    /// A key-down that failed. Separate only so it lands at `error` level in the
-    /// unified log, where `info` is a memory buffer that a long session can wrap
-    /// and `error` is not.
+    /// A key-down that failed, at `error` level so a long session's `info`
+    /// buffer cannot wrap it away.
     static func keyingFailure(_ message: String) {
         keyingLog.error("\(message, privacy: .public)")
         mirror("keying", message)
@@ -70,14 +56,8 @@ enum Diagnostics {
         mirror("route", message)
     }
 
-    /// The stdout half — the only thing that makes a phone readable from a
-    /// terminal.
-    ///
-    /// Timestamped, unlike the unified-log half which gets timestamps for
-    /// free: `devicectl`'s console adds none, and this instrument exists to
-    /// answer questions of ordering and duration. Seconds since process start
-    /// rather than a wall clock, since a short relative number is easier to
-    /// subtract by eye.
+    /// The stdout half, timestamped in seconds since launch because
+    /// `devicectl`'s console adds no timestamps.
     private static func mirror(_ category: String, _ message: String) {
         #if DEBUG
         let t = Date().timeIntervalSince(processStart)
@@ -92,29 +72,17 @@ enum Diagnostics {
     // MARK: - Route-change reasons (iOS)
 
     /// Whether ``startRouteLogging()`` has already registered its observer.
-    /// Main-actor isolated rather than locked: the only caller is the
-    /// composition root, on the main actor, once.
     @MainActor private static var isRouteLoggingStarted = false
 
-    /// Begin recording route-change *reasons*, which the library's
-    /// `AudioSessionSignal.routeChanged` does not carry.
-    ///
-    /// `BU-13`'s instrument: an `oldDeviceUnavailable` around an unkey would
-    /// close that item, and no other signal in the app distinguishes it from
-    /// the ordinary A2DP↔HFP swap that keying itself causes (`BU-15`).
-    ///
-    /// Idempotent, and registers no observer on macOS, which has no
-    /// `AVAudioSession` — there the equivalent signal is
-    /// `AVAudioEngineConfigurationChange`, which the library already observes
-    /// on both platforms and reaches ``RadioSession`` as `.routeChanged`.
+    /// Begins logging route-change *reasons*, which the library's
+    /// `AudioSessionSignal.routeChanged` does not carry (BU-13). Idempotent; a
+    /// no-op on macOS, which has no `AVAudioSession`.
     @MainActor
     static func startRouteLogging() {
         guard !isRouteLoggingStarted else { return }
         isRouteLoggingStarted = true
 
-        // Confirms "the instrument is live" before going on air, rather than
-        // inferring it from silence afterwards — the failure mode these items
-        // already suffer from.
+        // Proves the instrument is live, rather than leaving silence ambiguous.
         keying("diagnostics started: \(platform)")
 
         #if os(iOS)
@@ -139,8 +107,7 @@ enum Diagnostics {
         #endif
     }
 
-    /// Which route-change machinery is actually in play, since it differs by
-    /// platform and that difference is the subject of `BLUETOOTH-AUDIO.md`.
+    /// Which route-change machinery is in play on this platform.
     private static var platform: String {
         #if os(iOS)
         return "iOS, AVAudioSession route reasons logged"
@@ -150,8 +117,7 @@ enum Diagnostics {
     }
 
     #if os(iOS)
-    /// The reason code as the word `BU-13` is looking for, rather than a number
-    /// nobody can read at 2 a.m. on a hilltop.
+    /// The reason code as a readable word.
     private static func name(of reason: AVAudioSession.RouteChangeReason?) -> String {
         switch reason {
         case .newDeviceAvailable: return "newDeviceAvailable"
