@@ -1778,3 +1778,26 @@ Code issues it found, for a separate task:
   frame relay and `close` block almost line for line.
 - The link factories map each client's `events` rather than `radioEvents`
   (above).
+
+
+### APP-36 — remove the unused code APP-35 found ✅ DONE 2026-09-23
+**Where:** `currawong`. **Needs:** APP-35.
+
+APP-35 found four declarations with no reader. APP-36 removes them, plus the test
+scaffolding that existed only to feed one of them:
+
+- `RadioSession.repairQuietPeriodAfterTransmit`, a deprecated constant withdrawn
+  under BU-14. Its "do not reinstate" warning is now one comment in
+  `isIdleForAccessoryRepair`. That comment points at
+  `testARouteChangeJustAfterAnOverDoesAskForARepair`, the test that actually
+  holds the rule.
+- `RadioSession.lastTransmitEndedAt`, which only that quiet period read.
+- `BLEPTTController.lastRepairAt`, together with the injected `now` clock that
+  only it used, and `BLEPTTControllerTests.TestClock`, which no test ever
+  advanced.
+- `RootView.connectTitle`.
+
+No behaviour changes: nothing read any of these.
+
+**Done when:** none of the four names appears in `Sources/` or `Tests/`, and the
+device build and both test destinations pass.
