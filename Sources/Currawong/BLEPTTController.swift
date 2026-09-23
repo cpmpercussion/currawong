@@ -105,9 +105,6 @@ final class BLEPTTController: ObservableObject {
     /// Injected so a test does not wait real seconds between retries.
     private let retryDelay: @Sendable () async -> Void
 
-    /// The clock, injected so a test does not wait real seconds for a cooldown.
-    private let now: @Sendable () -> Date
-
     /// Whether a rebuild is safe now, asked of ``RadioSession``. A rebuild
     /// disconnects, and SF-2 makes a disconnection unkey; this controller cannot
     /// see the on-screen button, so it asks every time. `nil` means yes: nothing
@@ -124,8 +121,6 @@ final class BLEPTTController: ObservableObject {
 
     private var consecutiveFailures = 0
     private var isScanning = false
-
-    private var lastRepairAt: Date?
 
     /// How long to wait for a probe's answer. CoreBluetooth never times a read
     /// out, so on a dead link silence is the only answer; a second is ample for
@@ -161,7 +156,6 @@ final class BLEPTTController: ObservableObject {
         retryDelay: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         },
-        now: @escaping @Sendable () -> Date = Date.init,
         probeDeadline: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -169,7 +163,6 @@ final class BLEPTTController: ObservableObject {
         self.makeCentral = makeCentral
         self.store = store
         self.retryDelay = retryDelay
-        self.now = now
         self.probeDeadline = probeDeadline
         self.mapping = store.loadMapping()
     }
@@ -418,7 +411,6 @@ final class BLEPTTController: ObservableObject {
             return
         }
 
-        lastRepairAt = now()
         repairAttempts += 1
         isRebuildInFlight = true
         hasProbeBeenIssued = false

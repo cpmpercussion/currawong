@@ -450,15 +450,6 @@ struct RootView: View {
             received: session.receivedDTMF,
             send: { digit in Task { await session.sendDTMF(digit) } })
     }
-
-    private var connectTitle: String {
-        switch session.connection {
-        case .disconnected: return "Connect"
-        case .connecting: return "Connecting…"
-        case .connected: return "Disconnect"
-        case .disconnecting: return "Disconnecting…"
-        }
-    }
 }
 
 /// One centred reading width, shared by every pane in this file.
