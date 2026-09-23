@@ -1120,42 +1120,16 @@ final class RadioSession: ObservableObject {
         settingsStore.saveIdentity(identity)
     }
 
-    /// **`Add channel`.** Points the draft at a new, blank channel — and writes
+    /// **`Add channel`.** Points the draft at a new, blank channel, and writes
     /// nothing to the list.
     ///
-    /// ## APP-19
+    /// Identical to ``chooseChannel(_:)`` otherwise: the channel reaches the
+    /// list when it is saved or connected to (BU-9's rule, APP-19). So a new
+    /// channel that is neither saved nor connected does not survive a quit, and
+    /// the form says so ("Not saved") as soon as there is anything to lose.
     ///
-    /// This used to add the blank channel to the list, select it and persist it,
-    /// on the reasoning that "adding is itself the operator asking". It is the
-    /// only place in the app that could put an empty channel into storage, and it
-    /// did: **one tap of `+` left a permanent "Unnamed channel" with no host,
-    /// which nothing could connect to and only Delete could remove.** Nothing
-    /// warned about it either — ``isDraftAnUnsavedChannel`` is false for a row
-    /// that *is* in the list, so the form's own "Not saved" line stayed dark and
-    /// Save stayed disabled, because a blank draft equal to a blank stored
-    /// channel is not dirty.
-    ///
-    /// The rows the 2026-08-20 handoff called "leftovers of an older run" were
-    /// exactly this: the on-air UI tests click `Add channel` against the real
-    /// defaults, and a run that died between the click and the naming left one
-    /// behind every time.
-    ///
-    /// So `+` now does what a directory browse does — see ``chooseChannel(_:)``,
-    /// which this is otherwise identical to. **The channel reaches the list when
-    /// it is saved or connected to**, which is BU-9's rule with nothing carved
-    /// out of it: a channel is a working copy, Save is the only thing that
-    /// overwrites one, and connecting adds where it went.
-    ///
-    /// The cost, stated plainly: a new channel that is typed into and neither
-    /// saved nor connected **does not survive a quit**, exactly as a reflector
-    /// picked out of the directory does not. That is the trade BU-9 already
-    /// accepted for browsing, and the form says so on screen — "Not saved.
-    /// Connecting will add this to your channels" — as soon as there is anything
-    /// to lose.
-    ///
-    /// Still refused while connected, for the reason ``select(_:)`` is: it moves
-    /// where the form is pointed, and doing that mid-call would leave the form
-    /// describing one place and the audio coming from another.
+    /// Refused while connected, as ``select(_:)`` is: the form would describe
+    /// one channel while the audio came from another.
     ///
     /// - Returns: the new channel's id, or `nil` if a link is up and nothing
     ///   changed.

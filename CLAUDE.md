@@ -77,3 +77,27 @@ make generate && make build && make test
 
 Both must be green before you open a PR. One task per branch (`task/app-2`),
 one PR per task.
+
+## Comments
+
+Comments describe the code as it is now: what it does, and why it has to be
+that way when the code cannot say so itself. Aim for a comment a reader needs,
+not the account of how the code got here.
+
+- **History goes in the commit message or `docs/BRINGUP.md`**, never in a
+  comment. No "this used to…", no failed fixes, no dates, no "found on air".
+  `git log -S` finds the story; a comment that retells it goes stale.
+- **Cite IDs as pointers.** A requirement ID (`SF-*`, `PD-*`, `FR-*`, `PT-*`)
+  belongs wherever it constrains the code. A task or fault ID (`APP-*`,
+  `BU-*`) may point at where the decision is recorded, with no story attached.
+- **Safety reasoning keeps its explanation** (SF-1 to SF-4, anything that could
+  leave a transmitter keyed), even at length. So does a non-obvious trap, such
+  as a SwiftUI identity that unkeys the radio if it changes, in a line or two.
+- **A claim about the library must be true of the pinned version.** Check it
+  there rather than repeating what an older comment said.
+- Doc comments open with one sentence saying what the thing is. Anything more
+  is for a reader who will change the code.
+
+A change that only touches comments must pass `scripts/comment-only-diff.py`
+(against the base branch), which fails if any code changed. Keep such changes
+out of PRs that change code.
