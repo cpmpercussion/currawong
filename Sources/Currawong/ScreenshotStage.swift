@@ -12,12 +12,11 @@ import AppKit
 /// opens no socket, and audio that touches no microphone or speaker.
 ///
 /// Chosen by launch argument, and only honoured together with a throwaway
-/// defaults suite (``DefaultsSuite``), because the stage writes its channels
-/// and identity into whatever suite it is given:
+/// defaults suite (``DefaultsSuite``), because the stage empties that suite
+/// and writes its channels and identity into it:
 ///
 /// ```sh
 /// Currawong -currawong-defaults-suite au.charlesmartin.currawong.screenshots \
-///           -currawong-defaults-reset YES \
 ///           -currawong-screenshot-scene transmitting \
 ///           -currawong-appearance dark
 /// ```
@@ -105,7 +104,14 @@ struct ScreenshotStage {
     /// A composition root over the seeded suite, the fake link and fake audio.
     @MainActor
     func makeRoot() -> CompositionRoot {
-        let store = UserDefaultsSettingsStore(defaults: DefaultsSuite.resolved)
+        let defaults = DefaultsSuite.resolved
+        // Key by key rather than `-currawong-defaults-reset`: on a freshly
+        // booted simulator the domain removal has landed after the writes
+        // below and left the channel list empty.
+        for key in defaults.dictionaryRepresentation().keys {
+            defaults.removeObject(forKey: key)
+        }
+        let store = UserDefaultsSettingsStore(defaults: defaults)
         store.saveChannels(Self.channels)
         store.saveSelectedChannelID(selectedChannel.id)
         store.saveIdentity(Self.identity)
@@ -135,9 +141,14 @@ struct ScreenshotStage {
         // After the window exists, which the first `task` can precede.
         try? await Task.sleep(nanoseconds: 300_000_000)
         applyWindowAppearance()
+        Task { await Self.keepAutoFillPanelsHidden() }
         #endif
         guard scene != .channels else { return }
         await session.connect()
+        // `connected` arrives as a link event, after `connect()` returns.
+        while !session.connection.isConnected {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
         if scene == .transmitting {
             session.beginTransmit()
         }
@@ -162,6 +173,25 @@ struct ScreenshotStage {
                 x: visible.midX - size.width / 2, y: visible.midY - size.height / 2,
                 width: size.width, height: size.height),
             display: true)
+    }
+
+    /// Hides AppKit's one-time-code AutoFill panel whenever it appears.
+    ///
+    /// BU-11: macOS offers it, empty, on the first text field of a window in
+    /// an app signed with Keychain entitlements, and there is no public way to
+    /// opt a field out. It is our process's window even though its content is
+    /// remote, and a window screenshot captures it, so the stage keeps it out
+    /// of the way for as long as it runs. `AppStoreScreenshots` also refuses
+    /// to capture while it is on screen.
+    @MainActor
+    private static func keepAutoFillPanelsHidden() async {
+        while !Task.isCancelled {
+            for window in NSApp.windows
+            where window.isVisible && NSStringFromClass(type(of: window)).contains("SPRoundedWindow") {
+                window.orderOut(nil)
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
     #endif
 }
