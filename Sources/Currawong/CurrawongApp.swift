@@ -17,7 +17,14 @@ struct CurrawongApp: App {
     /// re-initialised whenever SwiftUI re-creates the value — and re-creating
     /// the composition root would mean re-creating the view model, and with it
     /// any call in progress.
-    @State private var root = CompositionRoot()
+    @State private var root = CurrawongApp.makeRoot()
+
+    private static func makeRoot() -> CompositionRoot {
+        #if DEBUG
+        if let stage = ScreenshotStage.current { return stage.makeRoot() }
+        #endif
+        return CompositionRoot()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -36,7 +43,7 @@ struct CurrawongApp: App {
     /// macOS 13 guarantees.
     @ViewBuilder
     private var content: some View {
-        let view = RootView(
+        let base = RootView(
             session: root.session,
             accessory: root.accessory,
             remoteCommand: root.remoteCommand,
@@ -48,7 +55,18 @@ struct CurrawongApp: App {
             // The PTT input controllers, once, for the process. `RootView`
             // starts the session's own SF-3 observation itself, so
             // `activate()` is idempotent and the two overlap harmlessly.
-            .task { root.activate() }
+            .task {
+                root.activate()
+                #if DEBUG
+                await ScreenshotStage.current?.perform(on: root.session)
+                #endif
+            }
+
+        #if DEBUG
+        let view = base.preferredColorScheme(ScreenshotStage.current?.colorScheme)
+        #else
+        let view = base
+        #endif
 
         #if os(macOS)
         // A floor rather than a preference: below this the split view's detail

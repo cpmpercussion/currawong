@@ -36,11 +36,27 @@ struct RootView: View {
 
     /// Which of the detail column's secondary panes is showing. Split layout
     /// only; the tab layout uses tabs for the same choice.
-    @State private var detailPane: DetailPane = .connect
+    @State private var detailPane: DetailPane = RootView.initialDetailPane
 
     /// Which tab is showing. Compact layout only; the split layout uses
     /// ``detailPane`` for the same choice.
-    @State private var selectedTab: Tab = .channels
+    @State private var selectedTab: Tab = RootView.initialTab
+
+    /// Where the panes open: Connect and Channels, unless a screenshot scene
+    /// (``ScreenshotStage``) says otherwise.
+    private static var initialDetailPane: DetailPane {
+        #if DEBUG
+        if let stage = ScreenshotStage.current { return stage.detailPane }
+        #endif
+        return .connect
+    }
+
+    private static var initialTab: Tab {
+        #if DEBUG
+        if let stage = ScreenshotStage.current, stage.opensOnSessionTab { return .session }
+        #endif
+        return .channels
+    }
 
     /// Whether the Channels tab has the details form pushed. Tab layout only.
     @State private var showsChannelDetails = false
