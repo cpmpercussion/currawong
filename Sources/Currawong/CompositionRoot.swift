@@ -93,7 +93,11 @@ final class CompositionRoot {
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
         portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin(),
         // `nil` for the same isolation reason.
-        activity: TransmitActivityController? = nil
+        activity: TransmitActivityController? = nil,
+        // The screenshot stage's fake link (``ScreenshotStage``); `nil` builds
+        // the real clients below.
+        makeLink: RadioSession.LinkFactory? = nil,
+        resolver: any HostResolver = SystemHostResolver()
     ) {
         // Diagnostic route-change reasons (BU-13). Here, not in the lazily built
         // pipeline, so changes before the first key-down are logged too.
@@ -106,7 +110,7 @@ final class CompositionRoot {
             audio: audio,
             settingsStore: settingsStore,
             secretStore: secretStore,
-            makeLink: { settings, identity, credentials, transmitTimeout, proxy in
+            makeLink: makeLink ?? { settings, identity, credentials, transmitTimeout, proxy in
                 switch settings.mode {
                 case .allStarLink:
                     return CompositionRoot.makeIAX2Link(
@@ -125,6 +129,7 @@ final class CompositionRoot {
                 }
             },
             releaseProxyLease: { proxyPicker.releaseLease() },
+            resolver: resolver,
             // **SF-4.** The lock-screen transmit indicator.
             activity: activity ?? CompositionRoot.makeActivityController())
         // Same suite as the settings store, so a UI test isolates both.

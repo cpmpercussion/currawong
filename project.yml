@@ -367,7 +367,33 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Currawong
 
+  # The App Store screenshots (APP-39). Its own scheme, like the on-air target,
+  # so `make test` never runs it; `make screenshots` does. Transmits nothing:
+  # the app's screenshot stage replaces every link with a local fake.
+  CurrawongScreenshots:
+    type: bundle.ui-testing
+    supportedDestinations: [macOS, iOS]
+    sources:
+      - Tests/CurrawongScreenshots
+    dependencies:
+      - target: Currawong
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: au.charlesmartin.currawong.screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Currawong
+
 schemes:
+  CurrawongScreenshots:
+    build:
+      targets:
+        Currawong: [test]
+        CurrawongScreenshots: [test]
+    test:
+      targets:
+        - CurrawongScreenshots
+      gatherCoverageData: false
+
   # The on-air test's own scheme. `make test` uses the Currawong scheme, which
   # does not list this target, so the two cannot be run by accident.
   CurrawongOnAir:

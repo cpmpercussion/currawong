@@ -9,6 +9,7 @@
 #   make build-macos  build for macOS
 #   make test         run the unit tests on an iOS simulator
 #   make test-macos   run the unit tests on macOS
+#   make screenshots  App Store screenshots into build/screenshots (APP-39)
 #   make resolved     refresh the committed Package.resolved pin (Xcode Cloud)
 #   make clean        remove generated project and build output
 #   make distclean    ...and any local build tree
@@ -57,7 +58,7 @@ XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIV
 # The dependency pin Xcode Cloud reads; see the `resolved` target.
 PINNED_RESOLVED := ci_scripts/Package.resolved
 
-.PHONY: all generate build build-macos test test-macos asan-macos resolved clean distclean simulator
+.PHONY: all generate build build-macos test test-macos asan-macos screenshots resolved clean distclean simulator
 
 all: build test
 
@@ -104,6 +105,11 @@ asan-macos: $(PROJECT)
 	@ASAN_OPTIONS=detect_leaks=0 \
 	  "$$($(XCB) -destination '$(MACOS_DEST)' -showBuildSettings 2>/dev/null \
 	    | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $$2}' | head -1)/Currawong.app/Contents/MacOS/Currawong"
+
+# Every screenshot scene, light and dark, on the iOS simulators and macOS.
+# See scripts/screenshots.sh for the devices and how to pick one platform.
+screenshots: $(PROJECT)
+	scripts/screenshots.sh
 
 # Xcode Cloud resolves with automatic resolution disabled, so it needs a
 # Package.resolved and will not compute one. That file lives inside the
