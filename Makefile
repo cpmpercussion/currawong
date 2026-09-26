@@ -58,7 +58,7 @@ XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIV
 # The dependency pin Xcode Cloud reads; see the `resolved` target.
 PINNED_RESOLVED := ci_scripts/Package.resolved
 
-.PHONY: all generate build build-macos test test-macos asan-macos screenshots resolved clean distclean simulator
+.PHONY: all generate build build-macos test test-macos asan-macos screenshots release-macos resolved clean distclean simulator
 
 all: build test
 
@@ -110,6 +110,13 @@ asan-macos: $(PROJECT)
 # See scripts/screenshots.sh for the devices and how to pick one platform.
 screenshots: $(PROJECT)
 	scripts/screenshots.sh
+
+# The Mac direct download (APP-40): a Developer ID signed, notarised DMG in
+# build/release-macos/, for attaching to a GitHub release. Needs the Developer
+# ID certificate and notarytool credentials; the script's header lists both.
+# Pass ARGS=--skip-notarize to stop after signing and verifying.
+release-macos:
+	scripts/release-macos.sh $(ARGS)
 
 # Xcode Cloud resolves with automatic resolution disabled, so it needs a
 # Package.resolved and will not compute one. That file lives inside the
