@@ -1464,9 +1464,8 @@ by *selecting* the right one. The start condition is a tag change matching
   ITMS-90296 and the cloud has now shown it. So Mac TestFlight is a route that
   works today, not one that would work if wanted. What Xcode Cloud still does
   not cover is `PD-5`'s *other* half: Developer ID plus notarisation, for a Mac
-  build distributed outside the App Store. That stays separate, most likely as
-  an extension of `.github/workflows/ci.yml`, and it is a distribution channel
-  rather than a blocker.
+  build distributed outside the App Store. **That is `APP-40`**, a local script
+  rather than a CI job, and it is a distribution channel rather than a blocker.
 - **The terminal-first rule.** Xcode Cloud workflows are configured in Xcode or
   App Store Connect and have no terminal equivalent, which is a real exception
   to the rule in `CLAUDE.md` and is taken deliberately. Everything that *can*
@@ -1872,3 +1871,47 @@ and the licence notice's wording. A change to any of those is a change to
 **Done when:** the three pages are merged, Pages is enabled for `main` ▸
 `/docs` with the site live at the URL above, and all four URLs are entered in
 App Store Connect.
+
+### APP-40 — a notarised Mac download on GitHub releases
+**Where:** `currawong`, `scripts/`. **Raised by:** the maintainer, 2026-09-26,
+closing `#43` (`APP-26`) as superseded: most of that PR was LGPL §6 compliance
+for an embedded `Codec2.xcframework`, which `APP-31` removed.
+
+`PD-5`'s Developer ID half. TestFlight reaches testers Apple lets in; a
+notarised DMG on a GitHub release reaches anyone with a Mac, which suits a
+pre-production app. It is the same route IMPSY-AUv3 releases by.
+
+**It runs locally, not in CI.** `scripts/release-macos.sh` (`make
+release-macos`) regenerates, archives the `Currawong` scheme, exports with
+`method=developer-id`, verifies, notarises and staples the app, and then builds,
+signs, notarises and staples a DMG with an `/Applications` link. The signing
+identity and notary credentials never leave the maintainer's machine, and a
+release that can only be built in CI can only be debugged in CI. The notary
+profile defaults to `IMPSY_NOTARY`: a profile is an Apple ID and team, not an
+app.
+
+Two project changes:
+
+- **`ENABLE_HARDENED_RUNTIME[sdk=macosx*]: YES`.** Notarisation requires it,
+  and the App Store accepts it, so both routes ship one binary. Its microphone
+  exception is the `device.audio-input` key APP-32 already added.
+- **The export embeds a Developer ID provisioning profile** (`Mac Team Direct
+  Provisioning Profile`, created by `-allowProvisioningUpdates`). The script
+  refuses to continue without it. `keychain-access-groups` is restricted, and
+  `APP-26` found that a bundle claiming it without a profile verifies cleanly
+  and is then SIGKILLed on launch.
+
+The script also refuses a build that is not Developer ID signed, lacks the
+Hardened Runtime, has lost the sandbox or keychain entitlement, or was built
+against the path dependency.
+
+**Measured 2026-09-26, at 0.2.1:** a universal (arm64 + x86_64) app with the
+profile embedded. It launches from the export folder. Notary service accepted
+both the app and the DMG; `spctl` assesses both as *Notarized Developer ID*.
+
+**Not covered:** Sparkle-style updates (a direct-download user is told about
+new versions by nobody), an x86_64 on-air test, and a mention of the download
+on the website.
+
+**Done when:** the script is merged and a GitHub release carries a DMG it
+built.

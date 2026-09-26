@@ -291,6 +291,15 @@ targets:
         # two files; read those before changing either.
         CODE_SIGN_ENTITLEMENTS: Sources/Currawong/Currawong.entitlements
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Sources/Currawong/Currawong-macOS.entitlements
+
+        # **APP-40.** Apple's notary service refuses a Developer ID build
+        # without the Hardened Runtime, and `scripts/release-macos.sh` checks
+        # for it before submitting. The Mac App Store accepts it too, so the
+        # two distribution routes build the same binary. The one runtime
+        # exception the app needs, the microphone, is already in the macOS
+        # entitlements: `com.apple.security.device.audio-input` is the same
+        # key for the sandbox and the Hardened Runtime.
+        "ENABLE_HARDENED_RUNTIME[sdk=macosx*]": YES
     scheme:
       testTargets:
         - CurrawongTests
