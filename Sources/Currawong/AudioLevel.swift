@@ -103,6 +103,125 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 }
 
+/// How one over sounded, as a single word and the level behind it.
+struct OverVerdict: Equatable, Sendable {
+    /// Where the over sat, on the transmit meter's own scale.
+    let zone: LevelMeterView.Zone
+
+    /// The level the loudest tenth of the over reached, in dBFS.
+    let decibels: Double
+
+    /// What to do about it, given the gain the over was sent with. `nil` when
+    /// the level was good. The gain decides the wording because a slider
+    /// already at its end cannot be moved further.
+    func advice(gain: TransmitGain) -> String? {
+        switch zone {
+        case .good:
+            return nil
+        case .silent:
+            return "No sound reached the microphone."
+        case .low:
+            return gain.decibels < TransmitGain.range.upperBound
+                ? "Raise the microphone gain, or speak closer."
+                : "Speak closer to the microphone."
+        case .hot, .clipping:
+            return gain.decibels > TransmitGain.range.lowerBound
+                ? "Lower the microphone gain."
+                : "Speak more softly, or further from the microphone."
+        }
+    }
+}
+
+/// Collects one over's frame peaks so it can be judged as a whole, which a
+/// decaying meter cannot do.
+///
+/// ``note(_:)`` runs on the real-time capture thread beside
+/// ``AudioLevelMeter/note(_:)`` and keeps to the same rules: a short
+/// uncontended lock, and a fixed histogram so nothing is allocated.
+final class OverLevelAccumulator: @unchecked Sendable {
+    /// Fewer frames than this above the floor is too little speech to judge:
+    /// about half a second at 20 ms a frame.
+    static let minimumFrames = 25
+
+    /// This many clipped frames make the over clipping, however the rest sat.
+    /// More than one, so a single plosive does not decide it.
+    static let clippedFramesForClipping = 3
+
+    /// The share of frames louder than the level reported. Speech is mostly
+    /// gaps and quiet syllables, so the verdict follows its loud tenth, which
+    /// is what the meter's zones were drawn for.
+    static let loudShare = 0.1
+
+    /// One bin per decibel from the meter's floor up to full scale.
+    private static let binCount = Int(-AudioLevelMeter.floorDB) + 1
+
+    private let lock = NSLock()
+    private var bins = [Int](repeating: 0, count: OverLevelAccumulator.binCount)
+    private var framesAboveFloor = 0
+    private var framesInAll = 0
+    private var clippedFrames = 0
+
+    /// Records one frame's peak. **Called on the audio thread.**
+    func note(_ frame: [Int16]) {
+        var peak: Int32 = 0
+        for sample in frame {
+            let magnitude = Int32(sample.magnitude)
+            if magnitude > peak { peak = magnitude }
+        }
+        let db = AudioLevelMeter.decibels(forPeak: peak)
+
+        lock.lock()
+        framesInAll += 1
+        if db > AudioLevelMeter.floorDB {
+            framesAboveFloor += 1
+            let bin = min(Int(db - AudioLevelMeter.floorDB), Self.binCount - 1)
+            bins[bin] += 1
+        }
+        if peak >= AudioLevelMeter.clipThreshold { clippedFrames += 1 }
+        lock.unlock()
+    }
+
+    /// Empties it for the next over.
+    func reset() {
+        lock.lock()
+        for index in bins.indices { bins[index] = 0 }
+        framesAboveFloor = 0
+        framesInAll = 0
+        clippedFrames = 0
+        lock.unlock()
+    }
+
+    /// The over so far, judged. `nil` when it was too short to say anything.
+    func verdict() -> OverVerdict? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard framesAboveFloor >= Self.minimumFrames else {
+            // Long enough to have spoken, and nothing but silence arrived.
+            return framesInAll >= Self.minimumFrames * 2 && framesAboveFloor == 0
+                ? OverVerdict(zone: .silent, decibels: AudioLevelMeter.floorDB)
+                : nil
+        }
+
+        // Walk down from the top until the loud share has been passed.
+        let wanted = max(1, Int((Double(framesAboveFloor) * Self.loudShare).rounded(.up)))
+        var seen = 0
+        var level = AudioLevelMeter.floorDB
+        for bin in bins.indices.reversed() {
+            seen += bins[bin]
+            if seen >= wanted {
+                level = AudioLevelMeter.floorDB + Double(bin)
+                break
+            }
+        }
+
+        let zone: LevelMeterView.Zone =
+            clippedFrames >= Self.clippedFramesForClipping
+            ? .clipping : LevelMeterView.Zone(decibels: level)
+        return OverVerdict(zone: zone, decibels: level)
+    }
+}
+
 /// A gain setting behind a lock, written on the main actor and read per frame
 /// off it: by the capture tap for transmit, by a detached task for receive.
 /// A box rather than a snapshot at key-down, so the slider works mid-over.
