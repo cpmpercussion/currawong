@@ -128,6 +128,50 @@ struct LevelMeterView: View {
     }
 }
 
+/// How the last over sounded, in one word, with what to do when it was not
+/// good. Under the transmit meter, where the gain that fixes it is.
+struct OverVerdictView: View {
+    let verdict: OverVerdict
+    let gain: TransmitGain
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Last over: \(verdict.zone.verdictName)")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(verdict.zone.verdictColour)
+            if let advice = verdict.advice(gain: gain) {
+                Text(advice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension LevelMeterView.Zone {
+    /// The one word for an over that sat here.
+    var verdictName: String {
+        switch self {
+        case .silent: return "silent"
+        case .low: return "too quiet"
+        case .good: return "good"
+        case .hot: return "hot"
+        case .clipping: return "clipping"
+        }
+    }
+
+    /// As ``colour``, except that too quiet and silent are faults in a
+    /// verdict where they are only absence on a meter.
+    var verdictColour: Color {
+        switch self {
+        case .silent, .low: return .orange
+        default: return colour
+        }
+    }
+}
+
 /// The transmit and receive meters, each with its gain slider under it.
 /// Together, so the operator can tell a problem they can fix from the other
 /// station's.
@@ -145,6 +189,10 @@ struct LevelMetersView: View {
                 isActive: session.isTransmitting)
 
             gain
+
+            if let verdict = session.lastOverVerdict, !session.isTransmitting {
+                OverVerdictView(verdict: verdict, gain: session.transmitGain)
+            }
 
             LevelMeterView(
                 label: "Receive",

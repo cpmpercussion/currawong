@@ -179,6 +179,14 @@ final class RadioSession: ObservableObject {
     /// views poll it. See ``AudioLevelMeter``.
     let transmitMeter = AudioLevelMeter()
 
+    /// How the last over sounded, set when it ends and cleared when the next
+    /// one starts. `nil` when there has been none, or it was too short to
+    /// judge.
+    @Published private(set) var lastOverVerdict: OverVerdict?
+
+    /// The current over's levels, fed beside ``transmitMeter``.
+    private let overLevel = OverLevelAccumulator()
+
     /// What is arriving from the far end.
     let receiveMeter = AudioLevelMeter()
 
@@ -1150,6 +1158,7 @@ final class RadioSession: ObservableObject {
         safetyNotice = nil
         // An operator press, not an automatic resume, starts a fresh hold.
         if !isHolding {
+            lastOverVerdict = nil
             automaticResumes = 0
             keyDownsInCurrentHold = 0
             routeSignalsDuringPreparation = 0
@@ -1182,6 +1191,9 @@ final class RadioSession: ObservableObject {
                     + "held=\(isHolding)")
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
+            // The microphone is closed above, so the over is complete. A
+            // route change is not its end: the hold resumes.
+            if reason != .routeChanged { lastOverVerdict = overLevel.verdict() }
         }
         if !reason.leavesTheHoldAlive {
             isHolding = false
@@ -1268,12 +1280,15 @@ final class RadioSession: ObservableObject {
                 let gainBox = self.gainBox
                 let meter = transmitMeter
                 let onAir = OnAirGate()
+                let overLevel = self.overLevel
                 transmitMeter.reset()
+                overLevel.reset()
                 trace("mic")
                 try audio.startCapture { frame in
                     guard onAir.isOpen else { return }
                     let amplified = gainBox.gain.apply(to: frame)
                     meter.note(amplified)
+                    overLevel.note(amplified)
                     link.sendCapturedFrame(amplified)
                 }
 

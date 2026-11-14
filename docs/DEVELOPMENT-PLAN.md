@@ -2381,6 +2381,19 @@ is new, and the destination is a convenience on top.
 **Done when:** after an over the operator is told in one word how they
 sounded, and the thresholds are tested against recorded levels.
 
+**The smallest version was implemented 2026-11-15.** `OverLevelAccumulator`
+collects frame peaks beside the transmit meter; `RadioSession.lastOverVerdict`
+is set when an over ends and cleared on the next press; `OverVerdictView`
+shows it under the meter. The verdict is the level the loudest tenth of
+frames reached, on the meter's zones; three clipped frames make it clipping;
+under half a second of sound gets none.
+
+**Not done.** The thresholds are tested with synthetic frames, **not recorded
+levels**, and have not been tuned on air, so the second half of "done when"
+is still owed. The view has not been looked at on a device. The larger
+version, a "Check my audio" entry that dials an echo destination, is not
+started.
+
 ### APP-49 — a saved channel says whether anyone is there
 **Where:** `currawong`. **Prompted by:** QSO One 4.2.0's favourites list with
 live activity.
