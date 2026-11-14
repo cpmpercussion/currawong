@@ -86,7 +86,7 @@ final class BU15FirstOverUITests: XCTestCase {
 
     /// Long enough to contain the whole escalation dance — the residual cost
     /// recorded under `BU-17` is about a second — with room either side, and
-    /// nowhere near SF-1's 180 s watchdog.
+    /// nowhere near SF-1's 60 s default watchdog.
     private let overDuration: TimeInterval = 6
 
     override func setUp() {

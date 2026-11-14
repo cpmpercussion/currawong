@@ -11,9 +11,17 @@ import XCTest
 /// timeout is not worth refusing to connect over, and refusing would be a safety
 /// feature that prevents transmitting at all.
 final class TransmitTimeoutTests: XCTestCase {
-    func testTheDefaultIsThreeMinutes() {
-        XCTAssertEqual(TransmitTimeout.default.seconds, 180)
-        XCTAssertEqual(TransmitTimeout.default.wholeSeconds, 180)
+    func testTheDefaultIsOneMinute() {
+        XCTAssertEqual(TransmitTimeout.default.seconds, 60)
+        XCTAssertEqual(TransmitTimeout.default.wholeSeconds, 60)
+    }
+
+    /// The ceiling is a common repeater time-out timer. A limit stored when the
+    /// ceiling was higher comes back as the ceiling, never as the old value.
+    func testTheLongestTimeoutIsThreeMinutes() {
+        XCTAssertEqual(TransmitTimeout.range.upperBound, 180)
+        XCTAssertEqual(TransmitTimeout(seconds: 300).seconds, 180)
+        XCTAssertEqual(TransmitTimeout(seconds: 180).seconds, 180)
     }
 
     func testAnOutOfRangeTimeoutIsClamped() {
@@ -46,10 +54,10 @@ final class TransmitTimeoutTests: XCTestCase {
     }
 
     /// Typed rather than rejected: the settings field accepts `9999` and lands on
-    /// ten minutes, instead of refusing the keystroke and leaving the operator
+    /// three minutes, instead of refusing the keystroke and leaving the operator
     /// unable to finish typing.
     func testAnOutOfRangeTypedValueParsesAndClamps() {
-        XCTAssertEqual(TransmitTimeout.parse("9999"), TransmitTimeout(seconds: 600))
+        XCTAssertEqual(TransmitTimeout.parse("9999"), TransmitTimeout(seconds: 180))
         XCTAssertEqual(TransmitTimeout.parse("1"), TransmitTimeout(seconds: 5))
     }
 }
@@ -180,19 +188,19 @@ final class RadioSessionTimeoutTests: XCTestCase {
         XCTAssertEqual(SessionHarness().session.transmitTimeout, .default)
     }
 
-    /// A safety limit that quietly reverts to three minutes on relaunch is worse
+    /// A safety limit that quietly reverts to the default on relaunch is worse
     /// than no setting at all, so this persists on change rather than at connect.
     func testChangingTheTimeoutPersistsIt() {
         let harness = SessionHarness()
 
-        harness.session.transmitTimeout = TransmitTimeout(seconds: 60)
+        harness.session.transmitTimeout = TransmitTimeout(seconds: 90)
 
-        XCTAssertEqual(harness.settingsStore.savedTransmitTimeout, TransmitTimeout(seconds: 60))
+        XCTAssertEqual(harness.settingsStore.savedTransmitTimeout, TransmitTimeout(seconds: 90))
     }
 
     /// The wiring that actually enforces SF-1: the operator's number has to reach
     /// the factory, which is where it becomes the library's watchdog timeout. A
-    /// mistake here is invisible until a transmission runs for three minutes when
+    /// mistake here is invisible until a transmission runs for a minute when
     /// ten seconds were asked for.
     func testTheTimeoutReachesTheLinkFactory() async {
         let harness = SessionHarness(timeout: TransmitTimeout(seconds: 15))

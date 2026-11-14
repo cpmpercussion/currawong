@@ -259,7 +259,7 @@ final class CompositionRootTests: XCTestCase {
     /// SF-1's number is the operator's, and it is app-wide rather than a field of
     /// the channel. This is the seam where it becomes the library's watchdog
     /// timeout — a mistake here would be invisible until a transmission ran for
-    /// three minutes when ten seconds were asked for.
+    /// a minute when ten seconds were asked for.
     func testTheWatchdogTimeoutComesFromTheOperatorsSetting() {
         XCTAssertEqual(
             CompositionRoot.watchdogTimeout(for: TransmitTimeout(seconds: 12)), .seconds(12))

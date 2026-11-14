@@ -189,7 +189,7 @@ final class RadioModeTests: XCTestCase {
 
     /// **SF-1.** The operator's watchdog timeout has to reach the M17 client
     /// too, not just the IAX2 one. A wiring mistake here would be invisible
-    /// until a transmission ran for three minutes when ten seconds was asked
+    /// until a transmission ran for a minute when ten seconds was asked
     /// for, which is precisely the failure the watchdog exists to prevent.
     @MainActor
     func testTheWatchdogTimeoutIsTakenFromTheOperatorsSettingInEveryMode() {

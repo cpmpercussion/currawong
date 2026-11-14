@@ -58,7 +58,8 @@ history and its own agents.
 
 ## Safety requirements that shape the UI
 
-- **SF-1** transmit watchdog: enforced by the library's client, 180 s default.
+- **SF-1** transmit watchdog: enforced by the library's client. The app's
+  default is 60 s and its ceiling 180 s (`TransmitTimeout`, APP-45).
 - **SF-2** BLE link loss during transmit must drop transmit. Nothing to apply
   it to since APP-41 removed the accessory input; it binds again the day one
   returns.
