@@ -537,6 +537,30 @@ final class RadioSessionConnectionTests: XCTestCase {
         XCTAssertEqual(harness.session.connection, .disconnected)
     }
 
+    /// A client whose call fails while connecting both throws and reports
+    /// `.disconnected`. The operator is told once, by the throw, which is the
+    /// one that carries advice.
+    func testAFailedConnectIsReportedOnce() async {
+        let harness = SessionHarness()
+        harness.client.connectError = SessionHarness.ConnectFailed()
+        harness.client.duringConnect = { [harness] in
+            await MainActor.run {
+                _ = harness.eventContinuation.yield(
+                    .disconnected(reason: "The node ended the call: REJECT."))
+            }
+            for _ in 0..<5 { await Task.yield() }
+        }
+
+        await harness.connect()
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(harness.session.connection, .disconnected)
+        XCTAssertEqual(harness.session.alert?.title, "Could not connect")
+        harness.session.dismissAlert()
+        XCTAssertNil(harness.session.alert, "one failure, one alert")
+        XCTAssertNil(harness.session.lastDisconnectReason)
+    }
+
     // MARK: The far end leaving
 
     func testARemoteDisconnectTearsDownAndTellsTheOperator() async {
