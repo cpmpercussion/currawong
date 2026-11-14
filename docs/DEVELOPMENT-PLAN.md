@@ -2177,3 +2177,33 @@ no screen draws the app's name as a heading, and `make test` and
   library words them.
 - `docs/*.html` quoted none of the changed sentences, so the website is
   untouched.
+
+### APP-44 — the app has a tint of its own
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14: *"On macos
+its picking up the system highlight colour, but on iOS the highlights are all
+blue."*
+
+Implemented 2026-11-14. The app declared no accent colour, so iOS fell back to
+its stock blue and macOS to whatever the operator had chosen. Neither was a
+decision.
+
+**What it is:** an `AccentColor` colour set in the asset catalog, named by
+`ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME` in `project.yml`. Amber, from
+the icon's family: `#B25E00` in light mode (4.7:1 under white button text) and
+`#C97A12` in dark. No view changed; every tinted control already used the
+accent colour.
+
+**Why not the icon's own orange.** `#ff8c00` is within a shade of the orange
+the app uses for warnings and the safety banner, and a control must not read as
+one. The accent is deeper, so the two stay apart.
+
+**macOS keeps the operator's choice.** The asset is only the default there: a
+Mac with a highlight colour set in System Settings shows that colour, which is
+the platform's rule and is left alone. The Mac the screenshots were taken on
+has orange set, so those show the system's orange and not this amber.
+
+**The Live Activity is not tinted by this**; the extension has its own colours,
+which are about transmit state.
+
+**Done when:** `make build`, `make test` and `make test-macos` are green and
+the screenshot scenes have been looked at in light and dark on iPhone.
