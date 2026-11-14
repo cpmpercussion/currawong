@@ -139,8 +139,16 @@ struct ChannelListView: View {
                     .disabled(!isMutable)
             #endif
 
+            // The words when there is room for them on one line, and the plus
+            // alone when there is not: a narrow sidebar otherwise wraps the
+            // title under the icon. Both carry the same accessibility label.
             Button(action: onAdd) {
-                Label("Add channel", systemImage: "plus")
+                ViewThatFits(in: .horizontal) {
+                    Label("Add channel", systemImage: "plus")
+                        .lineLimit(1)
+                    Label("Add channel", systemImage: "plus")
+                        .labelStyle(.iconOnly)
+                }
             }
             .disabled(!isMutable)
         }
