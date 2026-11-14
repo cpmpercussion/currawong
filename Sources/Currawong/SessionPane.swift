@@ -15,8 +15,6 @@ import SwiftUI
 /// switch. ``PushToTalkButton``'s own `onDisappear` is different and correct.
 struct SessionPane: View {
     @ObservedObject var session: RadioSession
-    @ObservedObject var accessory: BLEPTTController
-    @ObservedObject var remoteCommand: RemoteCommandPTTController
 
     /// Whether to draw the app's name above the status: true in the tab layout,
     /// which has no window title.
@@ -39,7 +37,7 @@ struct SessionPane: View {
                 MediaWarningLabel(text: warning)
             }
 
-            StatusPanel(session: session, accessory: accessoryIndicator)
+            StatusPanel(session: session)
 
             // A link that drops while keyed removes the PTT button under a held
             // finger, and its `onDisappear` release is then the only thing that
@@ -76,15 +74,6 @@ struct SessionPane: View {
     /// the decision so ``RootView`` shares it.
     private var showsTransmitControls: Bool {
         SessionPaneLayout(connection: session.connection).showsTransmitControls
-    }
-
-    private var accessoryIndicator: AccessoryIndicator {
-        AccessoryIndicator(
-            linkState: accessory.linkState,
-            isAccessoryConfigured: accessory.mapping != nil,
-            isAccessoryKeyed: accessory.isAccessoryKeyed,
-            isRemoteCommandEnabled: remoteCommand.isEnabled,
-            isButtonVerified: accessory.isButtonVerified)
     }
 
     private var header: some View {

@@ -80,27 +80,6 @@ final class LicenceAcknowledgementGateTests: XCTestCase {
         XCTAssertFalse(harness.client.calls.contains(.startTransmit))
     }
 
-    /// Every input, not just the button. A fob is the case where nobody is
-    /// looking at the screen, and it is the one that must not get through.
-    func testTheGateHoldsFromEveryInput() async {
-        for source in [PTTSource.onScreen, .accessory, .remoteCommand] {
-            let harness = SessionHarness(licenceAcknowledged: false)
-            await harness.connect()
-
-            harness.session.beginTransmit(from: source)
-            await harness.settleAll()
-
-            XCTAssertFalse(
-                harness.session.isTransmitting, "\(source) got past the acknowledgement")
-            XCTAssertFalse(
-                harness.client.calls.contains(.startTransmit),
-                "\(source) reached the link")
-            XCTAssertTrue(
-                harness.session.needsLicenceAcknowledgement,
-                "\(source) did not raise the sheet")
-        }
-    }
-
     /// Accepting does not key the radio — the press that raised the sheet is
     /// spent. Keying as a side effect of dismissing a dialogue is exactly the
     /// stuck-microphone shape this app exists to avoid.
@@ -190,7 +169,6 @@ final class LicenceAcknowledgementGateTests: XCTestCase {
         await harness.settleAll()
 
         XCTAssertEqual(harness.session.keyDownsInCurrentHold, 0)
-        XCTAssertNil(harness.session.activeSource)
         XCTAssertFalse(harness.session.isKeyDown)
     }
 }

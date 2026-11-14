@@ -47,7 +47,7 @@ protocol TransmitActivityPresenting: AnyObject {
 ///
 /// ``RadioSession`` passes one desired value to ``show(_:)`` — a request, or
 /// `nil` for nothing on air — from every path that ends transmission (SF-1,
-/// SF-2, SF-3, release, disconnect), so no path has its own teardown to forget.
+/// SF-3, release, disconnect), so no path has its own teardown to forget.
 ///
 /// Presenter calls are chained through one task: an `end()` that overtook the
 /// `start()` it cancels would leave an untracked activity. One update per

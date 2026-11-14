@@ -18,7 +18,7 @@ struct TransmitActivityState: Codable, Hashable, Sendable {
     /// The large line. Short enough for the Dynamic Island's compact form.
     var headline: String
 
-    /// Whether letting go will unkey (PT-4), or what the app is waiting for;
+    /// That letting go will unkey, or what the app is waiting for;
     /// the same sentence as the on-screen banner.
     var detail: String
 

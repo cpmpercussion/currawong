@@ -48,18 +48,6 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// Touch-up on the PTT button. The ordinary case.
     case released
 
-    /// **PT-2.** The release edge from a learned Bluetooth accessory.
-    case accessoryReleased
-
-    /// **SF-2.** The accessory's link dropped while it was, or might have been,
-    /// holding the key. It cannot report a release, so the only safe answer is
-    /// to unkey.
-    case accessoryLinkLost
-
-    /// **PT-4.** A latched remote-command transmission was unlatched, by a
-    /// second press or by switching the remote input off.
-    case remoteCommandToggled
-
     /// The finger left the button while still down.
     case draggedOffButton
 
@@ -97,10 +85,9 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
         switch self {
         case .routeChanged:
             return true
-        case .released, .accessoryReleased, .remoteCommandToggled,
-            .draggedOffButton, .disconnecting, .gestureCancelled,
+        case .released, .draggedOffButton, .disconnecting, .gestureCancelled,
             .viewDisappeared, .appBackgrounded, .audioInterrupted,
-            .watchdogExpired, .transmitFailed, .accessoryLinkLost:
+            .watchdogExpired, .transmitFailed:
             return false
         }
     }
@@ -109,12 +96,10 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
     /// screen: unexplained, they would simply key up again.
     var isUnexpected: Bool {
         switch self {
-        case .released, .accessoryReleased, .remoteCommandToggled,
-            .draggedOffButton, .disconnecting:
+        case .released, .draggedOffButton, .disconnecting:
             return false
         case .gestureCancelled, .viewDisappeared, .appBackgrounded,
-            .audioInterrupted, .routeChanged, .watchdogExpired, .transmitFailed,
-            .accessoryLinkLost:
+            .audioInterrupted, .routeChanged, .watchdogExpired, .transmitFailed:
             return true
         }
     }
@@ -142,8 +127,8 @@ struct RadioLink {
     /// Keys up. Throws if the client is not connected.
     let startTransmit: @Sendable () async throws -> Void
 
-    /// Unkeys. Idempotent, and safe when not connected — the SF-2 and SF-3
-    /// paths call it without being able to know the current state.
+    /// Unkeys. Idempotent, and safe when not connected — the SF-3 paths call
+    /// it without being able to know the current state.
     let stopTransmit: @Sendable () async -> Void
 
     /// The client's transmit state, read live: the watchdog (SF-1) can unkey

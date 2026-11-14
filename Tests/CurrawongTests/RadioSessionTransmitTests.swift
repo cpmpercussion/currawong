@@ -335,23 +335,6 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertFalse(harness.audio.isCapturing)
     }
 
-    /// SF-1's word also reaches the accessory controller: the watchdog fires
-    /// precisely when no release has arrived, so it is the one event that can
-    /// withdraw an accessory-keyed claim whose release is never coming — see
-    /// `BLEPTTController.radioUnkeyedExternally()`.
-    func testTheWatchdogExpiryTellsTheAccessoryHook() async {
-        let harness = SessionHarness()
-        var told = false
-        harness.session.onWatchdogUnkey = { told = true }
-        await harness.connect()
-        await harness.keyDown()
-
-        harness.eventContinuation.yield(.transmitWatchdogExpired(.seconds(180)))
-
-        await waitUntil("the hook is called") { told }
-        XCTAssertEqual(harness.session.lastStopReason, .watchdogExpired)
-    }
-
     /// SF-1. The client stops itself; the app still has an open microphone and
     /// a button that thinks it is held, and the operator needs to be told.
     func testTheWatchdogExpirySurfacesAndEndsTransmission() async {
@@ -525,7 +508,7 @@ final class RadioSessionTransmitTests: XCTestCase {
         // is `RadioSession!`, and a capture binds the optional rather than the
         // implicitly unwrapped value, so `session.endTransmit` does not compile.
         harness.client.duringStartTransmit = { [session = harness.session!] in
-            await MainActor.run { session.endTransmit(reason: .accessoryReleased) }
+            await MainActor.run { session.endTransmit(reason: .released) }
         }
 
         await harness.keyDown()

@@ -27,12 +27,6 @@ import RadioCore
 ///   `radioEvents` drops by design.
 /// - **Sending DTMF** (FR-1.5) is not on the protocol.
 ///
-/// ## Also owned here
-///
-/// The PTT input controllers (PT-2, PT-3, PT-4), which live as long as the
-/// process and must be wired exactly once, each to a weak ``PTTSink`` — the
-/// session. That wiring is what delivers SF-2's release edges.
-///
 /// ## Client lifetime
 ///
 /// One client per connection. `NetworkClient.disconnect()` is terminal — it
@@ -42,13 +36,6 @@ import RadioCore
 final class CompositionRoot {
     /// The view model everything else in the app is built on.
     let session: RadioSession
-
-    /// **PT-2, PT-3.** The Bluetooth accessory, for the process lifetime. No
-    /// permission prompt until an accessory is learned or its screen opened.
-    let accessory: BLEPTTController
-
-    /// **PT-4.** The headset or remote button. Off until the operator enables it.
-    let remoteCommand: RemoteCommandPTTController
 
     /// Transmit state, for anything that only needs to display it.
     var transmitState: TransmitState { session.transmitState }
@@ -83,16 +70,13 @@ final class CompositionRoot {
         settingsStore: SettingsStore = UserDefaultsSettingsStore(
             defaults: DefaultsSuite.resolved),
         secretStore: SecretStore = KeychainSecretStore(),
-        // `nil` defaults: a default argument is evaluated nonisolated, and these
-        // are `@MainActor`, so they are built in the body instead.
-        accessory: BLEPTTController? = nil,
-        remoteCommand: RemoteCommandPTTController? = nil,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),
         nodeLookup: any NodeLookup = AllStarLinkNodeLookup(),
         portalLogin: (any PortalLogin)? = AllStarLinkPortalLogin(),
-        // `nil` for the same isolation reason.
+        // `nil`: a default argument is evaluated nonisolated, and this is
+        // `@MainActor`, so it is built in the body instead.
         activity: TransmitActivityController? = nil,
         // The screenshot stage's fake link (``ScreenshotStage``); `nil` builds
         // the real clients below.
@@ -132,49 +116,19 @@ final class CompositionRoot {
             resolver: resolver,
             // **SF-4.** The lock-screen transmit indicator.
             activity: activity ?? CompositionRoot.makeActivityController())
-        // Same suite as the settings store, so a UI test isolates both.
-        let pttStore = UserDefaultsPTTSettingsStore(defaults: DefaultsSuite.resolved)
-        let accessory = accessory ?? BLEPTTController(store: pttStore)
-        let remoteCommand = remoteCommand ?? RemoteCommandPTTController(store: pttStore)
 
         self.session = session
-        self.accessory = accessory
-        self.remoteCommand = remoteCommand
         self.stationBrowser = StationBrowser(directory: stationDirectory)
         self.proxyPicker = proxyPicker
         self.reflectorBrowser = ReflectorBrowser(directory: reflectorDirectory)
         self.nodeLocator = NodeLocator(lookup: nodeLookup)
         self.portalLogin = PortalLoginController(login: portalLogin)
-
-        // The wire SF-2 depends on (weak on the controllers' side).
-        accessory.sink = session
-        remoteCommand.sink = session
-
-        // BU-14's repair: only the session knows when nothing is on air, the
-        // one time the accessory may rebuild a silently dead link (SF-2).
-        session.onIdleAudioRouteChange = { [weak accessory] in
-            accessory?.audioRouteDidChange()
-        }
-        // Asked again before a timer-scheduled repair: the operator may have
-        // keyed on the on-screen button since, which the controller cannot see.
-        accessory.isRebuildSafe = { [weak session] in
-            session?.isIdleForAccessoryRepair ?? false
-        }
-        // The SF-1 watchdog fires exactly when no release arrived, so it is what
-        // withdraws an accessory-keyed claim whose release is never coming;
-        // without it that claim would block every repair, Reconnect included.
-        session.onWatchdogUnkey = { [weak accessory] in
-            accessory?.radioUnkeyedExternally()
-        }
     }
 
     /// Starts everything with a process-long lifetime. Idempotent. Separate from
-    /// `init` because a permission prompt and taking the transport controls
-    /// should not happen while SwiftUI may still discard the value.
+    /// `init` because SwiftUI may still discard the value.
     func activate() {
         session.start()
-        accessory.activateIfConfigured()
-        remoteCommand.activateIfEnabled()
     }
 
     /// **SF-4.** The transmit Live Activity's controller; a disabled one on

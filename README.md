@@ -97,16 +97,13 @@ that node as their first channel.
 
 ### Transmitting
 
-Three inputs, one release path — `RadioSession` conforms to `PTTSink`, so
-nothing can key by a route that cannot unkey:
+One input: **on-screen PTT** (PT-1), press and hold. Every way a transmission
+can end goes through one release path, `RadioSession.endTransmit(reason:)`.
 
-- **On-screen PTT** (PT-1), press and hold.
-- **A Bluetooth accessory** (PT-2, PT-3), with a learn mode: scan, press,
-  release, press again, release again. It refuses an accessory it cannot learn
-  rather than storing a mapping that would key and never unkey. There is no
-  device whitelist.
-- **The headset or remote button** (PT-4), off until switched on. It latches
-  rather than being momentary, and says so wherever it can key the radio.
+The Bluetooth LE accessory with its learn mode (PT-2, PT-3) and the headset or
+remote button (PT-4) were removed by `APP-41`; the tag `v0.3.0` is the last
+tree that has them. A Bluetooth headset or speaker-mic still works as an audio
+device.
 
 Hanging up sits directly under the PTT button: **Disconnect** while a link is
 up, **Cancel** while a connect is still going, and **Reconnect to _channel_**
@@ -150,9 +147,8 @@ connection state.
 **A Live Activity while transmitting (SF-4, iOS only).** Transmit state on a
 locked iPhone, because the failure this project is arranged around is a phone in
 a pocket with the microphone open. It names the channel and the mode, says
-whether letting go will unkey, and counts the watchdog down. What it mostly does
-is _end_: on release, on the watchdog, on the accessory link dropping, on an
-interruption, on an unrepairable route change, on disconnection, and — because a
+that letting go will unkey, and counts the watchdog down. What it mostly does
+is _end_: on release, on the watchdog, on an interruption, on an unrepairable route change, on disconnection, and — because a
 Live Activity outlives the process that asked for it — on the next launch after
 the app was killed mid-over. Through the 300 ms of a route-change recovery it
 stays up and says it is _not_ transmitting rather than holding a red banner over
@@ -162,7 +158,7 @@ a shut microphone. macOS has no Live Activities.
 
 One app-level screen for your
 callsign, the transmit watchdog timer, the AllStarLink portal token, the EchoLink
-account password, your own proxy if you run one, and PTT accessory setup.
+account password, and your own proxy if you run one.
 
 The EchoLink account password lives here and not on the connect form: the
 Keychain has always filed it under `echolink:<callsign>`, shared by every
@@ -181,9 +177,9 @@ have explained it is gone by the time anyone looks.
 |          |                                             |                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **SF-1** | transmit watchdog                           | Met. Enforced in the library; the timeout is per node and settable from 5 to 600 seconds, and cannot be switched off. Shown on screen when it fires.                                                                                                                                                                                                                            |
-| **SF-2** | BLE link loss drops transmit                | Met. Unconditional on every disconnection, before the reconnect logic and before anything is awaited, whether or not the accessory was the input holding the key.                                                                                                                                                                                                               |
+| **SF-2** | BLE link loss drops transmit                | Not applicable since `APP-41`: the app has no Bluetooth LE input, so there is no accessory link to lose.                                                                                                                                                                                                                                                                        |
 | **SF-3** | interruption or route change drops transmit | Met. Also drops on backgrounding, on the view disappearing, and on the gesture being cancelled or dragged off the button. A **route change** additionally keys back down if the button is still held — transmission stops either way, but an operator who never let go should not have to press again. Bounded to three resumes per hold, and never applied to an interruption. |
-| **SF-4** | transmit state visible without unlocking    | Met (iOS). A Live Activity while keyed, plus the full-bleed banner while the app is on screen; both name the input that keyed and whether letting go will unkey. It ends on all six paths that end transmit and clears anything a terminated launch left behind. **Not yet observed on a locked device** — `docs/BRINGUP.md` `BU-10`.                                           |
+| **SF-4** | transmit state visible without unlocking    | Met (iOS). A Live Activity while keyed, plus the full-bleed banner while the app is on screen; both say that letting go will unkey. It ends on all five paths that end transmit and clears anything a terminated launch left behind. **Not yet observed on a locked device** — `docs/BRINGUP.md` `BU-10`.                                           |
 
 **The table is what the code does; [`docs/BRINGUP.md`](docs/BRINGUP.md) is what
 anyone has watched happen.** That distinction is the point of keeping two lists:
@@ -287,7 +283,8 @@ block in `project.yml` for it. Don't commit the swap.
 - Views and view models use `RadioCore` vocabulary only — `NetworkClient`,
   `TransmitState`. If something up here needs an IAX2-shaped type, the fix
   belongs in the library's protocol, not in a cast.
-- Background modes are `audio` and `bluetooth-central`, and nothing else.
+- The one background mode is `audio`. PD-2 also allows `bluetooth-central`,
+  which the app does not declare while it has no Bluetooth LE input (`APP-41`).
 - No CallKit, no volume-button PTT, no multicast entitlement.
 
 ## Licence

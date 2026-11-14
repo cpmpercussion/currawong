@@ -200,22 +200,18 @@ targets:
         # Revisit this the day any of that stops being true.
         ITSAppUsesNonExemptEncryption: false
 
-        # PD-2. `audio` keeps the call alive with the screen locked; a
-        # `bluetooth-central` app keeps its BLE PTT link in the background
-        # (PT-2). Neither needs Apple approval, and nothing else is requested —
-        # in particular there is no multicast entitlement (PD-3), no VoIP mode,
-        # and CallKit is not used (PD-4).
+        # PD-2. `audio` keeps the call alive with the screen locked. It needs
+        # no Apple approval, and nothing else is requested — in particular
+        # there is no multicast entitlement (PD-3), no VoIP mode, and CallKit
+        # is not used (PD-4). PD-2 also allows `bluetooth-central`; the app has
+        # no Bluetooth LE input (APP-41), so it is not declared.
         UIBackgroundModes:
           - audio
-          - bluetooth-central
 
         # Required. Without microphone access the app cannot transmit, which is
         # most of what it is for.
         NSMicrophoneUsageDescription:
           "Currawong needs the microphone to transmit your voice to the node or reflector you are connected to."
-        # Needed by the BLE PTT accessory support in Phase 5 (PT-2, PT-3).
-        NSBluetoothAlwaysUsageDescription:
-          "Currawong connects to Bluetooth push-to-talk accessories so a physical button can key your transmission."
 
         # Required to reach a node on the same network as the device — a node in
         # a VM on the desk, on a Raspberry Pi, or anywhere else with a LAN
@@ -284,8 +280,8 @@ targets:
         # Both files carry the Keychain access group, which is required on
         # macOS for the data protection keychain `KeychainSecretStore` asks for
         # and is a no-op restatement of the implicit group on iOS. The macOS
-        # file adds `com.apple.security.app-sandbox` and the three capabilities
-        # the app actually uses — network client, audio input, Bluetooth. It
+        # file adds `com.apple.security.app-sandbox` and the two capabilities
+        # the app actually uses — network client and audio input. It
         # does *not* add a network *server* entitlement (nothing listens) or
         # the multicast entitlement (PD-3). The reasoning is written out in the
         # two files; read those before changing either.

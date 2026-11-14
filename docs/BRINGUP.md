@@ -115,6 +115,14 @@ keep treating the app as unproven on air.
 
 ## Items
 
+**`APP-41` (2026-11-14) removed the Bluetooth LE button and the headset
+button.** The on-screen button is the only PTT input. So `BU-14` cannot occur
+while they are out, and neither can the case `BU-10` staged, an accessory
+keying a backgrounded app. `BU-13`, `BU-17` and `BU-18` are about the audio
+route and still apply to a Bluetooth headset or speaker-mic used for audio.
+The rows below are left as written: they are the record a returning accessory
+input starts from, with the code at tag `v0.3.0`.
+
 | ID | What | Status |
 |---|---|---|
 | BU-1 | PTT fails immediately: `could not construct an AVAudioConverter for the requested PCM formats` | ✅ **Fixed, confirmed on air 2026-08-11** |

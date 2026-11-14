@@ -11,11 +11,6 @@ import SwiftUI
 struct StatusPanel: View {
     @ObservedObject var session: RadioSession
 
-    /// The PTT accessory light, or `nil` where the screen has its own accessory
-    /// section. A value, so this panel need not observe the Bluetooth
-    /// controllers ``SessionPane`` already observes.
-    let accessory: AccessoryIndicator?
-
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
     }
@@ -41,23 +36,15 @@ struct StatusPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            // The link state and what can key it, side by side.
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(connectionColour)
-                        .frame(width: 8, height: 8)
-                    Text(session.connection.label)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-
-                if let accessory {
-                    Spacer(minLength: 8)
-                    AccessoryIndicatorView(indicator: accessory)
-                }
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(connectionColour)
+                    .frame(width: 8, height: 8)
+                Text(session.connection.label)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
 
             if status.detail != session.connection.label {
                 Text(status.detail)

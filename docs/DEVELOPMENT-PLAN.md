@@ -1383,16 +1383,17 @@ makes that true, and the two things that look like exceptions and are not:
 
 #### Item 6 — the background modes answer
 
-Two modes are declared, and the reasoning is already in `project.yml` beside
-them:
+**One mode is declared since `APP-41`**, `audio`; the `bluetooth-central`
+paragraph below is kept for the day the accessory input returns. The reasoning
+is in `project.yml` beside the declaration:
 
 - **`audio`** — `PD-2`'s answer, and the one this item was opened for: it is
   what keeps a *received* signal alive with the screen locked. A repeater does
   not stop talking because the phone did, and an app that goes deaf on lock is
   not usable as a radio.
-- **`bluetooth-central`** — the PTT accessory's BLE link, which must stay up
-  with the app backgrounded or the physical button stops keying. This is not
-  hypothetical: ~25 accessory press/release pairs were delivered to a
+- **`bluetooth-central`** (not declared since `APP-41`) — the PTT accessory's
+  BLE link, which must stay up with the app backgrounded or the physical button
+  stops keying. This is not hypothetical: ~25 accessory press/release pairs were delivered to a
   backgrounded Currawong on 2026-08-22, logged edge by edge (`BU-10`).
 
 `PD-4` (no CallKit) and `PD-3` (no multicast entitlement) are the two things a

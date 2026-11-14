@@ -45,16 +45,13 @@ struct CurrawongApp: App {
     private var content: some View {
         let base = RootView(
             session: root.session,
-            accessory: root.accessory,
-            remoteCommand: root.remoteCommand,
             browser: root.stationBrowser,
             reflectorBrowser: root.reflectorBrowser,
             proxyPicker: root.proxyPicker,
             nodeLocator: root.nodeLocator,
             portalLogin: root.portalLogin)
-            // The PTT input controllers, once, for the process. `RootView`
-            // starts the session's own SF-3 observation itself, so
-            // `activate()` is idempotent and the two overlap harmlessly.
+            // `RootView` starts the session's SF-3 observation itself;
+            // `activate()` is idempotent, so the two overlap harmlessly.
             .task {
                 root.activate()
                 #if DEBUG

@@ -18,8 +18,8 @@ import XCTest
 /// the SF-4 counterpart to
 /// ``RadioSessionTransmitTests/testEveryReleasePathEndsTransmission``: it walks
 /// ``TransmitStopReason/allCases`` and proves each one leaves the lock screen
-/// empty. Everything else in this file drives one of the six named paths — 
-/// release, watchdog (SF-1), accessory loss (SF-2), interruption and route
+/// empty. Everything else in this file drives one of the five named paths — 
+/// release, watchdog (SF-1), interruption and route
 /// change (SF-3), disconnection — and one that is not a stop at all, the
 /// route-change recovery that must *not* take the banner down.
 @MainActor
@@ -36,7 +36,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertTrue(harness.activityPresenter.isShowing)
         let shown = harness.activityPresenter.shownState
         XCTAssertEqual(shown?.isOnAir, true)
-        XCTAssertEqual(shown?.detail, PTTSource.onScreen.holdDescription)
+        XCTAssertEqual(shown?.detail, RadioSession.holdDescription)
 
         guard case .start(let request)? = harness.activityPresenter.calls.first else {
             return XCTFail("no activity was started")
@@ -63,19 +63,6 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertTrue(harness.activityPresenter.isShowing)
     }
 
-    /// PT-4. A latched transmission says so, because the operator cannot see the
-    /// button and letting go of it will not unkey them.
-    func testALatchedTransmissionSaysSoOnTheLockScreen() async {
-        let harness = SessionHarness()
-        await harness.connect()
-
-        harness.session.beginTransmit(from: .remoteCommand)
-        await harness.settleAll()
-
-        XCTAssertEqual(
-            harness.activityPresenter.shownState?.detail, PTTSource.remoteCommand.holdDescription)
-    }
-
     /// SF-1's leash, on the lock screen. The widget renders the countdown from
     /// this date, so it costs no ActivityKit updates — but only if the date is
     /// actually there.
@@ -91,7 +78,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(deadline.timeIntervalSinceNow, 60, accuracy: 5)
     }
 
-    // MARK: Down — the six paths
+    // MARK: Down — the five paths
 
     /// **The one that matters.** Every way transmission can end, and the lock
     /// screen empty afterwards in each of them. A case here that fails is a
@@ -122,7 +109,7 @@ final class RadioSessionActivityTests: XCTestCase {
         await harness.connect()
         await harness.keyDown()
 
-        harness.session.pttReleased(from: .onScreen, reason: .released)
+        harness.session.endTransmit(reason: .released)
         await harness.settleAll()
 
         XCTAssertFalse(harness.activityPresenter.isShowing)
@@ -143,25 +130,7 @@ final class RadioSessionActivityTests: XCTestCase {
         }
     }
 
-    /// Path 3: SF-2. The accessory that might have been holding the key fell off
-    /// the link, so nobody can answer "is the button still down?" — and this is
-    /// the case where the lock screen is the *only* place the operator would
-    /// have seen it, because the phone is in a pocket.
-    func testAccessoryLinkLossEndsTheIndicator() async {
-        let harness = SessionHarness()
-        await harness.connect()
-        harness.session.beginTransmit(from: .accessory)
-        await harness.settleAll()
-        XCTAssertTrue(harness.activityPresenter.isShowing, "setup: keyed by the accessory")
-
-        harness.session.accessoryLinkLost()
-        await harness.settleAll()
-
-        XCTAssertFalse(harness.activityPresenter.isShowing)
-        XCTAssertEqual(harness.session.lastStopReason, .accessoryLinkLost)
-    }
-
-    /// Path 4: SF-3, the interruption half. Never resumed, so the indicator goes
+    /// Path 3: SF-3, the interruption half. Never resumed, so the indicator goes
     /// and stays gone.
     func testAnInterruptionEndsTheIndicator() async {
         let harness = SessionHarness()
@@ -177,7 +146,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(harness.session.lastStopReason, .audioInterrupted)
     }
 
-    /// Path 6: the operator hangs up.
+    /// Path 5: the operator hangs up.
     func testDisconnectingEndsTheIndicator() async {
         let harness = SessionHarness()
         await harness.connect()
@@ -189,7 +158,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertFalse(harness.activityPresenter.isShowing)
     }
 
-    /// Path 6's other half: the far end, or the transport, ended the call. The
+    /// Path 5's other half: the far end, or the transport, ended the call. The
     /// operator did nothing, so nothing would have prompted them to look.
     func testALostLinkEndsTheIndicator() async {
         let harness = SessionHarness()
@@ -220,7 +189,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(harness.session.lastStopReason, .appBackgrounded)
     }
 
-    /// Path 7: app termination. A Live Activity outlives the process that
+    /// Path 6: app termination. A Live Activity outlives the process that
     /// requested it, so a Currawong killed mid-over leaves a banner claiming TX
     /// with nothing behind it. ``RadioSession/start()`` is the launch hook that
     /// clears it, and it must run before anything can key up.
@@ -247,7 +216,7 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(harness.session.lastStopReason, .transmitFailed)
     }
 
-    // MARK: Path 5 — SF-3's route change, which is not simply a stop
+    // MARK: Path 4 — SF-3's route change, which is not simply a stop
 
     /// **The case that changed on 2026-08-20.** A route change under a held
     /// button no longer ends the over: ``RadioSession`` keys back down once the
@@ -277,85 +246,6 @@ final class RadioSessionActivityTests: XCTestCase {
         XCTAssertEqual(harness.activityPresenter.endCount, 0)
         XCTAssertTrue(harness.activityPresenter.isShowing)
         XCTAssertEqual(harness.activityPresenter.shownState?.isOnAir, true)
-    }
-
-    // MARK: - The idle gate on BU-14's repair
-
-    /// **The safety-relevant half of `BU-14`'s repair.** Rebuilding the
-    /// accessory link means disconnecting it, and SF-2 makes a disconnection
-    /// unkey unconditionally — so a repair fired during an over would be a way of
-    /// dropping the operator mid-sentence.
-    ///
-    /// The guard is here rather than in `BLEPTTController` because this is the
-    /// class that knows whether anything is on air. Nothing downstream suppresses
-    /// SF-2; the hook simply is not called.
-    func testARouteChangeUnderAHeldButtonDoesNotAskForARepair() async {
-        let harness = SessionHarness()
-        var repairRequests = 0
-        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
-        harness.session.start()
-        await harness.connect()
-        await harness.keyDown()
-
-        // Both waits, in this order, for the reason the tests above give: the
-        // recovery condition is already true before the session has seen
-        // anything.
-        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
-        await waitUntil("the route change drops transmit") { !harness.client.isTransmitting }
-        await waitUntil("transmit comes back on its own") { harness.client.isTransmitting }
-        await harness.settleAll()
-
-        XCTAssertEqual(
-            repairRequests, 0,
-            "a repair was requested while the operator was holding the button")
-    }
-
-    /// **A route change just after an over is exactly when a repair is wanted.**
-    ///
-    /// This test previously asserted the opposite, on the reasoning that a link
-    /// which had just carried a press could not need rebuilding. That was wrong:
-    /// the press proves the link was alive *before* the over, and the accessory
-    /// link dies on the way **down**, during the unkey. Measured 2026-08-22 — the
-    /// route-change bursts land 1.3 s and 2.5 s after key-up, a quiet period
-    /// swallowed both, and the button stayed dead for 113 seconds.
-    ///
-    /// It also used to pass for the wrong reason: `settleAll()` returns before the
-    /// signal has been consumed, so it read the counter too early. Hence the
-    /// explicit wait.
-    func testARouteChangeJustAfterAnOverDoesAskForARepair() async {
-        let harness = SessionHarness()
-        var repairRequests = 0
-        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
-        harness.session.start()
-        await harness.connect()
-
-        await harness.keyDown()
-        harness.session.endTransmit(reason: .released)
-        await harness.settleAll()
-        XCTAssertFalse(harness.client.isTransmitting, "setup: the over has ended")
-
-        // The route change that unkeying itself causes — and the moment the link
-        // needs rebuilding.
-        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
-        await waitUntil("the repair is requested") { repairRequests == 1 }
-    }
-
-    /// And the other side of it: with nothing keyed, a route change is exactly
-    /// when the link should be rebuilt, because the button is needed for the
-    /// *next* press and this is the moment nobody is using it.
-    func testARouteChangeWhileIdleAsksForARepair() async {
-        let harness = SessionHarness()
-        var repairRequests = 0
-        harness.session.onIdleAudioRouteChange = { repairRequests += 1 }
-        harness.session.start()
-        await harness.connect()
-
-        harness.audio.emit(.routeChanged(.oldDeviceUnavailable))
-        await waitUntil("the repair is requested") { repairRequests == 1 }
-        await harness.settleAll()
-
-        XCTAssertEqual(repairRequests, 1)
-        XCTAssertFalse(harness.client.isTransmitting, "nothing should have keyed")
     }
 
     /// It stays up, but it does not lie: during the gap nothing is on air and it

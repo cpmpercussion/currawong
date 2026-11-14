@@ -12,17 +12,9 @@ import SwiftUI
 /// Always present, at the same height in every state (the tests pin it): if it
 /// appeared at key-down it would move the PTT button under a held finger, which
 /// is a drag-off release (``TransmitStopReason/draggedOffButton``).
-///
-/// `source` is for PT-4: a latched key does not stop when the operator lets go,
-/// so the strip says "LATCHED" — mistaking one for momentary leaves a
-/// microphone open.
 struct TransmitBanner: View {
     /// Whether the radio is on air. The strip is drawn either way.
     let isTransmitting: Bool
-
-    /// The input holding the key, if known. Unknown is shown as momentary, the
-    /// presentation that claims least.
-    let source: PTTSource?
 
     /// DEBUG only (BU-15): key-downs in the current or last hold, see
     /// ``RadioSession/keyDownsInCurrentHold``. Exposed as the accessibility
@@ -63,34 +55,23 @@ struct TransmitBanner: View {
         #endif
     }
 
-    /// **PT-4.** Whether the key is held by something that will not release it
-    /// when the operator lets go. An unknown source is not treated as latched:
-    /// only ``PTTSource/remoteCommand`` actually latches.
-    private var isLatched: Bool {
-        isTransmitting && source?.isMomentary == false
-    }
-
-    /// The right-hand word. "LATCHED" replaces "ON AIR": the colour already says
-    /// on air. Internal so PT-4 can be tested as a value.
+    /// The right-hand word. Internal so it can be tested as a value.
     var trailingWord: String {
-        guard isTransmitting else { return "STANDBY" }
-        return isLatched ? "LATCHED" : "ON AIR"
+        isTransmitting ? "ON AIR" : "STANDBY"
     }
 
     /// What VoiceOver reads — for a VoiceOver user this string *is* SF-4, so it
-    /// is internal and tested. Longer than the strip, since it replaces the red,
-    /// and carries PT-4's full sentence.
+    /// is internal and tested. Longer than the strip, since it replaces the red.
     var accessibilityDescription: String {
         guard isTransmitting else { return "Not transmitting. Standby." }
-        guard let source else { return "Transmitting. On air." }
-        return "Transmitting. On air. \(source.holdDescription)"
+        return "Transmitting. On air. \(RadioSession.holdDescription)"
     }
 }
 
 #Preview {
     VStack(spacing: 0) {
-        TransmitBanner(isTransmitting: true, source: .onScreen)
-        TransmitBanner(isTransmitting: false, source: nil)
+        TransmitBanner(isTransmitting: true)
+        TransmitBanner(isTransmitting: false)
         Spacer()
     }
 }
