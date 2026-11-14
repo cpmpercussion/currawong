@@ -258,6 +258,9 @@ final class CompositionRoot {
             destination: destination,
             events: client.events,
             translate: { RadioLinkEvent($0) },
+            explain: { [usesWebTransceiver = settings.usesWebTransceiver] in
+                connectFailure(iax2: $0, webTransceiver: usesWebTransceiver)
+            },
             sendDTMF: { digit in try await client.send(dtmf: digit) })
     }
 
@@ -295,6 +298,7 @@ final class CompositionRoot {
             destination: destination,
             events: client.events,
             translate: { RadioLinkEvent($0) },
+            explain: { connectFailure(m17: $0) },
             sendDTMF: { _ in throw M17LinkError.dtmfUnsupported })
     }
 
@@ -367,6 +371,7 @@ final class CompositionRoot {
             destination: destination,
             events: client.events,
             translate: { RadioLinkEvent($0) },
+            explain: { connectFailure(echoLink: $0) },
             sendDTMF: { _ in throw EchoLinkLinkError.dtmfUnsupported })
     }
 
@@ -377,6 +382,8 @@ final class CompositionRoot {
     ///   - events: the client's own event stream, translated rather than
     ///     taken from `NetworkClient.radioEvents` because the app words its
     ///     events itself (``RadioLinkEvent``).
+    ///   - explain: turns a mode's connect error into a ``ConnectFailure``;
+    ///     `nil` passes the library's error through unchanged.
     ///   - sendDTMF: not on `NetworkClient`, so each mode supplies it.
     private static func assembleLink<Client: NetworkClient, Event: Sendable>(
         mode: RadioMode,
@@ -384,6 +391,7 @@ final class CompositionRoot {
         destination: Client.Destination,
         events clientEvents: AsyncStream<Event>,
         translate: @escaping @Sendable (Event) -> RadioLinkEvent?,
+        explain: @escaping @Sendable (Error) -> ConnectFailure?,
         sendDTMF: @escaping @Sendable (Character) async throws -> Void
     ) -> RadioLink where Client.Destination: Sendable {
         var eventEscape: AsyncStream<RadioLinkEvent>.Continuation!
@@ -411,7 +419,13 @@ final class CompositionRoot {
 
         return RadioLink(
             mode: mode,
-            connect: { try await client.connect(to: destination) },
+            connect: {
+                do {
+                    try await client.connect(to: destination)
+                } catch {
+                    throw explain(error) ?? error
+                }
+            },
             disconnect: { await client.disconnect() },
             startTransmit: { try await client.startTransmit() },
             stopTransmit: { await client.stopTransmit() },
@@ -461,6 +475,120 @@ final class CompositionRoot {
                 settings: settings, identity: identity, secret: credentials.secret,
                 proxy: proxy, transmitTimeout: transmitTimeout)
         }
+    }
+}
+
+// MARK: - Connect failures, in the operator's terms
+
+extension CompositionRoot {
+    /// What an operator should check after an IAX2 call fails to set up.
+    ///
+    /// A wrong secret and an account the node does not allow are both a
+    /// REJECT, and differ only in text the node chooses, so a rejection names
+    /// both. An unreachable host and a silent node both end as the same
+    /// timeout, so that names both too.
+    nonisolated static func connectFailure(iax2 error: Error, webTransceiver: Bool)
+        -> ConnectFailure?
+    {
+        guard let error = error as? IAX2ClientError else { return nil }
+        let advice: String
+        switch error {
+        case .rejected:
+            advice =
+                webTransceiver
+                ? "The node refused the call. Either it does not accept Web Transceiver "
+                    + "connections, or your AllStarLink sign-in was not accepted. Sign in "
+                    + "again in Settings, and check the node allows Web Transceiver access."
+                : "The node refused the call. A wrong secret and an account the node does "
+                    + "not allow are refused in almost the same way, so check both: the "
+                    + "username and secret for this channel, and with the node's owner "
+                    + "that the account may connect."
+        case .connectTimedOut:
+            advice =
+                "Nothing answered. The host or port may be wrong, the node may be offline, "
+                + "or this device may have no connection; they look the same from here. "
+                + "Check the address, and that you are online."
+        case .connectFailed(.channelFailed):
+            advice =
+                "The node stopped answering while the call was being set up. Check that "
+                + "you are online, then try again."
+        case .connectFailed:
+            advice = "The call was ended while it was being set up. Try again."
+        case .notConnected, .alreadyConnected, .clientShutDown, .transmitCancelled:
+            return nil
+        }
+        return ConnectFailure(advice: advice, detail: "\(error)")
+    }
+
+    /// What an operator should check after an M17 link fails to come up.
+    nonisolated static func connectFailure(m17 error: Error) -> ConnectFailure? {
+        let advice: String
+        switch error {
+        case M17ReflectorClientError.connectionRefused(let module):
+            advice =
+                "The reflector refused the connection. Check that module \(module) exists "
+                + "on this reflector, and that your callsign in Settings is correct."
+        case M17ReflectorClientError.connectTimedOut:
+            advice =
+                "The reflector did not answer. The host or port may be wrong, the reflector "
+                + "may be offline, or this device may have no connection; they look the "
+                + "same from here. Check the address, and that you are online."
+        case M17ReflectorClientError.transportClosed:
+            advice =
+                "The connection closed before the reflector answered. Check that you are "
+                + "online, then try again."
+        case M17ClientError.invalidDestination:
+            advice =
+                "Your callsign or the module could not be sent as M17. Check the callsign "
+                + "in Settings and the module letter for this channel."
+        default:
+            return nil
+        }
+        return ConnectFailure(advice: advice, detail: "\(error)")
+    }
+
+    /// What an operator should check after an EchoLink session fails to open.
+    ///
+    /// A proxy that refuses a password sends no refusal: it closes the stream,
+    /// as it does when it is busy. A station that is offline, busy or ignoring
+    /// the call is silent in each case. Both pieces of advice say so.
+    nonisolated static func connectFailure(echoLink error: Error) -> ConnectFailure? {
+        guard let error = error as? EchoLinkClientError else { return nil }
+        let advice: String
+        switch error {
+        case .nodeDidNotAnswer:
+            advice =
+                "The station did not answer. It may be offline, busy with another caller, "
+                + "or not taking connections; EchoLink does not say which. Refresh the "
+                + "station list to see its status, or try again later."
+        case .proxy(.streamClosed):
+            advice =
+                "The proxy closed the connection. A proxy does this when it refuses the "
+                + "password and also when it is already in use. If it is your own proxy, "
+                + "check its password in Settings; if it is a public one, try again."
+        case .proxy(.timedOut):
+            advice =
+                "The proxy did not answer. Check the proxy's address and port in Settings, "
+                + "and that you are online."
+        case .proxy:
+            advice =
+                "The proxy did not respond as an EchoLink proxy does. Check its address "
+                + "and port in Settings."
+        case .directory(.loginRejected):
+            advice =
+                "The EchoLink directory refused your callsign and password. Check the "
+                + "EchoLink password in Settings, and that the callsign is validated with "
+                + "EchoLink."
+        case .directory:
+            advice =
+                "The EchoLink directory server did not give an answer. Try again; if it "
+                + "keeps happening, check the directory server for this channel."
+        case .alreadyConnected, .notConnected, .directModeUnavailable,
+            .directoryLoginIncomplete, .wrongSampleCount, .stationList,
+            .stationListInFlight, .transmitCancelled:
+            return nil
+        }
+        return ConnectFailure(advice: advice, detail: "\(error)")
     }
 }
 
@@ -559,9 +687,24 @@ extension RadioLinkEvent {
         case .mediaRejected(let rejection):
             self = .mediaRejected("Incoming audio is being dropped: \(rejection).")
         case .disconnected(let termination):
-            self = .disconnected(reason: termination.map { "The node ended the call: \($0)." })
+            self = .disconnected(reason: termination.map(Self.describe))
         case .dtmf(let digit):
             self = .dtmfReceived(digit.character)
+        }
+    }
+}
+
+extension RadioLinkEvent {
+    /// Why an IAX2 call ended, without blaming the node for what it did not
+    /// do: retries running out means nothing came back, which is as likely the
+    /// network as the node.
+    fileprivate static func describe(_ termination: IAX2CallTermination) -> String {
+        switch termination {
+        case .channelFailed:
+            return "The node stopped answering, so the call was ended. "
+                + "Check that you are online. Detail: \(termination)."
+        default:
+            return "The node ended the call: \(termination)."
         }
     }
 }

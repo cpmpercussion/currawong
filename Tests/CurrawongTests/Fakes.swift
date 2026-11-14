@@ -49,6 +49,7 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
     private var storedDTMFError: Error?
     private var storedDuringStartTransmit: (@Sendable () async -> Void)?
     private var storedDuringDisconnect: (@Sendable () async -> Void)?
+    private var storedDuringConnect: (@Sendable () async -> Void)?
 
     // MARK: NetworkClient
 
@@ -82,8 +83,10 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         lock.lock()
         storedCalls.append(.connect(destination))
         let error = storedConnectError
+        let during = storedDuringConnect
         lock.unlock()
 
+        await during?()
         if let error { throw error }
 
         lock.lock()
@@ -219,6 +222,21 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
             lock.lock()
             storedConnectError = newValue
             lock.unlock()
+        }
+    }
+
+    /// Runs inside `connect(to:)`, before it throws or returns: where a real
+    /// client reports a failed call on the event stream as well.
+    var duringConnect: (@Sendable () async -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedDuringConnect
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            storedDuringConnect = newValue
         }
     }
 

@@ -473,6 +473,11 @@ final class RadioSession: ObservableObject {
     /// the next call has started; a loss is acted on only if it carries the
     /// current number, so the old link's hang-up cannot end the new call.
     private var linkGeneration = 0
+
+    /// Whether ``connect(proxy:)`` is waiting on the link's own `connect`. A
+    /// client that fails to connect both throws and reports `.disconnected`;
+    /// the throw is the one the operator is told about.
+    private var connectInFlight = false
     private var receiveTask: Task<Void, Never>?
 
     // MARK: - Init
@@ -1045,9 +1050,12 @@ final class RadioSession: ObservableObject {
         startEventPump(for: newLink)
         startReceivePump(for: newLink)
 
+        connectInFlight = true
         do {
             try await newLink.connect()
+            connectInFlight = false
         } catch {
+            connectInFlight = false
             inputWarmUp = await warmUp.value
             tearDownLink()
             connection = .disconnected
@@ -1572,6 +1580,8 @@ final class RadioSession: ObservableObject {
             // A client reports its own hang-up here too. One the operator
             // asked for has already left `.connected`, and is not news.
             guard connection == .connected || connection == .connecting else { break }
+            // The same failure is about to be thrown by `connect`, with advice.
+            guard !connectInFlight else { break }
             lastDisconnectReason = reason
             let generation = linkGeneration
             Task { @MainActor [weak self] in
@@ -1593,6 +1603,9 @@ final class RadioSession: ObservableObject {
     /// link's.
     private func handleLinkLoss(reason: String?, generation: Int) async {
         guard generation == linkGeneration else { return }
+        // A link that fails while connecting makes `connect` throw, and that
+        // is where the operator is told.
+        guard !connectInFlight else { return }
         guard connection == .connected || connection == .connecting else { return }
         connection = .disconnecting
         await endTransmitAndWait(reason: .disconnecting)

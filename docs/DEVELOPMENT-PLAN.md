@@ -2338,6 +2338,17 @@ there.
 **Done when:** every row above has wording that names what the operator
 should check, a test per row, and no failure raises two alerts.
 
+**The app's half was implemented 2026-11-15.** `ConnectFailure` carries advice
+and the library's words; `CompositionRoot.connectFailure(iax2:…)`, `(m17:)`
+and `(echoLink:)` do the mapping and `assembleLink` applies it. Where the
+library cannot tell two causes apart, the advice names both. The second alert
+was real in the order `testAFailedConnectIsReportedOnce` produces, and is
+gone: the session ignores link loss while its own `connect` is in flight. A
+dead IAX2 link no longer reads "The node ended the call".
+
+**Still open, both the library's:** telling "no network" from "no answer",
+and a refused EchoLink proxy password from a closed stream.
+
 ### APP-48 — check my audio
 **Where:** `currawong`. **Prompted by:** QSO One 3.8.5's per-network audio
 test that rates a voice hot, good or quiet.
