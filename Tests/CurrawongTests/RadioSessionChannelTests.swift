@@ -193,6 +193,33 @@ final class RadioSessionChannelTests: XCTestCase {
         XCTAssertFalse(harness.audio.isCapturing)
     }
 
+    /// A client reports its own hang-up as a `.disconnected` event. When that
+    /// event is handled after the next call has started, it must not be taken
+    /// for the new call dropping: no alert, and the new call stays up.
+    func testTheOldLinksHangUpIsNotReportedAgainstTheNewCall() async {
+        let harness = SessionHarness(
+            settings: nil, channels: [allStar, other], selectedID: allStar.id)
+        await harness.connect()
+        let oldEvents = harness.eventContinuation!
+        harness.client.duringDisconnect = {
+            oldEvents.yield(.disconnected(reason: "The link dropped: disconnected locally."))
+            // Lets the event pump take the event before `disconnect()` resumes,
+            // which is the order a real client produces.
+            await Task.yield()
+        }
+
+        let shouldDial = await harness.session.switchChannel(to: other.id)
+        XCTAssertTrue(shouldDial)
+        harness.client.duringDisconnect = nil
+        await harness.session.connect()
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(harness.session.connection, .connected, "the new call must stay up")
+        XCTAssertNil(harness.session.alert, "hanging up to change channel is not news")
+        XCTAssertNil(harness.session.lastDisconnectReason)
+        XCTAssertEqual(harness.linksMade, 2)
+    }
+
     func testSelectingAnUnknownChannelChangesNothing() {
         let harness = SessionHarness(settings: nil, channels: [allStar], selectedID: allStar.id)
 
