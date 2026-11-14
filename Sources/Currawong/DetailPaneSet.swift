@@ -21,8 +21,6 @@ struct DetailPaneSet: Equatable {
             case .connect: return showsConnectForm
             case .session: return !showsConnectForm
             case .keypad: return mode.sendsDTMF
-            case .stations: return mode == .echoLink
-            case .reflectors: return mode == .m17
             case .setup: return true
             }
         }
@@ -46,8 +44,6 @@ enum DetailPane: String, CaseIterable, Identifiable, Hashable {
     /// nothing under the session pane for it.
     case session
     case keypad
-    case stations
-    case reflectors
     case setup
 
     var id: String { rawValue }
@@ -57,8 +53,6 @@ enum DetailPane: String, CaseIterable, Identifiable, Hashable {
         case .connect: return "Connect"
         case .session: return "Radio"
         case .keypad: return "Keypad"
-        case .stations: return "Stations"
-        case .reflectors: return "Reflectors"
         case .setup: return "Settings"
         }
     }

@@ -3,7 +3,8 @@
 import SwiftUI
 
 /// The app-wide settings screen (APP-12): identity, the SF-1 watchdog, the
-/// operator's own accounts and proxy. Nothing here is per channel. The connect form edits the same callsign.
+/// operator's own accounts and proxy. Nothing here is per channel, and after
+/// first run it is the only place the callsign is edited.
 ///
 /// "EchoLink" is nominative use only (OQ-1b): no logo, nothing implying the
 /// app is an EchoLink product.
@@ -84,9 +85,6 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.characters)
                     #endif
                     .autocorrectionDisabled()
-                    // BU-9: `stashDraft()`, not `saveDraft()` — this screen must
-                    // not overwrite whichever channel happens to be selected.
-                    .onSubmit { session.stashDraft() }
             }
 
             Text(
@@ -308,6 +306,25 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            LabelledField(label: "Operator name", systemImage: "person") {
+                TextField("optional", text: $session.identity.operatorName)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+            }
+
+            LabelledField(label: "Location", systemImage: "mappin.and.ellipse") {
+                TextField("Canberra", text: $session.identity.location)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+            }
+
+            Text(
+                "Shown to the station you call and in the EchoLink directory. Both may be left "
+                + "empty.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

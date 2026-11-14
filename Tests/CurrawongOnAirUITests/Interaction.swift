@@ -50,10 +50,10 @@ extension XCUIElement {
 /// Put the software keyboard away.
 ///
 /// **On iPhone this is the difference between a test that works and one that
-/// silently taps the keyboard.** Measured 2026-08-23: with the keyboard up
-/// after filling the connect form, `Save` reports `exists=true hittable=false`
-/// and the tab bar is behind it, so a tap meant for `Session` lands on a key
-/// and nothing appears to happen. Nothing throws — the tap succeeds, just not
+/// silently taps the keyboard.** With the keyboard up after filling a form, a
+/// button under it reports `exists=true hittable=false` and the tab bar is
+/// behind it, so a tap meant for `Session` lands on a key and nothing appears
+/// to happen. Nothing throws — the tap succeeds, just not
 /// on what the test meant.
 func dismissKeyboard(in app: XCUIApplication) {
     #if !os(macOS)
@@ -105,12 +105,10 @@ func showChannelList(in app: XCUIApplication) {
         let channels = app.tabBars.buttons["Channels"].firstMatch
         if channels.waitForExistence(timeout: 5) { channels.tap() }
 
-        // **The tab is not the screen.** `Add channel` *pushes* the connect
-        // form inside the Channels tab, and switching tabs and back leaves that
-        // form on top — so the channel list, and every row query against it, is
-        // still covered. Measured 2026-08-23: this is why the on-air test
-        // reported "the test's channel vanished before it could be deleted"
-        // after an over that had otherwise gone perfectly.
+        // **The tab is not the screen.** A channel's details are *pushed*
+        // inside the Channels tab, and switching tabs and back leaves them on
+        // top — so the channel list, and every row query against it, is still
+        // covered.
         let back = app.buttons["BackButton"].firstMatch
         if back.waitForExistence(timeout: 2), back.isHittable {
             back.tap()
@@ -149,4 +147,59 @@ func replace(_ text: String, in field: XCUIElement) {
             field.typeText(text)
         }
     #endif
+}
+
+/// Answers first run's one question, if the app is asking it. ``IsolatedApp``
+/// wipes the suite, so a reset launch always is.
+func giveCallsign(_ callsign: String, in app: XCUIApplication) {
+    let field = app.textFields["welcome.callsign"].firstMatch
+    guard field.waitForExistence(timeout: 10) else { return }
+    replace(callsign, in: field)
+
+    // On iOS the keyboard's return key submits the field, which is the same
+    // thing Continue does; on macOS nothing has pressed anything yet.
+    dismissKeyboard(in: app)
+    let proceed = app.buttons["welcome.continue"].firstMatch
+    if proceed.exists, proceed.isHittable { proceed.activate() }
+}
+
+/// Adds an M17 channel by typing its address: `Add channel`, the network, then
+/// the fields. Typed rather than chosen from the reflector list, so a test
+/// depends on nothing the list happens to carry that day.
+///
+/// The channel is in the list, selected, when this returns. On iPhone the app
+/// has moved to the Session tab.
+func addM17Channel(
+    named name: String, host: String, module: String, in app: XCUIApplication
+) {
+    let add = app.buttons["Add channel"].firstMatch
+    XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
+    add.activate()
+
+    let network = app.buttons["addChannel.network.m17"].firstMatch
+    XCTAssertTrue(network.waitForExistence(timeout: 5), "Add channel did not offer M17")
+    network.activate()
+
+    let typeInstead = app.buttons["addChannel.typeInstead"].firstMatch
+    XCTAssertTrue(typeInstead.waitForExistence(timeout: 5), "no way past the reflector list")
+    typeInstead.activate()
+
+    // On macOS the selected channel's form is still in the window behind the
+    // sheet, with the same identifiers, so the fields are looked for in the
+    // sheet.
+    let sheet = app.sheets.firstMatch
+    let scope: XCUIElement = sheet.exists ? sheet : app
+    for (identifier, text) in [
+        ("connect.channelName", name), ("connect.host", host), ("connect.module", module),
+    ] {
+        let field = scope.textFields[identifier].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
+        replace(text, in: field)
+    }
+
+    dismissKeyboard(in: app)
+    let confirm = app.buttons["addChannel.add"].firstMatch
+    XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no Add button")
+    XCTAssertTrue(confirm.isEnabled, "Add is disabled on a channel with an address")
+    confirm.activate()
 }

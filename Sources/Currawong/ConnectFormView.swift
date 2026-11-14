@@ -2,38 +2,27 @@
 
 import SwiftUI
 
-/// The channel form: where the channel goes, who the operator is, and Save.
+/// The channel form: a channel's name, where it goes, and what it needs to get
+/// in. The one place a network's fields are edited.
 ///
-/// Edits the draft `RadioSession` holds, which is a working copy (BU-9): Save
-/// is the only thing that writes it over its channel. Shows only the fields the
-/// current `RadioMode` uses, and locks them while a link is up.
+/// Edits whatever ``settings`` is bound to as it is typed, with no Save: the
+/// selected channel, which `RadioSession` writes back on every change, or the
+/// channel ``AddChannelView`` is holding. Shows only the fields the channel's
+/// `RadioMode` uses, and locks them while a link is up. The network is fixed
+/// when a channel is added, so there is no picker for it.
 struct ConnectFormView: View {
     @Binding var settings: NodeSettings
     @Binding var secret: String
 
-    /// Whether an EchoLink account password is stored. Edited in Settings;
-    /// shown because without one a connection succeeds but is unreachable.
+    /// Whether an EchoLink account password is stored. Its absence is shown,
+    /// because without one a connection succeeds but is unreachable.
     let isEchoLinkAccountConfigured: Bool
 
     /// The Web Transceiver token: one per operator, not per channel, so an edit
     /// here changes it everywhere.
     @Binding var webTransceiverToken: String
 
-    /// The operator's identity: app-wide, not part of ``settings``.
-    @Binding var identity: OperatorIdentity
-
     let isEditable: Bool
-
-    /// Whether the draft differs from its stored channel (BU-9). Drives Save
-    /// and the notice.
-    let hasUnsavedChanges: Bool
-
-    /// Whether the draft is a channel not in the list yet, which changes what
-    /// ``unsavedChangesNotice`` says.
-    let draftIsUnsavedChannel: Bool
-
-    /// Saves the draft over its channel.
-    let saveAction: () -> Void
 
     /// The public-proxy finder's state (EchoLink only).
     @ObservedObject var proxyPicker: ProxyPicker
@@ -57,16 +46,12 @@ struct ConnectFormView: View {
                 .disabled(!isEditable)
 
             proxySourcingStatus
-
-            unsavedChangesNotice
-
-            // Save only; connecting is ``SessionLinkButton``'s (APP-23).
-            Button("Save", action: saveAction)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!hasUnsavedChanges || !isEditable)
         }
         .onAppear {
+            portText = String(settings.port)
+        }
+        // The form outlives a change of channel, and the port field is text.
+        .onChange(of: settings.id) { _ in
             portText = String(settings.port)
         }
         .onChange(of: portText) { newValue in
@@ -74,22 +59,6 @@ struct ConnectFormView: View {
             if let port = NodeSettings.parsePort(newValue, for: settings.mode) {
                 settings.port = port
             }
-        }
-    }
-
-    /// Says the form and the channel list disagree (BU-9).
-    @ViewBuilder
-    private var unsavedChangesNotice: some View {
-        if hasUnsavedChanges {
-            Label(
-                draftIsUnsavedChannel
-                    ? "Not saved. Connecting will add this to your channels."
-                    : "Unsaved changes. Connecting will call this, but the saved channel is "
-                        + "unchanged until you save.",
-                systemImage: "pencil.circle")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -121,37 +90,8 @@ struct ConnectFormView: View {
         }
     }
 
-    /// Which network to use. Changing it moves the port to the new mode's
-    /// default only if it was still another mode's default.
-    private var modePicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Mode", selection: $settings.mode) {
-                ForEach(RadioMode.allCases) { mode in
-                    Text(mode.displayName).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: settings.mode) { newMode in
-                for other in RadioMode.allCases where other != newMode {
-                    if settings.port == other.defaultPort {
-                        settings.port = newMode.defaultPort
-                        portText = String(newMode.defaultPort)
-                    }
-                }
-
-                // Only when empty: blank means "no directory login", which
-                // leaves a station unreachable while reporting success.
-                if newMode.usesProxy && settings.directoryServer.isEmpty {
-                    settings.directoryServer = NodeSettings.defaultDirectoryServer
-                }
-            }
-
-        }
-    }
-
     private var fields: some View {
         VStack(alignment: .leading, spacing: 14) {
-            modePicker
             channelNameField
 
             if settings.mode.usesProxy {
@@ -177,43 +117,42 @@ struct ConnectFormView: View {
         }
     }
 
-    /// AllStarLink and M17: destination first, then the operator.
+    /// AllStarLink and M17: the destination, then what it takes to get in.
+    /// AllStarLink leads with the node number, because the lookup under it
+    /// fills in the host.
     @ViewBuilder
     private var directFields: some View {
         Text(destinationHeading)
             .font(.headline)
-
-        hostAndPortFields
 
         if settings.mode.usesNodeNumber {
             nodeNumberField
             nodeLookupRow
         }
 
+        hostAndPortFields
+
         if settings.mode.usesModule {
             moduleField
         }
 
-        Divider()
-
-        Text("You")
-            .font(.headline)
-
-        identityFields
+        accessFields
     }
 
-    /// EchoLink: the operator's account, then the station, then the proxy and
-    /// directory server folded away — ordered by how often each changes.
+    /// EchoLink: the station, then the proxy and directory server folded
+    /// away — ordered by how often each changes.
     @ViewBuilder
     private var echoLinkFields: some View {
-        Text("Your EchoLink account")
-            .font(.headline)
+        if !isEchoLinkAccountConfigured {
+            Label(
+                "No EchoLink password yet. Add it in Settings, or stations will not answer.",
+                systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
 
-        identityFields
-
-        Divider()
-
-        Text("Where to")
+        Text("Station")
             .font(.headline)
 
         echoLinkNodeFields
@@ -331,7 +270,7 @@ struct ConnectFormView: View {
             }
 
             Text(
-                "AllStarLink publishes where each node last registered, so the host above can be "
+                "AllStarLink publishes where each node last registered, so the host below can be "
                 + "filled in from the number — and the node's callsign becomes the channel name if "
                 + "you have not named it yourself. A private node is not listed — type its address "
                 + "by hand.")
@@ -354,9 +293,7 @@ struct ConnectFormView: View {
                 .autocorrectionDisabled()
         }
 
-        Text(
-            "A single letter — reflectors put different conversations on different modules. "
-            + "The Reflectors pane lists what is out there and fills both fields in for you.")
+        Text("A single letter. Reflectors put different conversations on different modules.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -364,7 +301,8 @@ struct ConnectFormView: View {
 
     /// **AllStarLink.** Which route to the node this channel takes: chosen, not
     /// inferred from the filled fields, since the routes need different
-    /// credentials. In "You", because it decides credentials, not destination.
+    /// credentials. Under "Access", because it decides credentials, not
+    /// destination.
     @ViewBuilder
     private var accessPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -424,24 +362,6 @@ struct ConnectFormView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder
-    private var callsignField: some View {
-        LabelledField(label: "Callsign", systemImage: "person.wave.2") {
-            TextField("VK1XYZ", text: $identity.callsign)
-                .accessibilityIdentifier("connect.callsign")
-                .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                    .textInputAutocapitalization(.characters)
-                #endif
-                .autocorrectionDisabled()
-        }
-
-        // Said plainly: this field is app-wide, unlike the rest of the form.
-        Text("Your callsign, used on every channel and in every mode.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
     }
 
     /// The destination heading for ``directFields``; EchoLink has its own.
@@ -541,7 +461,7 @@ struct ConnectFormView: View {
 
     /// **EchoLink.** The far station: a callsign for the operator and an
     /// address for the wire, since the proxy tunnels literal octets. If they
-    /// disagree the address wins; the Stations pane fills in both.
+    /// disagree the address wins; the station list fills in both.
     @ViewBuilder
     private var echoLinkNodeFields: some View {
         LabelledField(label: "Node callsign", systemImage: "antenna.radiowaves.left.and.right") {
@@ -567,15 +487,16 @@ struct ConnectFormView: View {
 
         Text(
             "Four numbers separated by dots — a callsign or a host name will not work here. "
-            + "EchoLink addresses change as stations come and go, so use the Stations pane "
-            + "rather than typing one from memory.")
+            + "EchoLink addresses change as stations come and go; adding the station again "
+            + "from the list brings this up to date.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// **EchoLink.** The directory server; filled in when the mode is chosen,
-    /// since blank means "no directory login".
+    /// **EchoLink.** The directory server. A new channel starts with the
+    /// default (``NodeSettings/blank(for:)``), since blank means "no directory
+    /// login".
     @ViewBuilder
     private var directoryServerField: some View {
         LabelledField(label: "Directory server", systemImage: "list.bullet.rectangle") {
@@ -597,14 +518,17 @@ struct ConnectFormView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Who the operator is to the far end, per mode. The callsign leads in
-    /// every mode; in EchoLink it is also the account name.
+    /// What the channel needs to get in, per mode. The callsign is not here: it
+    /// is the operator's, asked for once and kept in Settings.
     @ViewBuilder
-    private var identityFields: some View {
-        callsignField
-
+    private var accessFields: some View {
         switch settings.mode {
         case .allStarLink:
+            Divider()
+
+            Text("Access")
+                .font(.headline)
+
             accessPicker
 
             if settings.usesWebTransceiver {
@@ -620,7 +544,7 @@ struct ConnectFormView: View {
                 }
 
                 LabelledField(label: "Secret", systemImage: "key") {
-                    // Written to the Keychain on connect; never to defaults or logs.
+                    // Kept in the Keychain; never in defaults or logs.
                     SecureField("stored in the Keychain", text: $secret)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -638,38 +562,8 @@ struct ConnectFormView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
         case .echoLink:
-            // Edited in Settings (APP-12); shown only as set or not.
-            Label(
-                isEchoLinkAccountConfigured
-                    ? "Account password stored. Change it in Settings."
-                    : "No account password yet — set one in Settings, or the directory server "
-                        + "will not register you.",
-                systemImage: isEchoLinkAccountConfigured
-                    ? "checkmark.circle" : "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundStyle(isEchoLinkAccountConfigured ? Color.secondary : Color.orange)
-                .fixedSize(horizontal: false, vertical: true)
-
-            LabelledField(label: "Operator name", systemImage: "person") {
-                TextField("optional", text: $identity.operatorName)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-            }
-
-            LabelledField(label: "Location", systemImage: "mappin.and.ellipse") {
-                TextField("Canberra", text: $identity.location)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-            }
-
-            // App-wide, like the callsign; only EchoLink sends them.
-            Text(
-                "Both are shown to the far end and in the directory listing, and both may be "
-                + "empty. Like your callsign, they are yours rather than this channel's.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            keychainNote
+            // The account is the operator's, not the channel's.
+            EmptyView()
         }
     }
 

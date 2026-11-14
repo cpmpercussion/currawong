@@ -119,6 +119,27 @@ struct NodeSettings: Equatable, Codable, Sendable, Identifiable {
         self.username = username
     }
 
+    /// A new channel on `mode`, with that mode's port and, for EchoLink, the
+    /// default directory server: blank there means "no directory login", which
+    /// leaves a station unreachable while reporting success.
+    static func blank(for mode: RadioMode) -> NodeSettings {
+        NodeSettings(
+            mode: mode,
+            port: mode.defaultPort,
+            directoryServer: mode.usesProxy ? defaultDirectoryServer : "")
+    }
+
+    /// Whether anything says where this channel goes, which is the least a
+    /// channel needs to be worth a row in the list. Not validation;
+    /// ``validated()`` is.
+    var hasDestination: Bool {
+        switch mode {
+        case .allStarLink: return !host.trimmed.isEmpty || !node.trimmed.isEmpty
+        case .m17: return !host.trimmed.isEmpty
+        case .echoLink: return !peer.trimmed.isEmpty || !node.trimmed.isEmpty
+        }
+    }
+
     /// Whether this channel is a Web Transceiver guest call. Checks the mode
     /// too, so a stale `.webTransceiver` on a non-AllStar channel means nothing.
     var usesWebTransceiver: Bool {

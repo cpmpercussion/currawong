@@ -12,8 +12,9 @@ final class HierarchyDumpUITests: XCTestCase {
         // launching against the operator's real channel list, and the dump then
         // named their channels in the build log.
         let app = IsolatedApp.launched()
-        let m17 = app.radioButtons["M17"].firstMatch
-        if m17.waitForExistence(timeout: 5) { m17.activate() }
+        giveCallsign("N0CALL", in: app)
+        addM17Channel(
+            named: "Dump probe", host: "m17-cbr.charlesmartin.au", module: "A", in: app)
         Thread.sleep(forTimeInterval: 1)
         print("=== TEXT FIELDS ===")
         for field in app.textFields.allElementsBoundByIndex {
@@ -33,39 +34,9 @@ final class HierarchyDumpUITests: XCTestCase {
     func testDumpAfterFillingTheForm() {
         let app = IsolatedApp.launched()
 
-        let add = app.buttons["Add channel"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
-        add.activate()
-
-        let name = app.textFields["connect.channelName"].firstMatch
-        if name.waitForExistence(timeout: 5) { replace("Dump probe", in: name) }
-
-        for candidate in [
-            app.radioButtons["M17"].firstMatch,
-            app.segmentedControls.buttons["M17"].firstMatch,
-            app.buttons["M17"].firstMatch,
-        ] where candidate.waitForExistence(timeout: 2) {
-            candidate.activate()
-            break
-        }
-
-        for (identifier, text) in [
-            ("connect.callsign", "N0CALL"),
-            ("connect.host", "m17-cbr.charlesmartin.au"),
-            ("connect.module", "A"),
-        ] {
-            let field = app.textFields[identifier].firstMatch
-            if field.waitForExistence(timeout: 5) { replace(text, in: field) }
-        }
-
-        print("=== BUTTONS, form filled, still on the form ===")
-        for button in app.buttons.allElementsBoundByIndex {
-            print("button: id=\(button.identifier) label=\(button.label)")
-        }
-
-        dismissKeyboard(in: app)
-        let save = app.buttons["Save"].firstMatch
-        print("=== after dismissing the keyboard: Save hittable=\(save.isHittable)")
+        giveCallsign("N0CALL", in: app)
+        addM17Channel(
+            named: "Dump probe", host: "m17-cbr.charlesmartin.au", module: "A", in: app)
 
         showSessionPane(in: app)
         Thread.sleep(forTimeInterval: 1)
@@ -75,7 +46,7 @@ final class HierarchyDumpUITests: XCTestCase {
             print("button: id=\(button.identifier) label=\(button.label)")
         }
         let link = app.buttons["Connect to Dump probe"].firstMatch
-        print("=== link button without Save: exists=\(link.exists)")
+        print("=== link button: exists=\(link.exists)")
 
         print("=== SESSION TREE ===")
         print(app.debugDescription)
@@ -94,9 +65,8 @@ final class ChannelRestoreUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // Select the channel by name first. Without this the edits land on
-        // whatever the draft happens to be — which is the same trap the on-air
-        // test fell into.
+        // Select the channel by name first, or the edits land on whichever
+        // channel is selected.
         if let name = env["RESTORE_CHANNEL"] {
             let row = app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
@@ -104,33 +74,12 @@ final class ChannelRestoreUITests: XCTestCase {
             row.activate()
         }
 
-        let m17 = app.radioButtons["M17"].firstMatch
-        if m17.waitForExistence(timeout: 5) { m17.activate() }
         for (identifier, text) in [("connect.host", host), ("connect.module", module)] {
             let field = app.textFields[identifier].firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
             replace(text, in: field)
         }
-        // Typing alone does not reach the channel list: since BU-9 only Save
-        // and Connect write to it, and since APP-19 `Add channel` does not
-        // either. Selecting *stashes* the edit against the channel it is
-        // leaving, which is enough for what this dump needs — so select
-        // something else and select back to prove the draft stuck.
-        let name = env["RESTORE_CHANNEL"] ?? ""
-        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", M17,"))
-        var other: XCUIElement?
-        for index in 0..<rows.count where !rows.element(boundBy: index).label.hasPrefix(name) {
-            other = rows.element(boundBy: index)
-            break
-        }
-        XCTAssertNotNil(other, "no other channel to select, so the draft cannot be flushed")
-        other?.activate()
-        Thread.sleep(forTimeInterval: 1)
-
-        let restored = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
-        restored.activate()
-        Thread.sleep(forTimeInterval: 1)
+        // Edits are saved as they are typed, so there is nothing to commit.
         XCTAssertEqual(app.textFields["connect.host"].firstMatch.value as? String, host)
         XCTAssertEqual(app.textFields["connect.module"].firstMatch.value as? String, module)
     }

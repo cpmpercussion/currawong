@@ -122,26 +122,31 @@ final class RadioSession: ObservableObject {
 
     // MARK: - Published state
 
-    /// The connect form's working copy of the selected channel (BU-9).
+    /// The selected channel, as the connect form edits it.
     ///
-    /// A draft, not the stored channel: it may hold half-typed values, and only
-    /// ``saveDraft()`` writes it back into ``channels``. ``connect()`` adds a
-    /// draft that is in no channel yet, but never overwrites one.
-    @Published var settings: NodeSettings
+    /// Edits are saved as they are made: a change to a channel that is in
+    /// ``channels`` is written back and persisted at once, half-typed values
+    /// included. ``connect()`` is the validation gate, not this.
+    ///
+    /// It is in no channel only when the list is empty, or after
+    /// ``restoreLastConnectedChannel()`` on a channel deleted since.
+    @Published var settings: NodeSettings {
+        didSet {
+            guard settings != oldValue,
+                let stored = channels.channels.first(where: { $0.id == settings.id }),
+                stored != settings
+            else { return }
+            channels.update(settings)
+            persistChannels()
+        }
+    }
 
     /// Every saved channel and which one is selected (APP-4). Persisted on
     /// every change, since iOS has no reliable "at quit".
     @Published private(set) var channels: ChannelSet
 
-    /// Unsaved edits, keyed by channel id (BU-9). An id in no channel is a
-    /// channel never saved, and needs no special case.
-    ///
-    /// Written by ``stashDraft()``, cleared by ``saveDraft()``, and loaded in
-    /// preference to the stored channel, so an edit survives a quit.
-    @Published private(set) var drafts: [UUID: NodeSettings]
-
-    /// The secret, in memory only. It reaches the Keychain in ``connect()``
-    /// and `UserDefaults` never.
+    /// The selected channel's secret, in memory only. It reaches the Keychain
+    /// in ``connect()`` and ``persistCredentials()``, and `UserDefaults` never.
     @Published var secret: String
 
     /// The Web Transceiver token (APP-11), in memory only, like ``secret``.
@@ -215,9 +220,20 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Who is operating. App-wide, so it has no draft of its own: persisted by
-    /// ``connect()``, ``saveDraft()`` and ``stashDraft()``.
-    @Published var identity: OperatorIdentity
+    /// Who is operating. App-wide, and persisted on change, as typed;
+    /// ``connect()`` validates and uppercases.
+    @Published var identity: OperatorIdentity {
+        didSet {
+            guard identity != oldValue else { return }
+            settingsStore.saveIdentity(identity)
+        }
+    }
+
+    /// Whether the app has yet to be told a callsign, which every network
+    /// needs: true from a launch that found none stored until
+    /// ``setCallsign(_:)``. Not derived from ``identity``, so emptying the
+    /// field in Settings does not bring the first-run screen back mid-edit.
+    @Published private(set) var needsCallsign: Bool
 
     @Published private(set) var connection: ConnectionStatus = .disconnected
 
@@ -480,31 +496,14 @@ final class RadioSession: ObservableObject {
         let loaded = ChannelSet.loaded(from: settingsStore)
         self.channels = loaded
 
-        // Drafts load before the draft is chosen, since it is chosen from
-        // them. Duplicate ids keep the last rather than trapping at launch.
-        let storedDrafts = settingsStore.loadDrafts() ?? []
-        let allDrafts = Dictionary(
-            storedDrafts.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-
-        // Drafts for channels not in the list are dropped here, at launch
-        // only: nothing can select them, so they would sit in the defaults for
-        // ever. Within a run they are how a directory browse is kept.
-        let liveDrafts = allDrafts.filter { id, _ in loaded.channels.contains { $0.id == id } }
-        self.drafts = liveDrafts
-        if liveDrafts.count != allDrafts.count {
-            settingsStore.saveDrafts(Array(liveDrafts.values))
-        }
-
-        // An unsaved edit wins over the stored channel: it is what the
-        // operator was last looking at.
-        let stored = loaded.selected ?? NodeSettings()
-        let current = liveDrafts[stored.id] ?? stored
+        let current = loaded.selected ?? NodeSettings()
         self.settings = current
 
         // Before the secret is fetched: some Keychain accounts are derived from
         // the callsign.
         let identity = settingsStore.loadIdentity() ?? .empty
         self.identity = identity
+        self.needsCallsign = identity.normalisedCallsign.isEmpty
         let storedGain = settingsStore.loadTransmitGain() ?? .unity
         self.transmitGain = storedGain
         self.gainBox.gain = storedGain
@@ -538,6 +537,23 @@ final class RadioSession: ObservableObject {
             self.echoLinkProxyPassword =
                 (try? secretStore.secret(for: EchoLinkProxySettings.passwordAccount)) ?? ""
         }
+    }
+
+    // MARK: - The operator
+
+    /// Records the callsign first run asked for, normalised, and reloads the
+    /// two credentials filed under a callsign: the Keychain outlives a deleted
+    /// app, so a returning operator's token and password may already be there.
+    func setCallsign(_ callsign: String) {
+        let normalised = OperatorIdentity(callsign: callsign).normalisedCallsign
+        guard !normalised.isEmpty else { return }
+
+        identity.callsign = normalised
+        needsCallsign = false
+        webTransceiverToken =
+            (try? secretStore.secret(for: NodeSettings.webTransceiverAccount(for: identity))) ?? ""
+        echoLinkAccountPassword =
+            (try? secretStore.secret(for: NodeSettings.echoLinkAccount(for: identity))) ?? ""
     }
 
     // MARK: - The stored accounts (APP-12)
@@ -632,14 +648,14 @@ final class RadioSession: ObservableObject {
     func select(_ id: UUID) {
         guard connection == .disconnected else { return }
         // Nothing to do only if selected *and* in the form: after
-        // ``chooseChannel(_:)`` the two can differ, and tapping the highlighted
-        // row means "go back to it".
+        // ``restoreLastConnectedChannel()`` the two can differ, and tapping the
+        // highlighted row means "go back to it".
         guard id != channels.selectedID || settings.id != id else { return }
         guard channels.channels.contains(where: { $0.id == id }) else { return }
 
-        stashDraft()
+        persistCredentials()
         channels.select(id)
-        loadSelectedIntoDraft()
+        loadSelected()
         persistChannels()
     }
 
@@ -666,134 +682,80 @@ final class RadioSession: ObservableObject {
         return wasLinked && channels.selectedID == id
     }
 
-    /// Whether the draft differs from its stored channel (BU-9). A draft in no
-    /// channel counts as dirty, except an untouched blank form, which is what
-    /// the app opens on with no channels.
-    var isDraftDirty: Bool {
-        if let stored = channels.channels.first(where: { $0.id == settings.id }) {
-            return stored != settings
-        }
-        return settings != NodeSettings(id: settings.id)
+    /// Whether the form is showing a channel that is in the list, and so
+    /// whether there is anything to edit.
+    var isShowingStoredChannel: Bool {
+        channels.channels.contains { $0.id == settings.id }
     }
 
-    /// Whether the draft is in no channel at all — a directory browse, or an
-    /// `Add channel` not yet saved or connected. Connecting adds such a draft
-    /// to the list, unlike edits to a stored channel.
-    var isDraftAnUnsavedChannel: Bool {
-        !channels.channels.contains { $0.id == settings.id }
-    }
-
-    /// Whether a channel has an unsaved edit waiting, for ``ChannelListView``'s
-    /// row marker.
-    func hasUnsavedEdits(for id: UUID) -> Bool {
-        if id == settings.id { return isDraftDirty }
-        guard let draft = drafts[id] else { return false }
-        return channels.channels.first(where: { $0.id == id }) != draft
-    }
-
-    /// **Save.** The only thing that overwrites a stored channel (BU-9). A
-    /// draft in no channel is added.
-    ///
-    /// Unvalidated, so a half-typed channel can be kept; ``connect()`` is the
-    /// validation gate.
-    func saveDraft() {
-        if channels.channels.contains(where: { $0.id == settings.id }) {
-            channels.update(settings)
-        } else {
-            channels.add(settings)
-        }
-        drafts[settings.id] = nil
-        persistChannels()
-        persistDrafts()
-
-        // Stored as typed; `connect()` validates and uppercases.
-        settingsStore.saveIdentity(identity)
-    }
-
-    /// Keeps the draft in ``drafts`` without touching the channel list (BU-9).
-    /// Called by every path that moves the form away from the draft, so none
-    /// overwrites a channel or loses what was typed. A clean draft clears its
-    /// stash.
-    func stashDraft() {
-        drafts[settings.id] = isDraftDirty ? settings : nil
-        persistDrafts()
-
-        // The callsign is app-wide, so it has no draft; save it as we pass.
-        settingsStore.saveIdentity(identity)
-    }
-
-    /// **`Add channel`.** Points the draft at a new, blank channel, and writes
-    /// nothing to the list.
-    ///
-    /// Identical to ``chooseChannel(_:)`` otherwise: the channel reaches the
-    /// list when it is saved or connected to (BU-9's rule, APP-19). So a new
-    /// channel that is neither saved nor connected does not survive a quit, and
-    /// the form says so ("Not saved") as soon as there is anything to lose.
+    /// Adds a channel, selects it, and shows it in the form.
     ///
     /// Refused while connected, as ``select(_:)`` is: the form would describe
     /// one channel while the audio came from another.
     ///
-    /// - Returns: the new channel's id, or `nil` if a link is up and nothing
+    /// - Parameter secret: the channel's own secret, if one was typed with it;
+    ///   filed in the Keychain now. Empty leaves whatever is stored there.
+    /// - Returns: the channel's id, or `nil` if a link is up and nothing
     ///   changed.
     @discardableResult
-    func newChannel(_ channel: NodeSettings = NodeSettings()) -> UUID? {
+    func addChannel(_ channel: NodeSettings, secret typedSecret: String = "") -> UUID? {
         guard connection == .disconnected else { return nil }
 
-        // The draft being replaced may be a real channel with unsaved edits, and
-        // they are kept without being applied to it.
-        stashDraft()
-
+        persistCredentials()
+        channels.add(channel)
+        persistChannels()
         settings = channel
-        secret = storedSecret(for: channel)
+        secret = typedSecret.isEmpty ? storedSecret(for: channel) : typedSecret
+        persistCredentials()
         return channel.id
     }
 
-    /// Throws away a draft that is in no channel and puts the form back on the
-    /// selected channel: the provisional row's Discard (APP-22). A no-op for a
-    /// stored channel, which is ``deleteChannel(_:)``'s job.
+    /// Goes to somewhere chosen from a directory, adding it as a channel
+    /// unless it is one already.
     ///
-    /// - Returns: whether anything was discarded.
-    @discardableResult
-    func discardDraftChannel() -> Bool {
-        guard connection == .disconnected, isDraftAnUnsavedChannel else { return false }
-
-        // Its stash entry would otherwise be unreachable.
-        drafts[settings.id] = nil
-        persistDrafts()
-        loadSelectedIntoDraft()
-        return true
-    }
-
-    /// Points the draft at somewhere chosen from a directory, without saving
-    /// it: only ``saveDraft()`` and ``connect()`` add to the channel list, so
-    /// browsing leaves nothing behind. Like ``newChannel(_:)``, the draft does
-    /// not survive a quit unless saved or connected to.
-    ///
-    /// - Returns: whether the draft now points at `channel`. `false` means a
-    ///   link is up and nothing changed.
+    /// - Returns: whether the form now shows that place. `false` means a link
+    ///   is up and nothing changed.
     @discardableResult
     func chooseChannel(_ channel: NodeSettings) -> Bool {
         // Refused while connected, as `select(_:)` is.
         guard connection == .disconnected else { return false }
 
-        // Keep the replaced draft's edits without applying them.
-        stashDraft()
-
         // Already in the list: select it rather than add an indistinguishable
         // second copy.
         if let existing = channels.channels.first(where: { $0.isSamePlace(as: channel) }) {
-            channels.select(existing.id)
-            loadSelectedIntoDraft()
-            persistChannels()
+            show(existing.id)
             return true
         }
 
-        settings = channel
-        secret = storedSecret(for: channel)
-        return true
+        // An EchoLink station's address changes as it comes and goes, so the
+        // same callsign at a new address is the saved channel, brought up to
+        // date, and not a second station.
+        if channel.mode.usesProxy,
+            var moved = channels.channels.first(where: {
+                $0.mode == channel.mode && !$0.node.isEmpty
+                    && $0.node.caseInsensitiveCompare(channel.node) == .orderedSame
+            })
+        {
+            moved.peer = channel.peer
+            persistCredentials()
+            channels.update(moved)
+            show(moved.id)
+            return true
+        }
+
+        return addChannel(channel) != nil
     }
 
-    /// Deletes a channel and its pending draft (BU-9).
+    /// Selects a channel known to be in the list and loads it, whatever the
+    /// form showed before.
+    private func show(_ id: UUID) {
+        persistCredentials()
+        channels.select(id)
+        loadSelected()
+        persistChannels()
+    }
+
+    /// Deletes a channel.
     ///
     /// The Keychain secret is left alone: its account may be shared by other
     /// channels, so deleting it could log the operator out of those. An
@@ -801,11 +763,9 @@ final class RadioSession: ObservableObject {
     func deleteChannel(_ id: UUID) {
         guard connection == .disconnected else { return }
 
-        let wasSelected = channels.selectedID == id
+        let wasShown = channels.selectedID == id || settings.id == id
         channels.remove(id)
-        drafts[id] = nil
-        persistDrafts()
-        if wasSelected { loadSelectedIntoDraft() }
+        if wasShown { loadSelected() }
         persistChannels()
     }
 
@@ -814,6 +774,25 @@ final class RadioSession: ObservableObject {
     func moveChannels(fromOffsets source: IndexSet, toOffset destination: Int) {
         channels.move(fromOffsets: source, toOffset: destination)
         persistChannels()
+    }
+
+    /// Files the credentials the form holds in memory, so they are not lost
+    /// when the form moves to another channel or the app is put away without
+    /// a connect. Quiet: ``connect()`` is where a failed write is reported.
+    ///
+    /// Never an empty value: `SecretStore` deletes on one, and a channel's
+    /// account may be shared with another channel.
+    func persistCredentials() {
+        guard isShowingStoredChannel else { return }
+
+        if case .channel(let account) = settings.secretOwnership(for: identity), !secret.isEmpty {
+            try? secretStore.setSecret(secret, for: account)
+        }
+
+        let token = webTransceiverToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if settings.usesWebTransceiver, !token.isEmpty {
+            try? secretStore.setSecret(token, for: settings.webTransceiverAccount(for: identity))
+        }
     }
 
     /// What the station browser needs to ask the directory server for a
@@ -826,9 +805,13 @@ final class RadioSession: ObservableObject {
         let accountPassword: String
     }
 
+    /// The directory server is the selected channel's when that is an EchoLink
+    /// one, and the default otherwise, so the listing can be read before any
+    /// EchoLink channel exists.
     var directoryRequest: DirectoryRequest {
         DirectoryRequest(
-            settings: settings, identity: identity, accountPassword: echoLinkAccountPassword)
+            settings: settings.mode.usesProxy ? settings : .blank(for: .echoLink),
+            identity: identity, accountPassword: echoLinkAccountPassword)
     }
 
     /// Which password a link is built with (APP-14): the form's `secret` for a
@@ -858,21 +841,15 @@ final class RadioSession: ObservableObject {
         }
     }
 
-    /// Loads the selected channel, or its pending draft, into the form (BU-9).
-    private func loadSelectedIntoDraft() {
-        let stored = channels.selected ?? NodeSettings()
-        let current = drafts[stored.id] ?? stored
+    /// Loads the selected channel and its secret into the form.
+    private func loadSelected() {
+        let current = channels.selected ?? NodeSettings()
         settings = current
         secret = storedSecret(for: current)
     }
 
     private func persistChannels() {
         channels.save(to: settingsStore)
-    }
-
-    /// Writes the drafts out, on every change like the channel list.
-    private func persistDrafts() {
-        settingsStore.saveDrafts(Array(drafts.values))
     }
 
     // MARK: - Lifecycle
@@ -928,7 +905,6 @@ final class RadioSession: ObservableObject {
 
         // Written back so the field shows the uppercased, trimmed form used.
         identity = validatedIdentity
-        settingsStore.saveIdentity(validatedIdentity)
 
         let validated: NodeSettings
         do {
@@ -955,14 +931,12 @@ final class RadioSession: ObservableObject {
             return
         }
 
-        // Connecting may add a channel; it never overwrites one (BU-9). An
-        // edit to a stored channel stays a draft until `saveDraft()`.
-        if !channels.channels.contains(where: { $0.id == validated.id }) {
+        // A stored channel took the validated form with the assignment above.
+        // One that is not stored is the last-connected channel, deleted since.
+        if !isShowingStoredChannel {
             channels.add(validated)
             persistChannels()
         }
-
-        stashDraft()
 
         // The legacy single-node key too, so a downgrade finds the last node.
         settingsStore.save(validated)
@@ -1089,25 +1063,24 @@ final class RadioSession: ObservableObject {
         lastConnectedChannel = validated
     }
 
-    /// Points the draft back at the last channel a call was placed to, so
+    /// Points the form back at the last channel a call was placed to, so
     /// ``connect()`` reconnects there rather than to whatever is now selected.
     ///
-    /// - Returns: whether the draft now points at that channel. `false` means
+    /// - Returns: whether the form now shows that channel. `false` means
     ///   there is nowhere to go back to, or a link is already up.
     @discardableResult
     func restoreLastConnectedChannel() -> Bool {
         guard connection == .disconnected, let last = lastConnectedChannel else { return false }
         guard settings.id != last.id else { return true }
 
-        // Through `select(_:)`, to keep the selection and the draft in step.
+        // Through `select(_:)`, to keep the selection and the form in step.
         if channels.channels.contains(where: { $0.id == last.id }) {
             select(last.id)
             return channels.selectedID == last.id
         }
 
-        // Deleted since: point the draft at it anyway, stashing (not saving)
-        // the draft being left.
-        stashDraft()
+        // Deleted since: show it anyway; `connect()` puts it back in the list.
+        persistCredentials()
         settings = last
         secret = storedSecret(for: last)
         return true

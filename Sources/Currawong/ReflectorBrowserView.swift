@@ -10,20 +10,16 @@ import SwiftUI
 /// but a hundred and twenty-five reflectors across twenty countries is not
 /// something to hold in your head.
 ///
-/// Tapping a module fills in the connect screen and takes you to it — it does
-/// not save a channel or go on the air. The channel is saved only when the
-/// connection succeeds, so the list means "places I have been", not
-/// "reflectors I once tapped".
+/// Tapping a module adds it as a channel, or selects the channel that already
+/// goes there. It does not go on the air.
 struct ReflectorBrowserView: View {
     @ObservedObject var session: RadioSession
     @ObservedObject var browser: ReflectorBrowser
 
-    /// Called after a module is chosen, so the container can show the connect
-    /// screen — otherwise choosing somewhere to go and being left in the list
-    /// reads as nothing having happened.
+    /// Called after a module is chosen and is the selected channel.
     var onChosen: () -> Void = {}
 
-    /// Repointing the draft is refused while a link is up, by `RadioSession`.
+    /// Changing channel is refused while a link is up, by `RadioSession`.
     private var canChoose: Bool { session.connection == .disconnected }
 
     private static let listedFormatter: DateFormatter = {
@@ -125,8 +121,7 @@ struct ReflectorBrowserView: View {
             if browser.search.isEmpty && !browser.isLoading {
                 Text(
                     "The list is published by the M17 Project and fetched over the internet. "
-                    + "Refresh to try again, or type a reflector's host name on the connect "
-                    + "form instead.")
+                    + "Refresh to try again, or type a reflector's address instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -152,7 +147,7 @@ struct ReflectorBrowserView: View {
                 choose: { module in
                     guard
                         session.chooseChannel(
-                            reflector.channel(module: module, basedOn: session.settings))
+                            reflector.channel(module: module, basedOn: .blank(for: .m17)))
                     else { return }
                     onChosen()
                 })
@@ -262,8 +257,8 @@ private struct ReflectorRow: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(!canChoose)
-                .accessibilityLabel("Choose \(reflector.designator) module \(module.letter)")
-                .accessibilityHint("Fills in the connect screen for this module")
+                .accessibilityLabel("Add \(reflector.designator) module \(module.letter)")
+                .accessibilityHint("Adds this module as a channel")
             }
         }
     }

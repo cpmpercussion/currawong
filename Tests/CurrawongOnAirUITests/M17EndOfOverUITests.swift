@@ -94,11 +94,8 @@ final class M17EndOfOverUITests: XCTestCase {
             rowCount(named: channelName, in: app), 0,
             "the app did not start from an empty channel list — see IsolatedApp")
 
-        addChannel(named: channelName, in: app)
-        selectM17Mode(in: app)
-        replace(callsign, in: field("connect.callsign", in: app))
-        replace(reflector, in: field("connect.host", in: app))
-        replace(module, in: field("connect.module", in: app))
+        giveCallsign(callsign, in: app)
+        addM17Channel(named: channelName, host: reflector, module: module, in: app)
 
         // **APP-23: the form's Connect button is gone**, and `app.buttons["Connect"]`
         // must not be reached for again — the pane switcher has a radio button
@@ -188,23 +185,6 @@ final class M17EndOfOverUITests: XCTestCase {
     }
 
     // MARK: - The test's own channel
-
-    /// Adds a channel and names it. It points the form at a new channel, so
-    /// everything typed after this lands on the new one.
-    ///
-    /// **APP-19: `Add channel` no longer writes to the list** — Save or Connect
-    /// does, and here it is the connect below. Pressing Save *here* is the wrong
-    /// move and was tried: the Save button is at the bottom of the form, so
-    /// clicking it scrolls the form, and the fields this test then types into
-    /// report frames outside the visible scroll area. Clicks at those points land
-    /// on the session pane above and the field never takes focus — a failure that
-    /// reads like a broken text field and is a scrolled one.
-    private func addChannel(named name: String, in app: XCUIApplication) {
-        let add = app.buttons["Add channel"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
-        add.activate()
-        replace(name, in: field("connect.channelName", in: app))
-    }
 
     /// Deletes it again. **The one place the two platforms differ in mechanism
     /// rather than in wording**, which is why it is forked here and the rest of
@@ -311,36 +291,6 @@ final class M17EndOfOverUITests: XCTestCase {
 
     private func rowCount(named name: String, in app: XCUIApplication) -> Int {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).count
-    }
-
-    // MARK: - Driving the form
-
-    /// The mode picker is a segmented `Picker`. macOS surfaces its options as
-    /// radio buttons; iOS surfaces them as buttons inside a segmented control.
-    /// Each candidate is tried in turn rather than assumed, because the element
-    /// type a SwiftUI `Picker` reports has changed between OS versions before.
-    private func selectM17Mode(in app: XCUIApplication) {
-        let candidates = [
-            app.radioButtons["M17"].firstMatch,
-            app.segmentedControls.buttons["M17"].firstMatch,
-            app.buttons["M17"].firstMatch,
-            app.descendants(matching: .any)["M17"].firstMatch,
-        ]
-        for candidate in candidates where candidate.waitForExistence(timeout: 2) {
-            candidate.activate()
-            return
-        }
-        XCTFail("no M17 mode control")
-    }
-
-    /// The fields carry both an accessibility label — for anyone using a
-    /// screen reader — and an identifier, for this test. Queries go through the
-    /// identifier: labels are user-facing text and get reworded, identifiers
-    /// are a contract.
-    private func field(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
-        let field = app.textFields[identifier].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
-        return field
     }
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

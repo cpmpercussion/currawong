@@ -13,6 +13,10 @@ import SwiftUI
 ///   operator has left" and must not be copied into a pane, which would fire it
 ///   on every tab switch.
 /// - It is the one alert presenter; two bound to `session.alert` would race.
+/// - It presents `Add channel` (``AddChannelView``), from either layout.
+///
+/// Until the operator has given a callsign, ``WelcomeView`` stands where the
+/// panes go, under the same banner.
 ///
 /// Tabs on a compact iPhone, a split view otherwise; macOS always splits. In
 /// the tab layout, leaving the Session tab while keyed unkeys, through
@@ -59,6 +63,9 @@ struct RootView: View {
     /// Whether the Channels tab has the details form pushed. Tab layout only.
     @State private var showsChannelDetails = false
 
+    /// Whether the `Add channel` flow is up.
+    @State private var isAddingChannel = false
+
     private var status: TransmitStatusPresentation {
         TransmitStatusPresentation(state: session.transmitState)
     }
@@ -79,14 +86,20 @@ struct RootView: View {
                     + (session.inputWarmUp.didWarm ? "" : "warmUp=failed ")
                     + "trace=\(session.holdTrace.joined(separator: ","))")
 
-            panes
+            if session.needsCallsign {
+                WelcomeView { session.setCallsign($0) }
+            } else {
+                panes
+                    .sheet(isPresented: $isAddingChannel) { addChannelFlow }
+            }
         }
         .task { session.start() }
         .onChange(of: scenePhase) { phase in
             session.setForeground(phase == .active)
 
-            // BU-9: keep unsaved edits as a draft; quitting is not a Save.
-            if phase != .active { session.stashDraft() }
+            // A secret typed and not yet connected with would go with the
+            // process; channel edits are saved as they are made.
+            if phase != .active { session.persistCredentials() }
         }
         .onDisappear { session.viewDisappeared() }
         .alert(
@@ -129,7 +142,7 @@ struct RootView: View {
 
     // MARK: - Compact: tabs
 
-    /// iPhone: five tabs, of which Keypad and the directory depend on the mode.
+    /// iPhone: four tabs, of which Keypad depends on the mode.
     private var tabLayout: some View {
         TabView(selection: tabSelection) {
             channelsPane
@@ -155,40 +168,15 @@ struct RootView: View {
                 .tag(Tab.keypad)
             }
 
-            if session.settings.mode == .echoLink {
-                StationBrowserView(
-                    session: session, browser: browser, proxyPicker: proxyPicker,
-                    onChosen: { selectedTab = .channels }
-                )
-                .padding(20)
-                .paneColumn()
-                .tabItem { Label("Stations", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(Tab.directory)
-            }
-
-            if session.settings.mode == .m17 {
-                ReflectorBrowserView(
-                    session: session, browser: reflectorBrowser,
-                    onChosen: { selectedTab = .channels }
-                )
-                .padding(20)
-                .paneColumn()
-                .tabItem {
-                    Label("Reflectors", systemImage: "point.3.connected.trianglepath.dotted")
-                }
-                .tag(Tab.directory)
-            }
-
             settingsPane
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.setup)
         }
     }
 
-    /// The tab layout's destinations. The two directories share `directory`:
-    /// only one is ever present.
+    /// The tab layout's destinations.
     private enum Tab: Hashable {
-        case channels, session, keypad, directory, setup
+        case channels, session, keypad, setup
     }
 
     /// The stored selection, resolved on read against the tabs this mode has,
@@ -200,7 +188,6 @@ struct RootView: View {
     private var effectiveTab: Tab {
         switch selectedTab {
         case .keypad where !session.settings.mode.sendsDTMF: return .channels
-        case .directory where !session.settings.mode.hasDirectory: return .channels
         default: return selectedTab
         }
     }
@@ -215,6 +202,7 @@ struct RootView: View {
                     Task { await switchChannel(to: id) }
                     selectedTab = .session
                 },
+                onAdd: { isAddingChannel = true },
                 onInspect: { _ in showsChannelDetails = true })
                 .padding(.top, 12)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -231,8 +219,7 @@ struct RootView: View {
                 .padding(20)
                 .paneColumn()
         }
-        .navigationTitle(session.settings.displayName.isEmpty
-            ? "New channel" : session.settings.displayName)
+        .navigationTitle(session.settings.listDisplayName)
         #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -247,7 +234,8 @@ struct RootView: View {
             // `onInspect`: the details are already on screen beside the list.
             ChannelListView(
                 session: session,
-                onChoose: { id in Task { await switchChannel(to: id) } })
+                onChoose: { id in Task { await switchChannel(to: id) } },
+                onAdd: { isAddingChannel = true })
                 .padding(.top, 12)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
@@ -347,19 +335,6 @@ struct RootView: View {
                     .padding(20)
                     .paneColumn()
             }
-        // Width-capped: unbounded, the reflector rows push Refresh off-screen.
-        case .stations:
-            StationBrowserView(
-                session: session, browser: browser, proxyPicker: proxyPicker,
-                onChosen: { detailPane = .connect })
-                .padding(20)
-                .paneColumn()
-        case .reflectors:
-            ReflectorBrowserView(
-                session: session, browser: reflectorBrowser,
-                onChosen: { detailPane = .connect })
-                .padding(20)
-                .paneColumn()
         case .setup:
             settingsPane
         }
@@ -400,21 +375,56 @@ struct RootView: View {
         }
     }
 
+    /// The selected channel's form, or the way to a first channel when there
+    /// is nothing to edit.
+    @ViewBuilder
     private var connectForm: some View {
-        ConnectFormView(
-            settings: $session.settings,
-            secret: $session.secret,
-            isEchoLinkAccountConfigured: !session.echoLinkAccountPassword.isEmpty,
-            webTransceiverToken: $session.webTransceiverToken,
-            identity: $session.identity,
-            isEditable: session.connection == .disconnected,
-            // BU-9: Save is the only thing that overwrites a stored channel.
-            hasUnsavedChanges: session.isDraftDirty,
-            draftIsUnsavedChannel: session.isDraftAnUnsavedChannel,
-            saveAction: { session.saveDraft() },
+        if session.isShowingStoredChannel {
+            ConnectFormView(
+                settings: $session.settings,
+                secret: $session.secret,
+                isEchoLinkAccountConfigured: !session.echoLinkAccountPassword.isEmpty,
+                webTransceiverToken: $session.webTransceiverToken,
+                isEditable: session.connection == .disconnected,
+                proxyPicker: proxyPicker,
+                privateProxy: session.echoLinkProxy,
+                nodeLocator: nodeLocator)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("No channel selected")
+                    .font(.headline)
+                Text("Add a channel to choose a reflector, a station or a node to talk through.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    isAddingChannel = true
+                } label: {
+                    Label("Add channel", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(session.connection != .disconnected)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// `Add channel`. A channel that comes out of it is selected, so the tab
+    /// layout goes to the radio, where the button that connects to it is; the
+    /// split layout already shows both.
+    private var addChannelFlow: some View {
+        AddChannelView(
+            session: session,
+            browser: browser,
+            reflectorBrowser: reflectorBrowser,
             proxyPicker: proxyPicker,
-            privateProxy: session.echoLinkProxy,
-            nodeLocator: nodeLocator)
+            nodeLocator: nodeLocator,
+            onFinish: { added in
+                isAddingChannel = false
+                guard added else { return }
+                showsChannelDetails = false
+                selectedTab = .session
+                detailPane = .connect
+            })
     }
 
     /// What a tap on a channel row does (APP-23): select it, and reconnect

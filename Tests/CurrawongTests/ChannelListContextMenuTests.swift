@@ -73,7 +73,8 @@ final class ChannelListContextMenuTests: XCTestCase {
                 // As `RootView.splitLayout` hosts it: choosing is a real action
                 // there, and no `onInspect`, because the details sit beside the
                 // list rather than behind a push (APP-23).
-                ChannelListView(session: harness.session, onChoose: { _ in })
+                ChannelListView(
+                    session: harness.session, onChoose: { _ in }, onAdd: {})
             } detail: {
                 Text("detail")
             },

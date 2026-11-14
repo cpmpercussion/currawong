@@ -292,11 +292,10 @@ final class RadioSessionConnectionTests: XCTestCase {
 
     /// And persisted without connecting, so a callsign typed and then left
     /// alone is not lost. Stored as typed here — validation happens at connect.
-    func testSavingTheDraftStoresTheCallsign() {
+    func testEditingTheCallsignStoresIt() {
         let harness = SessionHarness(settings: nil)
-        harness.session.identity = OperatorIdentity(callsign: "vk1abc")
 
-        harness.session.saveDraft()
+        harness.session.identity = OperatorIdentity(callsign: "vk1abc")
 
         XCTAssertEqual(harness.settingsStore.savedIdentity?.callsign, "vk1abc")
     }

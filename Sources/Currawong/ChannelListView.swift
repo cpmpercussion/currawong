@@ -19,9 +19,12 @@ struct ChannelListView: View {
     /// sequence, which may hang up and source a proxy.
     let onChoose: (UUID) -> Void
 
-    /// Shows a channel's details (the ⓘ, and after `Add channel`); `nil` where
-    /// they are already beside the list. Disabled while a link is up, because
-    /// it selects first and selecting is refused then.
+    /// Starts `Add channel`; ``RootView`` presents the flow.
+    let onAdd: () -> Void
+
+    /// Shows a channel's details (the ⓘ); `nil` where they are already beside
+    /// the list. Disabled while a link is up, because it selects first and
+    /// selecting is refused then.
     var onInspect: ((UUID) -> Void)?
 
     /// Whether the session will accept a change to the list. Choosing a row is
@@ -58,7 +61,7 @@ struct ChannelListView: View {
     /// the rows twice.
     private static let inset: CGFloat = 20
 
-    /// Select, then show: the form edits the draft, which follows the selection.
+    /// Select, then show: the form edits the selected channel.
     private func inspect(_ id: UUID) {
         session.select(id)
         onInspect?(id)
@@ -96,11 +99,8 @@ struct ChannelListView: View {
     private func row(for channel: NodeSettings) -> ChannelRow {
         ChannelRow(
             channel: channel,
-            // The highlight follows the form, which may describe a channel not
-            // in the list yet (APP-19).
+            // The highlight follows the form.
             isSelected: channel.id == session.settings.id,
-            // BU-9: the row shows the stored channel, so flag an unsaved edit.
-            hasUnsavedEdits: session.hasUnsavedEdits(for: channel.id),
             // The call was placed to the selected channel.
             isConnected: channel.id == session.channels.selectedID
                 && session.connection != .disconnected,
@@ -139,11 +139,7 @@ struct ChannelListView: View {
                     .disabled(!isMutable)
             #endif
 
-            Button {
-                // Opens the details where they are behind navigation (APP-23).
-                let id = session.newChannel()
-                if let id { onInspect?(id) }
-            } label: {
+            Button(action: onAdd) {
                 Label("Add channel", systemImage: "plus")
             }
             .disabled(!isMutable)
@@ -160,17 +156,20 @@ struct ChannelListView: View {
     /// sidebar's height before and after.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("No saved channels")
+            Text("No channels yet")
                 .font(.subheadline.weight(.medium))
-            Text(
-                "Add a channel and fill in where it goes. Connecting saves it, and "
-                + "coming back to it later is one tap.")
+            Text("Add one to choose a reflector, a station or a node to talk through.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Button(action: onAdd) {
+                Label("Add channel", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 6)
+            .disabled(!isMutable)
         }
     }
 
-    /// The stored rows, then the provisional one if the draft is unsaved.
     private var list: some View {
         List {
             ForEach(session.channels.channels) { channel in
@@ -187,35 +186,6 @@ struct ChannelListView: View {
             }
             .deleteDisabled(!isMutable)
             .moveDisabled(!isMutable)
-
-            // APP-22: the provisional row for a channel not stored yet; Save or
-            // Connect stores it. Outside the `ForEach`, whose `onDelete` and
-            // `onMove` offsets index the stored array.
-            if session.isDraftAnUnsavedChannel {
-                Button {
-                    // Already selected; on a phone, the way back to the form.
-                    onInspect?(session.settings.id)
-                } label: {
-                    ChannelRow(
-                        channel: session.settings,
-                        isSelected: true,
-                        hasUnsavedEdits: false,
-                        isUnsavedChannel: true,
-                        isConnected: false,
-                        connectionLabel: session.connection.label)
-                }
-                .buttonStyle(.plain)
-                .disabled(!isMutable)
-                .contextMenu {
-                    // Nothing is stored, so discard rather than delete.
-                    Button(role: .destructive) {
-                        session.discardDraftChannel()
-                    } label: {
-                        Label("Discard", systemImage: "trash")
-                    }
-                    .disabled(!isMutable)
-                }
-            }
         }
         .listStyle(.plain)
         // Rows are disabled individually: disabling the List stops scrolling.
@@ -228,13 +198,6 @@ struct ChannelListView: View {
 private struct ChannelRow: View {
     let channel: NodeSettings
     let isSelected: Bool
-
-    /// Whether an unsaved edit to this channel exists (BU-9).
-    let hasUnsavedEdits: Bool
-
-    /// Whether this is the provisional row for an unstored channel (APP-22).
-    var isUnsavedChannel = false
-
     let isConnected: Bool
     let connectionLabel: String
 
@@ -261,16 +224,6 @@ private struct ChannelRow: View {
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.green)
                     }
-
-                    if isUnsavedChannel {
-                        Text("Not saved")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    } else if hasUnsavedEdits {
-                        Text("Edited")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
                 }
 
                 Text(destination)
@@ -286,8 +239,7 @@ private struct ChannelRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(channel.listDisplayName), \(channel.mode.displayName), \(destination)"
-            + (isConnected ? ", \(connectionLabel)" : "")
-            + (isUnsavedChannel ? ", not saved" : hasUnsavedEdits ? ", unsaved changes" : ""))
+            + (isConnected ? ", \(connectionLabel)" : ""))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
