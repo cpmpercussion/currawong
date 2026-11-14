@@ -100,12 +100,12 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
                 "the app did not start from an empty channel list — see IsolatedApp")
         }
 
-        addChannel(named: bystanderName, in: app)
-        addChannel(named: dialledName, in: app)
-        pointAtNowhere(in: app)
-        // Committed before Connect on purpose: under the fixed model Connect may
-        // *add* a channel for an unsaved edit, and this test counts rows by name.
-        saveIfPossible(in: app)
+        // A made-up callsign is safe *here* precisely because this test dials
+        // TEST-NET-1 and nothing ever leaves the machine. The on-air tests
+        // bring the operator's own instead.
+        giveCallsign("VK1TEST", in: app)
+        addM17Channel(named: bystanderName, host: unroutableHost, module: "A", in: app)
+        addM17Channel(named: dialledName, host: unroutableHost, module: "B", in: app)
 
         // MARK: Arm the lock
 
@@ -312,59 +312,6 @@ final class ChannelDeleteAfterConnectUITests: XCTestCase {
     }
 
     // MARK: - Driving the app
-
-    /// Adds a channel and names it, under either channel model.
-    ///
-    /// Before BU-9 items 1 and 2 were fixed, the name typed here reached the
-    /// list only when the *next* add committed the draft. After the fix, Save is
-    /// the one thing that overwrites a channel — so the name is committed here,
-    /// by pressing it if it is there. Naming a channel is not what this test is
-    /// about, and it should not have to know which model it is running against.
-    private func addChannel(named name: String, in app: XCUIApplication) {
-        let add = app.buttons["Add channel"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
-        add.click()
-        replace(name, in: field("connect.channelName", in: app))
-        saveIfPossible(in: app)
-    }
-
-    /// Presses Save if the form has one and it is enabled. Nothing to do on a
-    /// build from before the fix, which has no Save button at all.
-    private func saveIfPossible(in app: XCUIApplication) {
-        let save = app.buttons["Save"].firstMatch
-        guard save.exists, save.isEnabled else { return }
-        save.click()
-    }
-
-    /// Points the selected channel at TEST-NET-1 over M17, and makes sure there
-    /// is a callsign — without overwriting a real one. The callsign is app-wide
-    /// and saved, so this types only into an empty field.
-    private func pointAtNowhere(in app: XCUIApplication) {
-        let m17 = app.radioButtons["M17"].firstMatch
-        XCTAssertTrue(m17.waitForExistence(timeout: 5), "no M17 mode control")
-        m17.click()
-
-        replace(unroutableHost, in: field("connect.host", in: app))
-        replace("A", in: field("connect.module", in: app))
-
-        let callsign = field("connect.callsign", in: app)
-        let existing = callsign.value as? String ?? ""
-        if existing.trimmingCharacters(in: .whitespaces).isEmpty {
-            // The ordinary path now: ``IsolatedApp`` wipes the suite, so there is
-            // no stored identity. Connect refuses to leave `.disconnected`
-            // without a callsign and the lock would never arm, so one is needed —
-            // and a made-up one is safe *here* precisely because this test dials
-            // TEST-NET-1 and nothing ever leaves the machine. The on-air test
-            // brings the operator's own instead.
-            replace("VK1TEST", in: callsign)
-        }
-    }
-
-    private func field(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
-        let field = app.textFields[identifier].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
-        return field
-    }
 
     private func row(named name: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch

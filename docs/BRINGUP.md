@@ -115,6 +115,11 @@ keep treating the app as unproven on air.
 
 ## Items
 
+**`APP-42` (2026-11-14) replaced `BU-9`'s channel model**, with the
+maintainer's agreement: edits to a channel are saved as they are made, and
+Save, the draft and the "Not saved" and "Edited" markers are gone. `BU-9`'s row
+below is left as written; it records the decision that stood until then.
+
 **`APP-41` (2026-11-14) removed the Bluetooth LE button and the headset
 button.** The on-screen button is the only PTT input. So `BU-14` cannot occur
 while they are out, and neither can the case `BU-10` staged, an accessory

@@ -70,10 +70,15 @@ _Settings_ once, for the whole station, with its password in the Keychain.
 
 ### Finding somewhere to go
 
+The first launch asks for your callsign and nothing else. After that, _Add
+channel_ asks which network and goes straight to that network's way of finding
+a destination; choosing one adds the channel.
+
 - **Station browser (EchoLink).** Nothing in the library resolves a callsign to
   an address, so the directory listing is how a node is found: browse, search,
-  and save a station as a channel. It opens a directory-only session that
-  contacts no node and transmits nothing.
+  and add a station as a channel. It opens a directory-only session that
+  contacts no node and transmits nothing. If no EchoLink account password is
+  stored yet, this is where it is asked for.
 - **Reflector chooser (M17).** Populated from the host file the M17 Project
   publishes at
   [`M17Hosts.json`](https://m17-project.github.io/hostfiles/M17Hosts.json)
@@ -89,11 +94,12 @@ _Settings_ once, for the whole station, with its password in the Keychain.
 
 ### Saved channels
 
-A channel is one place worth going back to: a name, a mode, and the fields that
-mode needs. They are listed, reorderable and deletable, the selected one is
-remembered between launches, and **connecting is what saves** a channel the
-operator has just typed. An operator upgrading from the single-node build finds
-that node as their first channel.
+A channel is one place worth going back to: a name, a network, and the fields
+that network needs. They are listed, reorderable and deletable, and the selected
+one is remembered between launches. **Edits are saved as they are made** — there
+is no Save button — and a channel's network is fixed when it is added. An
+operator upgrading from the single-node build finds that node as their first
+channel.
 
 ### Transmitting
 
@@ -158,12 +164,12 @@ a shut microphone. macOS has no Live Activities.
 
 One app-level screen for your
 callsign, the transmit watchdog timer, the AllStarLink portal token, the EchoLink
-account password, and your own proxy if you run one.
+account password with the name and location EchoLink shows for you, and your
+own proxy if you run one.
 
 The EchoLink account password lives here and not on the connect form: the
 Keychain has always filed it under `echolink:<callsign>`, shared by every
-EchoLink channel with that callsign. What is left on the form is _whether_ one
-is set.
+EchoLink channel with that callsign. The form only warns when none is set.
 
 ### Diagnostics
 

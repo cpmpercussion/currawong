@@ -97,11 +97,8 @@ final class BU15FirstOverUITests: XCTestCase {
         let callsign = try IsolatedApp.requireOperatorCallsign()
         let app = IsolatedApp.launched()
 
-        addChannel(named: channelName, in: app)
-        selectM17Mode(in: app)
-        replace(callsign, in: field("connect.callsign", in: app))
-        replace(reflector, in: field("connect.host", in: app))
-        replace(module, in: field("connect.module", in: app))
+        giveCallsign(callsign, in: app)
+        addM17Channel(named: channelName, host: reflector, module: module, in: app)
 
         showSessionPane(in: app)
         let connect = app.buttons["Connect to \(channelName)"].firstMatch
@@ -205,35 +202,6 @@ final class BU15FirstOverUITests: XCTestCase {
         _ = waitUntil(timeout: 30) {
             !app.staticTexts["Disconnect to add, edit or delete channels."].exists
         }
-    }
-
-    // MARK: - The test's own channel
-
-    private func addChannel(named name: String, in app: XCUIApplication) {
-        let add = app.buttons["Add channel"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
-        add.activate()
-        replace(name, in: field("connect.channelName", in: app))
-    }
-
-    private func selectM17Mode(in app: XCUIApplication) {
-        let candidates = [
-            app.radioButtons["M17"].firstMatch,
-            app.segmentedControls.buttons["M17"].firstMatch,
-            app.buttons["M17"].firstMatch,
-            app.descendants(matching: .any)["M17"].firstMatch,
-        ]
-        for candidate in candidates where candidate.waitForExistence(timeout: 2) {
-            candidate.activate()
-            return
-        }
-        XCTFail("no M17 mode control")
-    }
-
-    private func field(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
-        let field = app.textFields[identifier].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(identifier)")
-        return field
     }
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

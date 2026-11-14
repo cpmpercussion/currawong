@@ -493,7 +493,6 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: NodeSettings?
     private var storedChannels: [NodeSettings]?
-    private var storedDrafts: [NodeSettings]?
     private var storedSelectedID: UUID?
     private var storedIdentity: OperatorIdentity?
     private var storedGain: TransmitGain?
@@ -663,21 +662,6 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
         lock.unlock()
     }
 
-    /// **BU-9.** The unsaved edits. `nil` until something writes them, the same
-    /// way the channel list is, so a test can tell "never stashed" from
-    /// "stashed and then cleared".
-    func loadDrafts() -> [NodeSettings]? {
-        lock.lock()
-        defer { lock.unlock() }
-        return storedDrafts
-    }
-
-    func saveDrafts(_ drafts: [NodeSettings]) {
-        lock.lock()
-        storedDrafts = drafts
-        lock.unlock()
-    }
-
     func loadSelectedChannelID() -> UUID? {
         lock.lock()
         defer { lock.unlock() }
@@ -693,14 +677,6 @@ final class InMemorySettingsStore: SettingsStore, @unchecked Sendable {
     var saved: NodeSettings? { load() }
 
     var savedChannels: [NodeSettings]? { loadChannels() }
-
-    /// What the last stash wrote, as a dictionary keyed the way the session
-    /// holds it — the order the values come out in is not meaningful.
-    var savedDrafts: [UUID: NodeSettings] {
-        Dictionary((loadDrafts() ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in
-            latest
-        })
-    }
 
     var savedSelectedID: UUID? { loadSelectedChannelID() }
 

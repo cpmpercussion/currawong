@@ -20,12 +20,6 @@ protocol SettingsStore: AnyObject, Sendable {
     func loadSelectedChannelID() -> UUID?
     func saveSelectedChannelID(_ id: UUID?)
 
-    /// Unsaved edits (BU-9), each carrying the id of the channel it was edited
-    /// from. Kept apart from ``loadChannels()`` because the two are meant to
-    /// disagree until the operator saves.
-    func loadDrafts() -> [NodeSettings]?
-    func saveDrafts(_ drafts: [NodeSettings])
-
     /// The app-wide operator identity. `nil` means none is stored under its
     /// own key yet; older channels are searched for one first.
     func loadIdentity() -> OperatorIdentity?
@@ -73,7 +67,6 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     /// deleted, so a downgrade still finds it.
     private static let key = "au.charlesmartin.currawong.nodeSettings"
     private static let channelsKey = "au.charlesmartin.currawong.channels"
-    private static let draftsKey = "au.charlesmartin.currawong.channelDrafts"
     private static let selectedKey = "au.charlesmartin.currawong.selectedChannel"
     private static let identityKey = "au.charlesmartin.currawong.operatorIdentity"
     private static let transmitGainKey = "au.charlesmartin.currawong.transmitGainDB"
@@ -108,16 +101,6 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     func saveChannels(_ channels: [NodeSettings]) {
         guard let data = try? JSONEncoder().encode(channels) else { return }
         defaults.set(data, forKey: Self.channelsKey)
-    }
-
-    func loadDrafts() -> [NodeSettings]? {
-        guard let data = defaults.data(forKey: Self.draftsKey) else { return nil }
-        return try? JSONDecoder().decode([NodeSettings].self, from: data)
-    }
-
-    func saveDrafts(_ drafts: [NodeSettings]) {
-        guard let data = try? JSONEncoder().encode(drafts) else { return }
-        defaults.set(data, forKey: Self.draftsKey)
     }
 
     func loadSelectedChannelID() -> UUID? {

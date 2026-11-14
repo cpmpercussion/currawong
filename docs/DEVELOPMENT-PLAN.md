@@ -2001,9 +2001,10 @@ archived `Info.plist` has no Bluetooth key and one background mode, and
 channels and editing in the UI is still a very strange experience and doesn't
 quite line up with how you would expect things to work."*
 
-Not started. `APP-19`, `APP-22` and `APP-23` each repaired a step of this flow;
-what is left is its shape. The app is built around a form — a blank one — and
-the operator is thinking about a station.
+Implemented 2026-11-14; **what was settled is at the end of this row.**
+`APP-19`, `APP-22` and `APP-23` each repaired a step of this flow; what was left
+was its shape. The app was built around a form — a blank one — and the operator
+is thinking about a station.
 
 **What is strange today, as found in the tree:**
 
@@ -2025,7 +2026,7 @@ the operator is thinking about a station.
 5. **The tab bar changes with the selected channel's mode** — Keypad, Stations
    and Reflectors come and go.
 
-**The direction, to be settled in the task and not here:**
+**The direction, as the row was raised:**
 
 - First run asks for the callsign once, before anything else, and nothing
   after that asks again.
@@ -2050,6 +2051,51 @@ slot this task will lay out around.
 **Done when:** a new operator with a callsign and nothing else can reach a
 listening M17 reflector without opening Settings or typing an address, and the
 UI tests that walk the channel lifecycle walk the new one.
+
+**What was settled:**
+
+- **Autosave, with the maintainer's yes (2026-11-14), which reopens and
+  replaces `BU-9`'s decision.** `RadioSession.settings` is the selected channel
+  and every edit to it is written to the list as it is made, half-typed values
+  included; `connect()` is still the validation gate. Save, "Not saved",
+  "Edited", the provisional row (`APP-22`) and the draft store are gone. A draft
+  an earlier build left in `UserDefaults` is not read and not applied — the
+  stored channel is what the operator sees.
+- **First run** is `WelcomeView`: the callsign, once, where the panes would be.
+  After that the callsign is edited in Settings only; it is no longer on the
+  connect form, and neither are EchoLink's operator name and location, which
+  moved to Settings with it.
+- **`Add channel` is a sheet** (`AddChannelView`): the network, then M17's
+  reflector list, EchoLink's station list, or AllStarLink's fields. Choosing a
+  module or a station adds the channel and selects it; backing out adds
+  nothing, so there is no blank row to clean up (`APP-19`'s fault cannot come
+  back). The fields step is `ConnectFormView` itself, bound to a channel the
+  sheet holds until `Add`, so the form is still the one place a protocol's
+  fields are edited.
+- **A channel's network is fixed when it is added.** The mode picker is gone
+  from the form.
+- **The directories are no longer tabs or panes.** They exist inside
+  `Add channel`, so of item 5 only the Keypad still comes and goes with the
+  mode. That is left as it is: a keypad that does nothing is worse than one
+  that is absent.
+- **The EchoLink account password is asked for on the way to the station
+  list**, when none is stored, and stored where Settings edits it.
+- **The station list is still not fetched unasked** — a listing borrows a
+  single-user public proxy. Its empty state is now one button rather than a
+  paragraph.
+- **Choosing an EchoLink station whose callsign is already a channel updates
+  that channel's address** rather than adding a second row, since addresses
+  change as stations come and go. This is new behaviour, not a repair.
+- **A secret typed and not connected with** is filed in the Keychain when the
+  form moves to another channel or the app leaves the foreground, never as an
+  empty value.
+
+**Not verified here:** `ChannelLifecycleUITests` is rewritten for this flow and
+builds, but the macOS UI-test runner on the development machine had lost its
+Accessibility grant (`BRINGUP.md`), so it has not been run. The same walk —
+callsign, `Add channel`, M17, an address, `Add`, and the link button naming the
+channel — passed on the iPhone simulator through
+`HierarchyDumpUITests/testDumpAfterFillingTheForm`. Nothing was tried on air.
 
 ### APP-43 — the copy pass, and the app stops announcing its own name
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14: *"The in-app

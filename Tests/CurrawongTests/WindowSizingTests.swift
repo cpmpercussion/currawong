@@ -35,10 +35,13 @@ final class WindowSizingTests: XCTestCase {
     /// A display an operator actually has: the laptop the fault was found on.
     private static let shortWindow = CGSize(width: 881, height: 866)
 
-    private func rootView() -> some View {
+    /// - Parameter callsign: `nil` is a first run, which shows ``WelcomeView``
+    ///   where the panes go; the panes are what these tests measure.
+    private func rootView(callsign: String? = "VK1XYZ") -> some View {
         let root = CompositionRoot(
             audio: FakeAudioIO(),
-            settingsStore: InMemorySettingsStore(),
+            settingsStore: InMemorySettingsStore(
+                identity: callsign.map { OperatorIdentity(callsign: $0) }),
             secretStore: InMemorySecretStore())
         return RootView(
             session: root.session,
@@ -83,6 +86,16 @@ final class WindowSizingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             laid.minY, -1,
             "the overflow is being centred, so the top of the app is above the window's top edge")
+    }
+
+    /// The first-run screen is the first thing a new operator sees, in the same
+    /// window.
+    func testTheFirstRunScreenIsNotTallerThanItsWindow() throws {
+        let host = ViewHost(rootView(callsign: nil), size: Self.shortWindow)
+        let laid = try XCTUnwrap(hostedLayout(host), "nothing was laid out")
+
+        XCTAssertLessThanOrEqual(laid.maxY, host.contentView.frame.height + 1)
+        XCTAssertGreaterThanOrEqual(laid.minY, -1)
     }
 
     /// And the window still wins in the other direction: a window taller than

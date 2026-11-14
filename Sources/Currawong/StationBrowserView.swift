@@ -7,9 +7,8 @@ import SwiftUI
 ///
 /// The proxy tunnels four literal octets, and nothing in the library resolves
 /// a callsign to one; the directory listing is the only thing that does, and
-/// this is the view over it. Tapping a station does not connect — it fills in
-/// the connect screen with the address and takes you there. Nothing is saved
-/// until the connection succeeds.
+/// this is the view over it. Choosing a station adds it as a channel, or
+/// brings the saved channel's address up to date; it does not connect.
 ///
 /// Does not fetch on appear: a fetch opens a real proxy session, and public
 /// EchoLink proxies are single-user, so refreshing on every appearance would
@@ -26,11 +25,10 @@ struct StationBrowserView: View {
     /// a step of the refresh rather than a separate screen.
     @ObservedObject var proxyPicker: ProxyPicker
 
-    /// Called after a station is chosen, so the container can show the connect
-    /// screen.
+    /// Called after a station is chosen and is the selected channel.
     var onChosen: () -> Void = {}
 
-    /// Repointing the draft is refused while a link is up, by `RadioSession`.
+    /// Changing channel is refused while a link is up, by `RadioSession`.
     /// The browser itself stays usable — reading the directory mid-call is only
     /// a second proxy session — but the button that would choose a station
     /// says why it cannot.
@@ -85,9 +83,7 @@ struct StationBrowserView: View {
     /// Resolve a proxy, then read the directory through it.
     ///
     /// One button for both steps because they are one intention: a listing
-    /// travels through a proxy, so an operator who has just added an EchoLink
-    /// channel needs one, and sending them to another pane first is a detour
-    /// through information they cannot act on.
+    /// travels through a proxy, and finding one is not the operator's errand.
     ///
     /// The proxy this returns is handed straight to the fetch and stored
     /// nowhere (APP-13). It is also the one the Connect button will use — a
@@ -174,28 +170,26 @@ struct StationBrowserView: View {
         }
     }
 
-    /// What the operator needs before Refresh can work at all. Named as the
-    /// places those things are set, on the Settings screen, rather than as
-    /// protocol steps; `StationBrowser` reports the same three as failures
-    /// once a fetch is attempted, and this is the version shown first.
+    /// Before the first listing: one button, because the list is not fetched
+    /// until asked for (see the type's note).
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(browser.search.isEmpty ? "No listing yet" : "Nothing matches that")
+        VStack(alignment: .leading, spacing: 10) {
+            Text(browser.search.isEmpty ? "No stations listed yet" : "Nothing matches that")
                 .font(.subheadline.weight(.medium))
 
             if browser.search.isEmpty {
-                Text(
-                    "Refresh reads the EchoLink directory. It needs your callsign and EchoLink "
-                    + "account password, both on the Settings screen, and the channel has to be "
-                    + "an EchoLink one; if the channel has no proxy yet, Refresh finds a public "
-                    + "one first.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await refresh() }
+                } label: {
+                    Label("Load the station list", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(browser.isLoading || proxyPicker.isSearching)
+                .accessibilityIdentifier("stations.load")
 
                 Text(
-                    "It is not fetched automatically: a listing opens a real proxy session, and "
-                    + "a public proxy serves one user at a time.")
+                    "Loading borrows a public proxy for a moment, which serves one operator at a "
+                    + "time, so the list is only read when you ask.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -209,7 +203,11 @@ struct StationBrowserView: View {
                 station: station,
                 canChoose: canChoose,
                 choose: {
-                    guard session.chooseChannel(station.channel(basedOn: session.settings))
+                    // The request's settings carry the directory server, which
+                    // a listing cannot supply.
+                    guard
+                        session.chooseChannel(
+                            station.channel(basedOn: session.directoryRequest.settings))
                     else { return }
                     onChosen()
                 })
@@ -220,11 +218,11 @@ struct StationBrowserView: View {
     }
 }
 
-/// One station, and the button that turns it into somewhere to go.
+/// One station, and the button that makes it a channel.
 ///
 /// The button carries the label rather than the whole row: tapping a row in a
-/// list of six thousand entries reads as "open this", but what happens is that
-/// another pane changes.
+/// list of six thousand entries reads as "open this", and what happens is that
+/// a channel is added.
 private struct StationRow: View {
     let station: DirectoryStation
     let canChoose: Bool
@@ -279,12 +277,13 @@ private struct StationRow: View {
             Spacer(minLength: 0)
 
             Button(action: choose) {
-                Label("Use this station", systemImage: "arrow.right.circle")
+                Label("Add", systemImage: "plus.circle")
                     .labelStyle(.titleAndIcon)
                     .font(.caption)
             }
             .buttonStyle(.bordered)
             .disabled(!canChoose || !station.hasDialableAddress)
+            .accessibilityLabel("Add \(station.callsign)")
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .contain)

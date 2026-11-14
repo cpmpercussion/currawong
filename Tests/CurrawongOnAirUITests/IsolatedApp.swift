@@ -19,8 +19,8 @@ import XCTest
 ///
 /// One launch argument fixes the class: see ``DefaultsSuite`` in the app. The
 /// suite is emptied by the app before it reads anything, so every run starts from
-/// no channels, no drafts and no stored identity — which is also why a test that
-/// needs the operator's callsign has to bring it, below.
+/// no channels and no stored identity — so every run starts on the first-run
+/// screen, and a test that needs the operator's callsign has to bring it, below.
 enum IsolatedApp {
 
     /// Not an app group and not the app's own domain: a separate suite, so

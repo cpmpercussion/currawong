@@ -58,14 +58,14 @@ final class DetailPaneSetTests: XCTestCase {
         XCTAssertFalse(panes(.connected, .echoLink).contains(.keypad))
     }
 
-    /// Two directories, never at once: they are separate networks.
-    func testEachDirectoryAppearsOnlyInItsOwnMode() {
-        XCTAssertTrue(panes(.connected, .m17).contains(.reflectors))
-        XCTAssertFalse(panes(.connected, .m17).contains(.stations))
-        XCTAssertTrue(panes(.connected, .echoLink).contains(.stations))
-        XCTAssertFalse(panes(.connected, .echoLink).contains(.reflectors))
-        XCTAssertFalse(panes(.connected, .allStarLink).contains(.stations))
-        XCTAssertFalse(panes(.connected, .allStarLink).contains(.reflectors))
+    /// The directories are part of `Add channel`, not panes, so the keypad is
+    /// the only thing a mode adds to the picker.
+    func testOnlyTheKeypadDependsOnTheMode() {
+        for connection: RadioSession.ConnectionStatus in [.disconnected, .connected] {
+            let withKeypad = panes(connection, .allStarLink).filter { $0 != .keypad }
+            XCTAssertEqual(withKeypad, panes(connection, .m17), "\(connection)")
+            XCTAssertEqual(withKeypad, panes(connection, .echoLink), "\(connection)")
+        }
     }
 
     func testSettingsIsAlwaysOffered() {
@@ -90,12 +90,9 @@ final class DetailPaneSetTests: XCTestCase {
 
     // MARK: - Where a change in the set lands
 
-    /// **The fault this type was written for.** Connecting on M17 took the
-    /// connect form out of the picker, and the column fell to the first pane
-    /// left — the reflector directory. So linking to a reflector left the
-    /// operator looking at a list of reflectors, with the radio squeezed into
-    /// the top of an iPad's detail column.
-    func testConnectingOnM17LandsOnTheRadioNotTheDirectory() {
+    /// Connecting takes the connect form out of the picker, and the column
+    /// must fall to the radio rather than to whichever pane sorts next.
+    func testConnectingOnM17LandsOnTheRadio() {
         let set = DetailPaneSet(connection: .connected, mode: .m17)
         XCTAssertEqual(set.resolving(.connect), .session)
     }
@@ -123,14 +120,14 @@ final class DetailPaneSetTests: XCTestCase {
 
     /// A mode change can take the selected pane away too, and the landing is
     /// the state's own pane rather than whatever sorts first.
-    func testAModeChangeAwayFromADirectoryLandsOnTheRadio() {
-        let set = DetailPaneSet(connection: .connected, mode: .allStarLink)
-        XCTAssertEqual(set.resolving(.reflectors), .session)
+    func testAModeChangeAwayFromTheKeypadLandsOnTheRadio() {
+        let set = DetailPaneSet(connection: .connected, mode: .m17)
+        XCTAssertEqual(set.resolving(.keypad), .session)
     }
 
     func testASelectionStillOnOfferIsLeftAlone() {
-        let set = DetailPaneSet(connection: .connected, mode: .m17)
-        XCTAssertEqual(set.resolving(.reflectors), .reflectors)
+        let set = DetailPaneSet(connection: .connected, mode: .allStarLink)
+        XCTAssertEqual(set.resolving(.keypad), .keypad)
         XCTAssertEqual(set.resolving(.setup), .setup)
         XCTAssertEqual(set.resolving(.session), .session)
     }

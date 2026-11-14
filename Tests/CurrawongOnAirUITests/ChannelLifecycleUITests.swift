@@ -6,73 +6,77 @@ import XCTest
 // the delete it exercises is the macOS context menu's. See that file's note.
 #if os(macOS)
 
-/// Add a channel and delete it again, touching nothing else. **Transmits
-/// nothing** — it is in this target only because it needs a running app.
-///
-/// It exists because the on-air test could not clean up after itself, and the
-/// question "is Delete broken always, or only after a session?" is the one that
-/// says whether that is a test problem or an app problem.
+/// The channel lifecycle from a first launch: give a callsign, add a channel,
+/// edit it, delete it. **Transmits nothing** — it is in this target only
+/// because it needs a running app.
 ///
 /// ## It counts rows, and it starts from an empty list
 ///
-/// It used to edit the operator's real channel list, so a run that died before
-/// its delete left a row behind — and the next run found two rows of one name,
-/// deleted one, and reported that Delete did nothing. That false negative cost a
-/// morning under BU-9 and came back under APP-19. ``IsolatedApp`` now launches
-/// the app against a throwaway defaults suite that is emptied first, so the list
-/// starts empty and the operator's own channels are never touched. Assertions are
-/// on the *count* of rows, which is what makes a duplicate visible rather than
-/// invisible.
-///
-/// ## APP-19 changed what `Add channel` does
-///
-/// It used to put a channel in the list on the click, which is the fault APP-19
-/// fixed: one tap of `+` left a permanent blank row in the operator's own app,
-/// and every dead run of this test left one. `+` now points the form at a new
-/// channel and writes nothing; **Save is what puts it in the list**, and this
-/// test presses it.
+/// ``IsolatedApp`` launches the app against a throwaway defaults suite that is
+/// emptied first, so the list starts empty and the operator's own channels are
+/// never touched. Assertions are on the *count* of rows: a run against a list
+/// that already held a row of this name would otherwise delete one, find the
+/// other, and report that Delete did nothing.
 final class ChannelLifecycleUITests: XCTestCase {
 
     private let channelName = "Lifecycle probe"
+    private let renamed = "Renamed probe"
 
     override func setUp() {
         // Deliberately not `false`: an early failure must not skip the cleanup
-        // below, or the run leaves its own row in the operator's app.
+        // below, or the run leaves its own row in the suite.
         continueAfterFailure = true
     }
 
-    func testAChannelCanBeAddedAndDeletedWithoutConnecting() {
+    func testAChannelCanBeAddedEditedAndDeletedWithoutConnecting() {
         let app = IsolatedApp.launched()
 
-        // The suite is wiped at launch, so this is a statement about the
-        // isolation rather than a cleanup: if a row of this name is already here,
-        // the app is reading the operator's defaults and every count below is
-        // measuring the wrong list.
+        // First run asks for a callsign before anything else is on screen.
+        XCTAssertTrue(
+            app.textFields["welcome.callsign"].firstMatch.waitForExistence(timeout: 10),
+            "a launch with no stored callsign did not ask for one")
+        XCTAssertFalse(
+            app.buttons["Add channel"].firstMatch.exists,
+            "the channel list was reachable before a callsign was given")
+        // Made up, and safe: nothing in this test connects.
+        giveCallsign("VK1TEST", in: app)
+
+        // A statement about the isolation rather than a cleanup: a row of this
+        // name already here means the app is reading the operator's defaults.
         XCTAssertEqual(
             rowCount(named: channelName, in: app), 0,
             "the app did not start from an empty channel list — see IsolatedApp")
 
+        // Backing out of `Add channel` leaves nothing behind.
         let add = app.buttons["Add channel"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
         add.click()
+        let cancel = app.buttons["addChannel.cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "Add channel has no Cancel")
+        cancel.click()
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", M17,")).count, 0,
+            "a cancelled Add channel left a row")
 
-        let name = app.textFields["connect.channelName"].firstMatch
-        XCTAssertTrue(name.waitForExistence(timeout: 5), "no channel name field")
-        replace(channelName, in: name)
-
-        // **APP-19.** The click above wrote nothing; this is what adds the row.
-        let save = app.buttons["Save"].firstMatch
-        XCTAssertTrue(save.waitForExistence(timeout: 5), "no Save button")
-        XCTAssertTrue(save.isEnabled, "Save is disabled on a named new channel")
-        save.click()
-
+        addM17Channel(named: channelName, host: "192.0.2.1", module: "A", in: app)
         XCTAssertTrue(
             waitUntil(timeout: 10) { self.rowCount(named: self.channelName, in: app) == 1 },
-            "Save did not put the new channel in the list — APP-19's other half")
+            "Add did not put the new channel in the list")
 
-        XCTAssertTrue(deleteOneRow(named: channelName, in: app), "Delete did not remove the row")
+        // An edit is saved as it is typed: the row follows the form, and there
+        // is no Save to press.
+        XCTAssertFalse(app.buttons["Save"].firstMatch.exists, "the form still has a Save button")
+        let name = app.textFields["connect.channelName"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "no channel name field beside the list")
+        replace(renamed, in: name)
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { self.rowCount(named: self.renamed, in: app) == 1 },
+            "renaming the channel in the form did not rename its row")
+        XCTAssertEqual(rowCount(named: channelName, in: app), 0, "the old name is still listed")
+
+        XCTAssertTrue(deleteOneRow(named: renamed, in: app), "Delete did not remove the row")
         XCTAssertEqual(
-            rowCount(named: channelName, in: app), 0,
+            rowCount(named: renamed, in: app), 0,
             "the channel was still listed after Delete")
     }
 
