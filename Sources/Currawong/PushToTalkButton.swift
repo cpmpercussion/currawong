@@ -50,7 +50,7 @@ struct PushToTalkButton: View {
                     Text(isTransmitting ? "ON AIR" : "PUSH TO TALK")
                         .font(.title3.weight(.bold))
                         .monospaced()
-                    Text(isEnabled ? "Hold to transmit" : "Connect first")
+                    Text(subtitle)
                         .font(.caption)
                         .opacity(0.85)
                 }
@@ -106,6 +106,13 @@ struct PushToTalkButton: View {
         // records a stop only if something was transmitting
         // (`SessionPaneStateTests`).
         .onDisappear { onRelease(.viewDisappeared) }
+    }
+
+    /// What to do with the button in its current state. On air it says how to
+    /// stop, which is the thing an operator holding it needs to know.
+    private var subtitle: String {
+        if isTransmitting { return "Release to stop" }
+        return isEnabled ? "Hold to transmit" : "Connect first"
     }
 
     private var fill: some ShapeStyle {
