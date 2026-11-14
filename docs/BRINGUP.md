@@ -2998,3 +2998,37 @@ does. The on-air UI tests carry similar loops, but they do not run in CI and are
 left as they are.
 
 **Related:** `BU-20` (the same stall family, and the 20 s default).
+
+### BU-27 — changing channel while connected raises "Disconnected" ✅ FIXED 2026-11-15, not yet confirmed on a device
+
+**Reported by the maintainer, 2026-11-15.** Connected to one channel, tap
+another: the app hangs up and connects to the new one, as `APP-23` intends, and
+then shows an alert, "Disconnected — The link dropped: disconnected locally."
+The prefix is the M17 adapter's, so the channel being left was M17. Whether
+the other modes showed it was not established.
+
+**What the code did.** A client reports its own hang-up as a `.disconnected`
+event. `RadioSession.handle` passed that to `handleLinkLoss` through a new
+`Task`, and `handleLinkLoss` decided whether the loss was news from
+`connection` alone. Its comment said an operator's disconnect "has already set
+`.disconnecting`". That holds only until the disconnect finishes. A switch
+goes on to dial, and `connection` reads `.connecting` again, which the guard
+accepts.
+
+**What the test reproduces.** `testTheOldLinksHangUpIsNotReportedAgainstTheNewCall`
+has the fake client yield the event inside `disconnect()` and suspend once, so
+the event is handled before `disconnect()` resumes and its task runs after the
+next `connect()` has started. Before the fix that raised the alert **and tore
+down the new call**. On the maintainer's device the new call stayed up, so the
+order there differed in some way that was not captured; the test shows one
+order that produces the alert, not that it is the one that occurred.
+
+**The fix.** `linkGeneration` counts up in `tearDownLink()`. The event pump and
+the `.disconnected` handler carry the number of the link they belong to, and
+`handleLinkLoss` ignores a loss whose number is not current. `handle` also
+ignores `.disconnected` outside `.connected` and `.connecting`, so an
+operator's own hang-up no longer leaves "Last disconnect: … disconnected
+locally" in the status panel.
+
+**Still to do:** switch between channels on a device, from an M17 channel and
+from each other mode, and see no alert.
