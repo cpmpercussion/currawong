@@ -1282,16 +1282,18 @@ Q2L attached, and the two verifications above are recorded rather than assumed.
 want to get to the point where I can setup the testflight entry in appstore
 connect in case someone wants to see a beta."*
 
-Not started, and deliberately scoped as **the plumbing only** — the first
-question is whether an archive can be built, uploaded and installed at all, not
-whether the app is finished.
+**The plumbing works**: a `v*` tag builds in Xcode Cloud and the iOS and macOS
+builds upload and are accepted (2026-09-04). Deliberately scoped as the
+plumbing only — the question was whether an archive can be built, uploaded and
+installed at all, not whether the app is finished. Brought up to date
+2026-11-14 for release 0.4.0, after `APP-41` to `APP-44`.
 
 **What exists already:** the bundle identifier (`au.charlesmartin.currawong`),
 the team (`DEVELOPMENT_TEAM: EDH387FRHA`, `CODE_SIGN_STYLE: Automatic`), a
-version and build number (`CFBundleShortVersionString: 0.1.0`,
-`CFBundleVersion: 1`), the usage descriptions the two prompts need
-(`NSMicrophoneUsageDescription`, `NSBluetoothAlwaysUsageDescription`), and an
-entitlements file. All in `project.yml`, which is where they must be changed —
+version and build number (`CFBundleShortVersionString`, `CFBundleVersion: 1`),
+the usage descriptions the two prompts need (`NSMicrophoneUsageDescription`,
+`NSLocalNetworkUsageDescription` — the Bluetooth one went with `APP-41`), and
+an entitlements file. All in `project.yml`, which is where they must be changed —
 the `.xcodeproj` and `Info.plist` are generated.
 
 **What is missing, in the order it will bite:**
@@ -1310,9 +1312,11 @@ the `.xcodeproj` and `Info.plist` are generated.
    better than the `make` target imagined here because nothing has to be
    remembered. `CFBundleShortVersionString` is untouched: that one is a
    release decision and belongs in a commit.
-3. **The `CurrawongOnAir` scheme must not ship.** It transmits on air, under a
-   callsign from the environment, against live reflectors. Confirm it is not in
-   the archived scheme's dependencies and cannot be.
+3. ✅ **The `CurrawongOnAir` scheme must not ship.** It transmits on air, under
+   a callsign from the environment, against live reflectors. Settled by
+   selection: the cloud workflow archives the `Currawong` scheme, whose only
+   test target is `CurrawongTests`, and the on-air and screenshot targets are
+   in schemes of their own (`project.yml`).
 4. ✅ **Export compliance.** `ITSAppUsesNonExemptEncryption: false`, declared in
    `project.yml` rather than answered on a web form each upload. `false` is the
    true answer and was checked rather than assumed: no cipher is implemented
@@ -1325,7 +1329,7 @@ the `.xcodeproj` and `Info.plist` are generated.
    nothing tracked, no analytics** — answered as *Data Not Collected*, and
    checked against the tree rather than assumed.
 6. **`UIBackgroundModes`** will draw a review question. ✅ drafted 2026-09-04,
-   below — and note it is **two** modes, not the one this line used to name.
+   below. One mode, `audio`, since `APP-41`.
 7. **Beta test information**: ✅ drafted 2026-09-04, below.
 
 #### Item 5 — the privacy answers, written once
@@ -1340,7 +1344,7 @@ makes that true, and the two things that look like exceptions and are not:
   is not linked, so no tracking prompt is wanted and none should be offered.
 - **What the app stores, it stores on the device.** The channel list, the
   operator identity (`OperatorIdentity` — callsign, name, location, all typed by
-  the operator) and the PTT mapping live in `UserDefaults`; the node and
+  the operator) live in `UserDefaults`; the node and
   EchoLink secrets live in the Keychain. None of it is uploaded, and there is
   no account with us to upload it to. On macOS these now live in the app's
   sandbox container (`APP-32`).
@@ -1411,13 +1415,14 @@ Short, because `BRINGUP.md` says what is honest. Something close to:
 > reflector — AllStarLink, EchoLink or M17. **You need your own licence and
 > callsign to transmit**, and credentials for whichever network you use.
 >
-> What to look at: add a channel, connect, hold the PTT button, and check that
+> What to look at: give your callsign, add a channel (pick the network, then a
+> reflector, a station or a node), connect, hold the PTT button, and check that
 > the status strip agrees with what you actually hear. Tell me when it does not.
 >
-> Known and not worth reporting: the Live Activity on a locked phone is
-> unverified (`BU-10`); a Bluetooth speaker-mic may stop carrying audio after
-> keying (`BU-13`); the first transmit after connecting on a Bluetooth route
-> takes about a second to key (`APP-24`).
+> Known and not worth reporting: the on-screen button is the only way to
+> transmit, so there is no Bluetooth or headset button; a Bluetooth headset
+> used for audio may stop carrying it after keying (`BU-13`); the first
+> transmit after a pause takes about a second to key (`APP-24`).
 
 **The one thing to say out loud in that brief**: an accidental open microphone
 into a repeater is the failure this app is built to prevent, so a stuck transmit
