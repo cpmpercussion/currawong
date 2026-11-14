@@ -1915,3 +1915,186 @@ on the website.
 
 **Done when:** the script is merged and a GitHub release carries a DMG it
 built.
+
+### APP-41 — one way to key the radio: the Bluetooth and headset inputs come out
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14, preparing a
+build for App Review: *"My gut feeling is to just carve out the bluetooth button
+learning feature as it was weird to try to get it working."*
+
+The app ships with one PTT input, the on-screen button (`PT-1`). The learned
+Bluetooth LE accessory (`PT-2`, `PT-3`) and the headset or remote button
+(`PT-4`) are removed from the tree, not hidden behind a flag.
+
+**Why.** The learn flow has met exactly one accessory, and that one mutes its
+own button while its Classic side sits in an HFP call (`BU-14`). `PT-4` latches
+and takes over the system's play and pause controls. Neither is something to
+hand a reviewer, or a stranger, as a way to open a microphone into a repeater.
+
+**Why removed rather than flagged off.** A flag that is off in every shipped
+configuration leaves about 1,700 lines and their tests either uncompiled, where
+they rot, or compiled and tested but unreachable, which is what `APP-36`
+deleted. And the binary must not reference CoreBluetooth at all once the
+purpose string goes, or the upload is refused for the missing string. **The
+last tree that has all of it is the tag `v0.3.0`**; bringing it back starts
+from there, and from `BU-13`, `BU-14` and `BU-17` in `BRINGUP.md`, which are
+the expensive part and are not touched by this task.
+
+**What goes:**
+
+- `BLEPTTController`, `PTTMapping` (the learner and the mapping store),
+  `BLECentral`, `CoreBluetoothCentral`, `RemoteCommandPTT`, `AccessoryPane`,
+  `AccessoryIndicator`, and their tests and fakes.
+- `PTTSource` and `PTTSink`. With one input there is nothing to tell apart, so
+  the session records *that* a hold is in progress, not what made it.
+- The stop reasons, safety notice and banner wording only those inputs could
+  produce: `accessoryReleased`, `accessoryLinkLost`, `remoteCommandToggled`,
+  and "LATCHED".
+- The session's accessory hooks: `onIdleAudioRouteChange`, `onWatchdogUnkey`,
+  `isIdleForAccessoryRepair`.
+- From `project.yml` and the entitlements: the `bluetooth-central` background
+  mode, `NSBluetoothAlwaysUsageDescription`, and the macOS sandbox's
+  `device.bluetooth`. The app no longer asks for Bluetooth on either platform.
+- The matching sentences in `README.md`, `docs/index.html` and
+  `docs/privacy.html`, which `APP-38` requires to stay true of the code.
+
+**What stays, deliberately:**
+
+- **Bluetooth audio.** A headset or speaker-mic is still an audio route, chosen
+  by the system; it needs no Bluetooth permission. So the audio policy in
+  `AudioIO` — the hand-back between overs, the `.listening` session — is
+  untouched, and `BU-13`, `BU-17` and `BU-18` stay open against it. Whether the
+  hand-back is still wanted with no button to keep alive is `APP-24`'s
+  question, not this task's.
+- **The Live Activity** (`SF-4`). See the note below; it is not removed here.
+- A mapping or a headset switch saved by an earlier build stays in
+  `UserDefaults`, unread. Nothing reads the keys, so nothing clears them.
+
+**Requirements this leaves unmet, and that is recorded rather than argued.**
+`PT-2`, `PT-3` and `PT-4` are in the adopted requirements, and `PT-3` is a
+MUST. `SF-2` has nothing to apply to. `PD-2` names two background modes and the
+app now declares one — a subset, so the rule in `CLAUDE.md` ("`audio` and
+`bluetooth-central` only") is not broken, but it describes more than the app
+does. Amending any of them is a change to
+`swift-hamvoip/docs/DESIGN-REQUIREMENTS.md`, in that repository, and is **not**
+done by this task.
+
+**What it changes elsewhere in this plan:**
+
+- `APP-25` item 6: one background mode to explain, not two. Item 7's beta
+  brief loses its `BU-13` line about the button only in part — the audio half
+  of `BU-13` still applies to a Bluetooth headset.
+- `BU-14` is moot while the feature is out. `BU-10`'s staged case — an
+  accessory keying a backgrounded app — cannot occur.
+- **`SF-4` needs a decision this task does not make.** Transmit drops when the
+  app leaves the foreground (`APP-2`), and the on-screen button is now the only
+  input, so the Live Activity can only be seen in the moment between locking
+  the phone and the drop. It still ends correctly on every path. Whether it is
+  worth shipping an extension for that is a separate question.
+
+**Done when:** `make build`, `make test` and `make test-macos` are green, the
+archived `Info.plist` has no Bluetooth key and one background mode, and
+`grep -ri bluetooth Sources/` finds only audio-route code and comments.
+
+### APP-42 — first run and the channel flow start from who you want to talk to
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14: *"onboarding
+channels and editing in the UI is still a very strange experience and doesn't
+quite line up with how you would expect things to work."*
+
+Not started. `APP-19`, `APP-22` and `APP-23` each repaired a step of this flow;
+what is left is its shape. The app is built around a form — a blank one — and
+the operator is thinking about a station.
+
+**What is strange today, as found in the tree:**
+
+1. **Nothing asks for a callsign.** A first launch opens on "No saved
+   channels". The callsign is a field in the middle of the connect form and
+   again in Settings, and every mode needs it.
+2. **`Add channel` opens an empty form**, and the directories that would fill
+   it in are somewhere else: the Stations and Reflectors tabs exist only while
+   the selected channel is already of that mode. So the order is: make a
+   channel, pick its mode, leave the form, find the tab that has just appeared,
+   choose, and be sent back.
+3. **Save and Connect are different verbs with three states between them** —
+   "Not saved", "Edited", and a draft that survives a quit (`BU-9`). Connect
+   may add a channel but never overwrite one. Each rule is defensible and was
+   decided on purpose; together they are a model the operator has to learn.
+4. **An account the directory needs is on a third screen.** EchoLink's station
+   list wants the account password, which lives in Settings, and the empty
+   list explains this in a paragraph.
+5. **The tab bar changes with the selected channel's mode** — Keypad, Stations
+   and Reflectors come and go.
+
+**The direction, to be settled in the task and not here:**
+
+- First run asks for the callsign once, before anything else, and nothing
+  after that asks again.
+- `Add channel` starts with the network, then goes straight to that network's
+  directory or its one or two fields. Choosing a station *is* adding the
+  channel.
+- Edits to a saved channel are saved as they are made. That retires "Not
+  saved", "Edited", the draft and the Save button, and it reopens `BU-9`'s
+  decision — so it needs the maintainer's yes before any code, because that
+  decision was theirs.
+- An account is asked for where it is first needed, and stored where it is
+  now.
+
+**Constraints that do not move:** the connect form stays the one place a
+protocol's fields are edited; views still know only `NetworkClient` and
+`RadioMode`; a channel cannot be edited or switched while a link is up; and
+nothing that must stay reachable mid-transmission moves (`BU-12`, `APP-15`).
+
+**Depends on:** `APP-41`, which empties a Settings section and a status-panel
+slot this task will lay out around.
+
+**Done when:** a new operator with a callsign and nothing else can reach a
+listening M17 reflector without opening Settings or typing an address, and the
+UI tests that walk the channel lifecycle walk the new one.
+
+### APP-43 — the copy pass, and the app stops announcing its own name
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14: *"The in-app
+copy is also a bit unusual and should be refined,"* and *"I'm not sure if a real
+app should display its own name so prominently in the UI... that's a bit like
+designing it as a website, not as an application."*
+
+Not started. **After `APP-42`**, which deletes or rewrites a good part of the
+text this would otherwise polish.
+
+**What is wrong with the copy, with one example of each:**
+
+- **It explains the mechanism, not the outcome.** *"Stored in the Keychain,
+  under your callsign rather than this channel, because one token works on
+  every node."* The operator needs "Used for every AllStarLink channel."
+- **It uses the app's internal vocabulary.** "The Reflectors pane", "the
+  directory does not call it active", "Last transmission ended:
+  `routeChanged`" (a raw enum case).
+- **It talks to the developer.** *"A short value is the quickest way to prove
+  the watchdog works."* *"`hamvoip-cli wt-token` prints one."*
+- **Footers are paragraphs.** Most fields carry three or four lines of caption.
+
+**The rules for the pass:**
+
+- One short sentence under a field, or none. Anything longer is either cut or
+  moved behind a help affordance.
+- Say what happens, in the operator's words. No Keychain, no settings file, no
+  type names, no CLI.
+- **Safety text is exempt from shortening, not from clarity.** The licence
+  notice (`APP-33`), the safety banners and the watchdog explanation keep what
+  they need to say; `APP-33`'s wording was settled with care and changes only
+  with the maintainer's agreement.
+- VoiceOver strings are copy too, and for a VoiceOver user the transmit strip's
+  label *is* `SF-4`. They are reviewed in the same pass and their tests move
+  with them.
+
+**The name.** The large "Currawong" title and its tagline are drawn only on the
+iPhone Session tab (`SessionPane`'s header); Mac and iPad already do without.
+It goes, and the channel name takes the title's place. In running text the name
+stays where the app is speaking as a party with responsibilities — the licence
+notice, and the permission strings the system shows on its behalf — and becomes
+"the app", or disappears, everywhere else.
+
+**The website and the store listing follow the app**: a sentence quoted from
+the UI in `docs/*.html` changes in the same PR (`APP-38`).
+
+**Done when:** every user-facing string has been read against the rules above,
+no screen draws the app's name as a heading, and `make test` and
+`make test-macos` are green with the string assertions updated.
