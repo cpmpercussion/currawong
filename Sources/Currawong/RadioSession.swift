@@ -467,6 +467,12 @@ final class RadioSession: ObservableObject {
 
     private var signalTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+
+    /// Which link is current, counted up each time one is torn down. A link's
+    /// events are delivered through tasks that can run after it has gone and
+    /// the next call has started; a loss is acted on only if it carries the
+    /// current number, so the old link's hang-up cannot end the new call.
+    private var linkGeneration = 0
     private var receiveTask: Task<Void, Never>?
 
     // MARK: - Init
@@ -1524,11 +1530,12 @@ final class RadioSession: ObservableObject {
 
     private func startEventPump(for link: RadioLink) {
         let events = link.events
+        let generation = linkGeneration
         eventTask = Task { @MainActor [weak self] in
             for await event in events {
                 self?.handle(event)
             }
-            await self?.linkStreamEnded()
+            await self?.linkStreamEnded(generation: generation)
         }
     }
 
@@ -1562,21 +1569,30 @@ final class RadioSession: ObservableObject {
             receivingFrom = callsign
 
         case .disconnected(let reason):
+            // A client reports its own hang-up here too. One the operator
+            // asked for has already left `.connected`, and is not news.
+            guard connection == .connected || connection == .connecting else { break }
             lastDisconnectReason = reason
+            let generation = linkGeneration
             Task { @MainActor [weak self] in
-                await self?.handleLinkLoss(reason: reason)
+                await self?.handleLinkLoss(reason: reason, generation: generation)
             }
         }
     }
 
-    private func linkStreamEnded() async {
-        await handleLinkLoss(reason: lastDisconnectReason)
+    private func linkStreamEnded(generation: Int) async {
+        await handleLinkLoss(reason: lastDisconnectReason, generation: generation)
     }
 
-    /// The far end, or the transport, ended the call. Not reachable from a
-    /// disconnect the operator asked for — that path has already set
-    /// `.disconnecting` — so this is always news.
-    private func handleLinkLoss(reason: String?) async {
+    /// The far end, or the transport, ended the call, so this is always news.
+    ///
+    /// Two guards keep an operator's own disconnect out. The state guard
+    /// covers one still in progress. The generation guard covers one that has
+    /// finished and been followed by a new call: by then the state reads
+    /// `.connecting` again, and only the number says the loss is the old
+    /// link's.
+    private func handleLinkLoss(reason: String?, generation: Int) async {
+        guard generation == linkGeneration else { return }
         guard connection == .connected || connection == .connecting else { return }
         connection = .disconnecting
         await endTransmitAndWait(reason: .disconnecting)
@@ -1730,6 +1746,7 @@ final class RadioSession: ObservableObject {
         // Release the public proxy lease (APP-13). Here, not in `disconnect()`,
         // because both a hang-up and a dropped link end up here.
         releaseProxyLease()
+        linkGeneration += 1
         eventTask?.cancel()
         eventTask = nil
         receiveTask?.cancel()
