@@ -1426,7 +1426,7 @@ Short, because `BRINGUP.md` says what is honest. Something close to:
 
 **The one thing to say out loud in that brief**: an accidental open microphone
 into a repeater is the failure this app is built to prevent, so a stuck transmit
-is the highest-value thing a tester can report. The 180 s watchdog (`SF-1`) will
+is the highest-value thing a tester can report. The watchdog (`SF-1`) will
 end it; that it *had* to is the bug.
 
 **The route: Xcode Cloud, triggered by a release tag.** Chosen 2026-08-23 over
@@ -2212,3 +2212,34 @@ which are about transmit state.
 
 **Done when:** `make build`, `make test` and `make test-macos` are green and
 the screenshot scenes have been looked at in light and dark on iPhone.
+
+### APP-45 — the watchdog defaults to one minute and stops at three
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-11-15, after QSO
+One 4.2.4 reset its users to hold-to-talk and a 60 s time-out.
+
+Implemented 2026-11-15. `TransmitTimeout.default` is 60 s, down from 180, and
+`TransmitTimeout.range` is 5–180 s, down from 5–600.
+
+**Why 60.** Hold-to-talk is the only way to key since `APP-41`, so the watchdog
+guards a release edge that never arrives rather than a latched microphone. A
+shorter default bounds that fault at little cost: most overs are well under a
+minute, and a Web Transceiver operator is a guest on someone else's node.
+
+**Why 180 is the ceiling.** It is a common repeater time-out timer. A longer
+limit here is one the far end enforces first.
+
+**Who it changes.** An operator who never set a timeout gets 60 s on the next
+launch, because nothing was stored. One who chose a value keeps it, unless it
+was over 180 s, which now loads as 180. Nothing is reset or rewritten.
+
+**`SF-1` still says 180 s**, and so does `RadioCore.TransmitWatchdog`. The app
+hands the library an explicit number on every connection, so the library's
+default never applies here; the requirement's wording is the library repo's to
+amend.
+
+**Not taken from QSO One:** its 10 s dead-air cutoff, which exists for latched
+microphones, and its headphones-only rule for keying over a station, which
+exists for full-duplex audio. Either becomes a question again if a latching
+input returns.
+
+**Done when:** `make build`, `make test` and `make test-macos` are green.
