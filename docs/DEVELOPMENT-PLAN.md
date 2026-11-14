@@ -2243,3 +2243,193 @@ exists for full-duplex audio. Either becomes a question again if a latching
 input returns.
 
 **Done when:** `make build`, `make test` and `make test-macos` are green.
+
+## Five refinements raised by QSO One's 2026 releases (APP-46 to APP-50)
+
+Proposed 2026-11-15, none started. The maintainer asked what QSO One's recent
+releases suggest for this app "in terms of refinement and simplicity of
+workflow", not feature count. Each row records what the code does today, read
+on 2026-11-15 against library v0.8.1, so the task starts from a finding rather
+than an idea. **Claims marked *inferred* were reasoned from the code and not
+run**; settle them first. Order is by what it costs an operator today.
+
+Left out on purpose: QSO One's Active Now (it reports where its own users
+transmit, and this app has no server to report to), its Beacon voice network,
+weather, net control, and router port mapping.
+
+### APP-46 — a VoiceOver user can key the radio, and hears what it is doing
+**Where:** `currawong`. **Prompted by:** QSO One 4.2.4 giving screen reader
+users toggle PTT automatically.
+
+**Today.**
+- `PushToTalkButton` has a label, a value and a hint, and nothing else: no
+  button trait, no accessibility action, no `.allowsDirectInteraction`. Its
+  `.accessibilityElement()` hides the "Connect first" subtitle, and a disabled
+  button is not announced as disabled.
+- *Inferred:* double-tap-and-hold passes the touch through and keys for as
+  long as it is held. A plain double-tap keys and drops at once. VoiceOver's
+  activate key on macOS does nothing.
+- No state change is announced anywhere in `Sources/`. Every state is in text,
+  so nothing is colour-only, but an operator hears a change only by moving
+  focus to it.
+- No test covers the PTT's accessibility. The UI tests press it with a
+  synthetic touch.
+
+**First step, before any code:** key the app with VoiceOver on, on an iPhone
+and on a Mac, and write down what happens. The rest depends on it.
+
+**Candidates.**
+1. `.allowsDirectInteraction` on the button. Keeps hold-to-talk, adds no new
+   way to key, and costs one line. It does nothing for macOS or Switch Control.
+2. An accessibility action that latches, offered only to assistive
+   technology. `beginTransmit()` already ignores a second press while keyed,
+   and `endTransmit` is idempotent, so the action is "key if idle, else
+   unkey". It needs a new `TransmitStopReason`; `APP-41` removed the last
+   latching one.
+3. Announcements for transmit start and stop, watchdog expiry, connect and
+   disconnect, via `AccessibilityNotification` (iOS 17) or
+   `UIAccessibility.post`.
+
+**The safety question candidate 2 reopens.** `APP-41` removed latching input,
+and `APP-45` set the watchdog on the grounds that nothing latches. A latch for
+assistive technology brings back the microphone nobody is holding. The 60 s
+watchdog bounds it. Whether that is enough, or a dead-air cutoff is the price
+of a latch, is the maintainer's call and is not made here.
+
+**Done when:** an operator using VoiceOver can connect, key, unkey and
+disconnect on both platforms without sighted help, and hears each of those
+happen.
+
+### APP-47 — a failed connection says what failed
+**Where:** `currawong` for the wording; some causes need the library first.
+**Prompted by:** QSO One 3.8.5 and 4.2.7 replacing misleading failures with
+plain ones.
+
+**Today.** `RadioSession.connect` shows `"Could not connect"` with the
+library's error description verbatim. Distinct causes that read alike or wrong:
+
+| Cause | What the operator reads |
+|---|---|
+| IAX2 wrong secret | `the node rejected the call: No authority found (cause code 50)` |
+| IAX2 account not authorised | `the node rejected the call, giving no reason` |
+| IAX2 host unreachable, or node silent | `the node did not answer within …` for both |
+| EchoLink station offline, busy, or ignoring us | `the node did not answer — no reply to the SDES that opens a session` for all three |
+| EchoLink proxy password wrong, proxy down, or proxy in use | `proxy: the proxy stream closed` for all three |
+| M17 refused | `reflector refused the connection (NACK) for module 'X'` |
+
+- *Inferred:* an IAX2 call that fails while connecting can raise a second
+  alert, "Disconnected / The node ended the call: …", which blames the node
+  for our own timeout. Both `connect`'s catch and the `.disconnected` event
+  present.
+- A dead IAX2 link is reported as "The node ended the call: reliable
+  transport failed", which blames the node for a lost network.
+
+**What the app can do alone.** Map each library error to a sentence that says
+what to check, and keep the library's text as detail. For the two IAX2
+rejections that means saying both things it might be, because `OQ-10` records
+that the two fail at nearly the same place and cannot be told apart from the
+client. Suppress the second alert.
+
+**What needs the library.** Telling "no network" from "no answer" (the
+transports ignore `.waiting`), and telling an EchoLink proxy's refused
+password from a closed stream. The app must not guess at either; raise them
+there.
+
+**Done when:** every row above has wording that names what the operator
+should check, a test per row, and no failure raises two alerts.
+
+### APP-48 — check my audio
+**Where:** `currawong`. **Prompted by:** QSO One 3.8.5's per-network audio
+test that rates a voice hot, good or quiet.
+
+**Today.** Most of it exists.
+- The transmit meter reads peak dBFS, 50 times a second, after gain, with
+  clip detection (`AudioLevel.swift`). `LevelMeterView.Zone` already names the
+  verdicts: below −30 too quiet, −30 to −6 good, −6 to −1 hot, above that
+  clipping.
+- The meter holds only a decaying instantaneous peak. **Nothing accumulates a
+  reading over an over**, which is the one missing piece.
+- Echo destinations: EchoLink's `*ECHOTEST*`, which the station browser
+  already marks "Test service", and AllStarLink's public parrot `55553`
+  (`BRINGUP.md`). **M17 has none confirmed**; the library's `M17-6` is open on
+  it.
+
+**Smallest version.** A verdict after every over, on any channel: one word
+from the over's peak distribution, shown where the meter is, with "raise the
+gain" or "lower it" when it is not good. No test destination, no new
+connection, and it works in all three modes.
+
+**Larger version.** A "Check my audio" entry that dials the echo destination
+for the current mode from an unsaved `NodeSettings`. It still needs the
+operator's credentials for that mode, and `*ECHOTEST*` and `55553` are other
+people's services, so it should end the call itself after one over.
+
+**Recommendation:** ship the smallest version first; it is the verdict that
+is new, and the destination is a convenience on top.
+
+**Done when:** after an over the operator is told in one word how they
+sounded, and the thresholds are tested against recorded levels.
+
+### APP-49 — a saved channel says whether anyone is there
+**Where:** `currawong`. **Prompted by:** QSO One 4.2.0's favourites list with
+live activity.
+
+**Today.** `ChannelRow` shows name, mode, destination, and a connection label
+for the connected channel only. It has no input for pre-connect status, and
+nothing fetches any.
+
+**What each mode could offer.**
+- **AllStarLink.** `NodeLookup` already fetches `api/stats/<node>` on demand
+  and reads `isActive`. The same response carries `keyed` and a linked-nodes
+  tree, unread. `APP-7` noted this and left it: "it is not a task yet."
+- **M17.** The host file carries no activity. A reflector's own status feed
+  would, where one exists; there is no common one, which is why the browser
+  links to the dashboard instead.
+- **EchoLink.** The directory carries `ON` and `BUSY`, but fetching it costs a
+  proxied session, and public proxies are single-user. Not on a timer.
+
+**Constraints.**
+- The App Store answer is "Data Not Collected" and `docs/privacy.html` must
+  stay true. Polling a third party's status endpoint tells it the operator's
+  address and which node they watch, so this changes that page.
+- Fetch when the list appears and on pull-to-refresh, never in the background.
+
+**Recommendation:** AllStarLink only, first: one fetch per saved node when
+the list appears, showing "active", "keyed" or nothing. Decide the other two
+modes after seeing whether it earns its place.
+
+**Done when:** an AllStarLink row shows whether the node is up and whether it
+is keyed, with the time of the reading, and `privacy.html` says so.
+
+### APP-50 — the link survives a change of network, or says plainly that it did not
+**Where:** the library first, then `currawong`. **Prompted by:** QSO One's
+run of fixes for Wi-Fi to cellular handover and AllStar recovery after drops.
+
+**Today.**
+- Neither repo monitors the network path. The transports act on `.ready`,
+  `.failed` and `.cancelled` and ignore `.waiting`.
+- **IAX2** sends no keepalive of its own. A dead link is noticed when one of
+  our full frames goes unacknowledged, about 15 s. *Inferred:* a session that
+  is only listening may never notice.
+- **M17** notices in 30 s, on missing reflector PINGs.
+- **EchoLink** relies on the proxy's TCP connection failing, with no
+  keepalive set. *Inferred:* the delay is the operating system's.
+- Transmit is dropped on every detected loss. *Inferred:* until detection,
+  audio goes into a dead path with only the watchdog (`SF-1`) as the limit.
+- Nothing reconnects. The operator presses "Reconnect to <name>".
+
+**First step:** stage it. Connect in each mode on a phone, turn Wi-Fi off,
+and time what the app shows. The inferred rows above are the ones to settle.
+
+**Candidates.**
+1. Path monitoring in the library's transport, reported through
+   `NetworkClient` as an event. This is the library's task; from here it is a
+   request.
+2. In the app, on a path change during a session: drop transmit at once, say
+   "Network changed", and reconnect once to the same channel. Receive-only
+   reconnection is safe. **Reconnection must never resume a transmission.**
+3. An IAX2 keepalive, also the library's.
+
+**Done when:** on a staged handover in each mode the app notices within a few
+seconds, never transmits into the dead path past that, and either is linked
+again or says why not.

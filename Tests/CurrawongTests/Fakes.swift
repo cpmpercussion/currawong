@@ -48,6 +48,7 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
     private var storedSentDigits: [Character] = []
     private var storedDTMFError: Error?
     private var storedDuringStartTransmit: (@Sendable () async -> Void)?
+    private var storedDuringDisconnect: (@Sendable () async -> Void)?
 
     // MARK: NetworkClient
 
@@ -98,7 +99,9 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
         lock.lock()
         storedCalls.append(.disconnect)
         storedState = .idle
+        let during = storedDuringDisconnect
         lock.unlock()
+        await during?()
         radioEventContinuation.finish()
         receivedAudioContinuation.finish()
     }
@@ -216,6 +219,21 @@ final class FakeNetworkClient: NetworkClient, @unchecked Sendable {
             lock.lock()
             storedConnectError = newValue
             lock.unlock()
+        }
+    }
+
+    /// Runs inside `disconnect()`, before it returns: where a real client
+    /// reports its own hang-up on the event stream.
+    var duringDisconnect: (@Sendable () async -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedDuringDisconnect
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            storedDuringDisconnect = newValue
         }
     }
 
