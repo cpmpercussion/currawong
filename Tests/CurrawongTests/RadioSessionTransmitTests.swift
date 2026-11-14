@@ -648,4 +648,14 @@ final class RadioSessionTransmitTests: XCTestCase {
         XCTAssertNil(harness.session.safetyNotice)
         XCTAssertFalse(TransmitStopReason.released.isUnexpected)
     }
+
+    /// The status panel shows why the last transmission ended, and it must
+    /// say so in words rather than in the case's own name.
+    func testEveryStopReasonIsDescribedInWords() {
+        for reason in TransmitStopReason.allCases {
+            let words = reason.operatorDescription
+            XCTAssertTrue(words.contains(" "), "\(reason) is described as '\(words)'")
+            XCTAssertEqual(words, words.lowercased(), "\(reason) reads as an identifier")
+        }
+    }
 }

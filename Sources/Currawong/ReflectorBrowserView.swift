@@ -119,9 +119,7 @@ struct ReflectorBrowserView: View {
                 .font(.subheadline.weight(.medium))
 
             if browser.search.isEmpty && !browser.isLoading {
-                Text(
-                    "The list is published by the M17 Project and fetched over the internet. "
-                    + "Refresh to try again, or type a reflector's address instead.")
+                Text("Refresh to try again, or type a reflector's address instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

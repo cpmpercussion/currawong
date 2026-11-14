@@ -53,7 +53,7 @@ struct StatusPanel: View {
             }
 
             if let reason = session.lastStopReason, reason.isUnexpected, session.safetyNotice == nil {
-                detailLine("Last transmission ended: \(reason.rawValue).")
+                detailLine("Last transmission ended: \(reason.operatorDescription).")
             }
 
             // Why the last link ended; hidden while a call is up.

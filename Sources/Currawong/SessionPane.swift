@@ -6,7 +6,8 @@ import SwiftUI
 /// stopped, and the PTT button — what SF-3 and PT-1 need visible without
 /// navigating.
 ///
-/// The status panel is always shown, at the top. Meters and the PTT button
+/// The status panel is always shown, at the top, and its first line is the
+/// channel's name: that is the pane's title, in every layout. Meters and the PTT button
 /// appear from ``RadioSession/ConnectionStatus/connecting`` onwards, not from
 /// `.connected`, so one connect changes the layout once (APP-18).
 ///
@@ -16,10 +17,6 @@ import SwiftUI
 struct SessionPane: View {
     @ObservedObject var session: RadioSession
 
-    /// Whether to draw the app's name above the status: true in the tab layout,
-    /// which has no window title.
-    let showsHeader: Bool
-
     /// Hangs up, cancels a connect, or reconnects, as ``SessionLinkControl``
     /// says. Passed in because connecting may need a proxy sourced first, and
     /// ``RootView`` owns that sequence.
@@ -27,8 +24,6 @@ struct SessionPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if showsHeader { header }
-
             if let notice = session.safetyNotice {
                 SafetyBanner(notice: notice) { session.dismissSafetyNotice() }
             }
@@ -76,15 +71,6 @@ struct SessionPane: View {
         SessionPaneLayout(connection: session.connection).showsTransmitControls
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Currawong")
-                .font(.largeTitle.weight(.semibold))
-            Text("AllStarLink, M17 and EchoLink for Apple platforms")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
 }
 
 /// The link control under the PTT button: Disconnect, Cancel, or Reconnect.

@@ -72,7 +72,7 @@ struct ConnectFormView: View {
                     ProgressView().controlSize(.small)
                     Text(
                         proxyPicker.probedCount > 0
-                            ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                            ? "Finding a public proxy, tried \(proxyPicker.probedCount)…"
                             : "Finding a public proxy…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -242,7 +242,7 @@ struct ConnectFormView: View {
                 Label(
                     found.isActive
                         ? found.summary
-                        : "\(found.summary) — the directory does not call it active",
+                        : "\(found.summary), not listed as active",
                     systemImage: found.isActive ? "checkmark.circle" : "exclamationmark.circle")
                     .font(.caption)
                     .foregroundStyle(found.isActive ? Color.green : Color.orange)
@@ -269,11 +269,7 @@ struct ConnectFormView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text(
-                "AllStarLink publishes where each node last registered, so the host below can be "
-                + "filled in from the number — and the node's callsign becomes the channel name if "
-                + "you have not named it yourself. A private node is not listed — type its address "
-                + "by hand.")
+            Text("Fills in the host from the number. A private node is not listed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -315,10 +311,8 @@ struct ConnectFormView: View {
 
             Text(
                 settings.usesWebTransceiver
-                    ? "Web Transceiver: reach any node whose owner has switched it on, using your "
-                        + "allstarlink.org portal account. No arrangement with the node's owner."
-                    : "Node secret: the username and secret the node's owner set up for you in "
-                        + "its configuration.")
+                    ? "Reach any node that allows Web Transceiver, with your allstarlink.org account."
+                    : "Use the username and secret the node's owner gave you.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +324,7 @@ struct ConnectFormView: View {
     @ViewBuilder
     private var webTransceiverFields: some View {
         LabelledField(label: "Portal token", systemImage: "key") {
-            // Not a SecureField, so a bad paste is visible. Still Keychain-stored.
+            // Not a SecureField, so a bad paste is visible.
             TextField("1b59df18107e", text: $webTransceiverToken)
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
@@ -345,20 +339,15 @@ struct ConnectFormView: View {
         {
             // A warning, not a refusal: the node decides what is valid.
             Label(
-                "That does not look like a token: they are \(NodeSettings.webTransceiverTokenLength)"
-                    + " lowercase hex characters, like 1b59df18107e. Connecting anyway is fine if "
-                    + "you are sure.",
+                "This does not look like a token. They are "
+                    + "\(NodeSettings.webTransceiverTokenLength) characters, like 1b59df18107e.",
                 systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        Text(
-            "Get this from your allstarlink.org account. It stands for your callsign — the node "
-            + "asks allstarlink.org who the token belongs to — so treat it like a password. Stored "
-            + "in the Keychain, under your callsign rather than this channel, because one token "
-            + "works on every node.")
+        Text("From your allstarlink.org account. Used for every AllStarLink channel.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -425,7 +414,7 @@ struct ConnectFormView: View {
 
         if proxyPicker.isSearching && proxyPicker.probedCount > 0 {
             // A moving count tells working from hung.
-            Text("Probed \(proxyPicker.probedCount)…")
+            Text("Tried \(proxyPicker.probedCount) so far…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -436,7 +425,7 @@ struct ConnectFormView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         } else if !proxyPicker.isSearching, proxyPicker.failure == nil {
-            Text("None yet — one is found when you connect or refresh the directory.")
+            Text("None yet. One is found when you connect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -450,10 +439,7 @@ struct ConnectFormView: View {
         }
 
         // echolink.org asks that public proxies be used briefly.
-        Text(
-            "Public proxies are other operators' machines, one user at a time, and this app lets "
-            + "one go as soon as you disconnect. Use them briefly — for sustained operating, set "
-            + "your own proxy in Settings.")
+        Text("Public proxies are shared. Use them briefly, or set your own in Settings.")
             .font(.caption2)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -485,10 +471,7 @@ struct ConnectFormView: View {
                 .autocorrectionDisabled()
         }
 
-        Text(
-            "Four numbers separated by dots — a callsign or a host name will not work here. "
-            + "EchoLink addresses change as stations come and go; adding the station again "
-            + "from the list brings this up to date.")
+        Text("Four numbers separated by dots. Add the station again to bring it up to date.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -510,9 +493,7 @@ struct ConnectFormView: View {
         }
 
         // Unlike the node address, this takes a host name.
-        Text(
-            "A host name or an address. \(NodeSettings.defaultDirectoryServer) answers with the "
-            + "whole pool and is the one to use unless you have a reason not to.")
+        Text("Leave this as \(NodeSettings.defaultDirectoryServer) unless you know otherwise.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -545,17 +526,15 @@ struct ConnectFormView: View {
 
                 LabelledField(label: "Secret", systemImage: "key") {
                     // Kept in the Keychain; never in defaults or logs.
-                    SecureField("stored in the Keychain", text: $secret)
+                    SecureField("", text: $secret)
                         .textFieldStyle(.roundedBorder)
                 }
-
-                keychainNote
             }
 
         case .m17:
             // No secret field: it would imply security M17 does not have.
             Label(
-                "M17 reflectors are unauthenticated. Your callsign identifies you.",
+                "M17 needs no password. Your callsign identifies you.",
                 systemImage: "info.circle")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -565,12 +544,6 @@ struct ConnectFormView: View {
             // The account is the operator's, not the channel's.
             EmptyView()
         }
-    }
-
-    private var keychainNote: some View {
-        Text("The password is kept in the Keychain, not in the app's settings file.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
     }
 
 }

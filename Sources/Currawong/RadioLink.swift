@@ -94,6 +94,23 @@ enum TransmitStopReason: String, Sendable, Equatable, CaseIterable {
 
     /// Whether this stop happened *to* the operator, and so is explained on
     /// screen: unexplained, they would simply key up again.
+    /// Why the transmission ended, in the operator's words, for the status
+    /// panel's "last transmission" line.
+    var operatorDescription: String {
+        switch self {
+        case .released: return "you let go"
+        case .draggedOffButton: return "your finger left the button"
+        case .gestureCancelled: return "the press was cancelled"
+        case .viewDisappeared: return "the button left the screen"
+        case .appBackgrounded: return "the app left the foreground"
+        case .audioInterrupted: return "audio was interrupted"
+        case .routeChanged: return "the audio device changed"
+        case .watchdogExpired: return "the transmit watchdog stopped it"
+        case .disconnecting: return "the connection ended"
+        case .transmitFailed: return "it could not start"
+        }
+    }
+
     var isUnexpected: Bool {
         switch self {
         case .released, .draggedOffButton, .disconnecting:

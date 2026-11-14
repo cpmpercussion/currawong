@@ -2103,8 +2103,9 @@ copy is also a bit unusual and should be refined,"* and *"I'm not sure if a real
 app should display its own name so prominently in the UI... that's a bit like
 designing it as a website, not as an application."*
 
-Not started. **After `APP-42`**, which deletes or rewrites a good part of the
-text this would otherwise polish.
+Implemented 2026-11-14, after `APP-42`, which deleted or rewrote a good part
+of the text this would otherwise have polished. **What was done and what was
+left is at the end of this row.**
 
 **What is wrong with the copy, with one example of each:**
 
@@ -2145,3 +2146,33 @@ the UI in `docs/*.html` changes in the same PR (`APP-38`).
 **Done when:** every user-facing string has been read against the rules above,
 no screen draws the app's name as a heading, and `make test` and
 `make test-macos` are green with the string assertions updated.
+
+**What was done:**
+
+- Captions under fields are one sentence or gone, in the connect form,
+  Settings, the two directories and `Add channel`. "Keychain", "pane", "the
+  directory does not call it active", `hamvoip-cli` and `rpt.conf` no longer
+  appear in anything the operator reads. Secure fields have no placeholder.
+- "Last transmission ended:" is followed by words
+  (`TransmitStopReason.operatorDescription`), not the case's name.
+- Alerts about a credential that could not be saved lead with what it means
+  and put the system's error last.
+- The "Currawong" title and tagline are gone from the iPhone Session tab; the
+  status panel's channel name is the first thing on it, as on Mac and iPad.
+  The name is now only in the licence notice, the permission strings, and the
+  path "Settings → Currawong → Microphone", which is what iOS calls the entry.
+
+**What was deliberately left:**
+
+- `APP-33`'s licence wording, the two SF-3 safety notices and the watchdog
+  notice are unchanged. So is the word "watchdog", which Settings, the banner
+  and the notice all use for the same thing.
+- The transmit strip's and the PTT button's VoiceOver strings were read and
+  kept as they are.
+- The alert raised when the microphone cannot be opened still carries the audio
+  state. It is diagnostic text in front of an operator, and it is what `BU-10`
+  and `BU-13` are being diagnosed from.
+- Messages that are an error passed through from the library are shown as the
+  library words them.
+- `docs/*.html` quoted none of the changed sentences, so the website is
+  untouched.

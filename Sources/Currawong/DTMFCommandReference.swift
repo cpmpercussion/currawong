@@ -107,7 +107,7 @@ enum DTMFCommandReference {
 
     /// Two things that bite an operator who has only ever seen the code list.
     static let notes: [String] = [
-        "Send the digits without pausing. The node collects them after the \u{2A} and gives up if you stall between keys, so a half-typed node number is discarded rather than queued.",
+        "Send the digits without pausing. The node gives up if you stall between keys.",
         "Node 0 is shorthand for the node you last operated on \u{2014} \u{2A}10 disconnects it.",
     ]
 }
@@ -143,7 +143,7 @@ struct DTMFCommandReferenceView: View {
                             .foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("Suggested defaults from AllStarLink's manual. Your node's own commands live in its rpt.conf and may differ.")
+                    Text("Suggested defaults from AllStarLink's manual. Your node's own commands may differ.")
                 }
             }
             .navigationTitle("Node Commands")

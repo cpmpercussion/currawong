@@ -50,7 +50,7 @@ struct PushToTalkButton: View {
                     Text(isTransmitting ? "ON AIR" : "PUSH TO TALK")
                         .font(.title3.weight(.bold))
                         .monospaced()
-                    Text(isEnabled ? "Hold to transmit" : "Connect to a node first")
+                    Text(isEnabled ? "Hold to transmit" : "Connect first")
                         .font(.caption)
                         .opacity(0.85)
                 }

@@ -125,7 +125,7 @@ struct StationBrowserView: View {
                 ProgressView().controlSize(.small)
                 Text(
                     proxyPicker.probedCount > 0
-                        ? "Finding a public proxy — probed \(proxyPicker.probedCount)…"
+                        ? "Finding a public proxy, tried \(proxyPicker.probedCount)…"
                         : "Finding a public proxy…")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -187,9 +187,7 @@ struct StationBrowserView: View {
                 .disabled(browser.isLoading || proxyPicker.isSearching)
                 .accessibilityIdentifier("stations.load")
 
-                Text(
-                    "Loading borrows a public proxy for a moment, which serves one operator at a "
-                    + "time, so the list is only read when you ask.")
+                Text("The list is read through a shared public proxy, so it loads only when you ask.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -255,7 +253,7 @@ private struct StationRow: View {
                 }
 
                 if station.isTestService {
-                    Text("Echoes your audio back — the right first contact.")
+                    Text("Echoes your audio back. A good first test.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -263,7 +261,7 @@ private struct StationRow: View {
                 if !station.hasDialableAddress {
                     // On the row, not left to a disabled button: a merely grey
                     // button reads as a bug rather than a fact about the listing.
-                    Text("The directory lists no reachable address for this station.")
+                    Text("No reachable address listed.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
