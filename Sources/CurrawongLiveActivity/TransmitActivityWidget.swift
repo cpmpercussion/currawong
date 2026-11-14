@@ -138,7 +138,7 @@ struct TransmitActivityWidget: Widget {
     }
 
     /// Shown when stale. Claims neither state — nobody knows which.
-    static let staleDetail = "Currawong is no longer updating this. Open the app to check."
+    static let staleDetail = "This is no longer being updated. Open the app to check."
 
     /// The app's own sentence, except when the app is the thing that has stopped.
     static func detail(

@@ -575,8 +575,7 @@ final class RadioSession: ObservableObject {
             present(
                 title: "Could not save the token",
                 message:
-                    "\(error) The token will work for this run, but was not stored — you will have "
-                    + "to fetch or paste it again next time.")
+                    "The token will work until you quit, but could not be saved. \(error)")
             return false
         }
     }
@@ -599,8 +598,7 @@ final class RadioSession: ObservableObject {
             present(
                 title: "Could not save the password",
                 message:
-                    "\(error) It will work for this run, but was not stored — you will have to "
-                    + "type it again next time.")
+                    "The password will work until you quit, but could not be saved. \(error)")
             return false
         }
     }
@@ -633,8 +631,7 @@ final class RadioSession: ObservableObject {
         } catch {
             // Not fatal: the proxy works from memory for this run.
             return
-                "\(error) The proxy will work for this run, but its password was not stored — you "
-                + "will have to type it again next time."
+                "The proxy will work until you quit, but its password could not be saved. \(error)"
         }
         return nil
     }
@@ -925,9 +922,8 @@ final class RadioSession: ObservableObject {
             present(
                 title: "No Web Transceiver token",
                 message:
-                    "This channel connects as a Web Transceiver guest, which needs a token from "
-                    + "your allstarlink.org portal account. Enter one, or switch the channel to a "
-                    + "node secret.")
+                    "This channel uses Web Transceiver, which needs a token from your "
+                    + "allstarlink.org account. Add one, or switch the channel to a node secret.")
             return
         }
 
@@ -969,7 +965,7 @@ final class RadioSession: ObservableObject {
             // memory.
             present(
                 title: "Could not save the secret",
-                message: "\(error) The connection will continue, but the secret was not stored.")
+                message: "The connection will continue, but the secret could not be saved. \(error)")
         }
 
         connection = .connecting
@@ -1000,8 +996,7 @@ final class RadioSession: ObservableObject {
             present(
                 title: "Audio unavailable",
                 message:
-                    "The audio session could not be configured, so nothing could be transmitted or "
-                    + "heard. \(error)")
+                    "Audio could not be set up, so nothing could be sent or heard. \(error)")
             return
         }
 
@@ -1123,7 +1118,7 @@ final class RadioSession: ObservableObject {
         guard connection.isConnected else {
             present(
                 title: "Not connected",
-                message: "Connect to a node before transmitting.")
+                message: "Connect before transmitting.")
             return
         }
 
@@ -1436,11 +1431,11 @@ final class RadioSession: ObservableObject {
     /// Where to turn the microphone back on, which differs by platform.
     private var micPermissionAdvice: String {
         #if os(iOS)
-        return "Currawong cannot transmit without the microphone. Turn it on in Settings → "
-            + "Currawong → Microphone, then connect again."
+        return "The microphone is needed to transmit. Turn it on in Settings → Currawong → "
+            + "Microphone, then connect again."
         #else
-        return "Currawong cannot transmit without the microphone. Turn it on in System Settings "
-            + "→ Privacy & Security → Microphone, then connect again."
+        return "The microphone is needed to transmit. Turn it on in System Settings → Privacy "
+            + "& Security → Microphone, then connect again."
         #endif
     }
 
@@ -1659,7 +1654,7 @@ final class RadioSession: ObservableObject {
         guard let link, connection.isConnected else {
             present(
                 title: "Not connected",
-                message: "Connect to a node before sending DTMF.")
+                message: "Connect before sending DTMF.")
             return
         }
 

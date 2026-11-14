@@ -170,8 +170,8 @@ struct AddChannelView: View {
             }
 
             Text(
-                "The password echolink.org issued for \(session.identity.callsign). The station "
-                + "list needs it, and so does every EchoLink call.")
+                "The password echolink.org issued for \(session.identity.callsign). Every "
+                + "EchoLink channel uses it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

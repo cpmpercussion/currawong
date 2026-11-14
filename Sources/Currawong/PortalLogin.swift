@@ -41,13 +41,12 @@ enum PortalLoginFailure: Error, Equatable, CustomStringConvertible {
         switch self {
         case .wrongPassword:
             return
-                "allstarlink.org did not accept that callsign and password. This is your portal "
-                + "login — not a node secret."
+                "allstarlink.org did not accept that callsign and password. Use your "
+                + "allstarlink.org login, not a node secret."
         case .endpointChanged:
             return
-                "allstarlink.org did not understand the login request, which means its login "
-                + "service has changed. Currawong needs an update; a token pasted in by hand "
-                + "still works."
+                "allstarlink.org has changed how logging in works, and the app needs an update. "
+                + "A token pasted in by hand still works."
         case .refused(let message):
             return "allstarlink.org refused the login: \(message)"
         case .unreachable(let detail):

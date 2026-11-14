@@ -148,7 +148,7 @@ A sidebar of channels beside the live
 session on macOS and iPad, tabs on iPhone, with the transmit banner outside the
 container so it is visible from every pane. The status panel is laid out like a
 radio's front panel, led by _where you are connected_ rather than by the
-connection state.
+connection state or the app's own name.
 
 **A Live Activity while transmitting (SF-4, iOS only).** Transmit state on a
 locked iPhone, because the failure this project is arranged around is a phone in

@@ -28,7 +28,6 @@ final class SessionPaneStateTests: XCTestCase {
     private func sessionPane(_ harness: SessionHarness) -> some View {
         SessionPane(
             session: harness.session,
-            showsHeader: false,
             linkAction: {})
     }
 

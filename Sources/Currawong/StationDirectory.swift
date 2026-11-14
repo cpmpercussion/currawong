@@ -84,9 +84,9 @@ enum StationDirectoryError: Error, Equatable, CustomStringConvertible {
     var description: String {
         switch self {
         case .notEchoLink:
-            return "The station directory is an EchoLink thing; this channel is not an EchoLink channel."
+            return "The station list is for EchoLink channels."
         case .missingCallsign:
-            return "Enter your callsign. The directory server logs you in as a station, not anonymously."
+            return "Enter your callsign. The station list is read under it."
         case .missingProxy:
             return """
                 No proxy could be found. The directory is reached through one, and every public \
@@ -197,7 +197,7 @@ final class StationBrowser: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.stations = fetched
                 self.fetchedAt = self.now()
-                self.failure = fetched.isEmpty ? "The directory server listed no stations." : nil
+                self.failure = fetched.isEmpty ? "No stations are listed right now." : nil
             } catch is CancellationError {
                 return
             } catch {

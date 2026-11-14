@@ -87,9 +87,7 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
             }
 
-            Text(
-                "Used on every channel and in every mode, and it is what both accounts below are "
-                + "filed under.")
+            Text("Used on every channel.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -116,10 +114,9 @@ struct SettingsView: View {
             // SF-1 is enforced in the library, not here, and is not optional:
             // this field sets the number, it cannot switch the watchdog off.
             Text(
-                "The longest a single transmission may last before Currawong unkeys for you, on "
+                "The longest one transmission may last before the app stops it for you, on "
                 + "every channel. Between \(Int(TransmitTimeout.range.lowerBound)) and "
-                + "\(Int(TransmitTimeout.range.upperBound)) seconds; it cannot be turned off. A "
-                + "short value is the quickest way to prove the watchdog works.")
+                + "\(Int(TransmitTimeout.range.upperBound)) seconds; it cannot be turned off.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -142,10 +139,8 @@ struct SettingsView: View {
                 .font(.title3.weight(.semibold))
 
             Text(
-                "A Web Transceiver token lets you reach any node whose owner has switched Web "
-                + "Transceiver on, with no arrangement of your own on that node. It stands for "
-                + "your callsign — the node asks allstarlink.org whose token it is — so keep it "
-                + "like a password.")
+                "A token lets you reach any node that allows Web Transceiver. Keep it like a "
+                + "password.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -155,8 +150,7 @@ struct SettingsView: View {
             } else {
                 // Only in previews or builds without a login.
                 Label(
-                    "Logging in is not available in this build. Paste a token below instead — "
-                    + "`hamvoip-cli wt-token` prints one.",
+                    "Logging in is not available. Paste a token below instead.",
                     systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -164,8 +158,7 @@ struct SettingsView: View {
             }
 
             LabelledField(label: "Token", systemImage: "key") {
-                // Not a SecureField, so a truncated paste is visible. Stored in
-                // the Keychain either way.
+                // Not a SecureField, so a truncated paste is visible.
                 TextField("1b59df18107e", text: $tokenText)
                     .textFieldStyle(.roundedBorder)
                     #if os(iOS)
@@ -225,9 +218,7 @@ struct SettingsView: View {
             }
         }
 
-        Text(
-            "This is your allstarlink.org portal password, not a node secret. It is used once to "
-            + "fetch the token and then discarded — only the token is stored.")
+        Text("Used once to fetch the token, and not kept.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -243,24 +234,22 @@ struct SettingsView: View {
     @ViewBuilder
     private var tokenStatus: some View {
         if session.webTransceiverToken.isEmpty {
-            Label("No token stored.", systemImage: "circle.dashed")
+            Label("No token saved.", systemImage: "circle.dashed")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if !NodeSettings.isPlausibleWebTransceiverToken(session.webTransceiverToken) {
             // A warning, never a refusal: only the node decides whether a token
             // works, and the issuing endpoint is expected to change.
             Label(
-                "Stored, but it does not look like a token — they are "
-                    + "\(NodeSettings.webTransceiverTokenLength) lowercase hex characters.",
+                "Saved, but it does not look like a token. They are "
+                    + "\(NodeSettings.webTransceiverTokenLength) characters, like 1b59df18107e.",
                 systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Label(
-                portalLogin.didSucceed
-                    ? "Fetched and stored in the Keychain."
-                    : "Stored in the Keychain.",
+                portalLogin.didSucceed ? "Fetched and saved." : "Saved.",
                 systemImage: "checkmark.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -276,7 +265,7 @@ struct SettingsView: View {
                 .font(.title3.weight(.semibold))
 
             LabelledField(label: "Account password", systemImage: "key") {
-                SecureField("stored in the Keychain", text: $echoLinkPasswordText)
+                SecureField("", text: $echoLinkPasswordText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { session.setEchoLinkAccountPassword(echoLinkPasswordText) }
             }
@@ -287,22 +276,17 @@ struct SettingsView: View {
             .buttonStyle(.bordered)
             .disabled(echoLinkPasswordText == session.echoLinkAccountPassword)
 
-            Text(
-                "The password issued with your callsign by echolink.org — not a proxy password, "
-                + "which is the section below. "
-                + "Without it the directory server will not list stations or register you, and "
-                + "nobody can call you. One password per callsign, so every EchoLink channel uses "
-                + "this one.")
+            Text("The password echolink.org issued for your callsign. Every EchoLink channel uses it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if session.echoLinkAccountPassword.isEmpty {
-                Label("No password stored.", systemImage: "circle.dashed")
+                Label("No password saved.", systemImage: "circle.dashed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Label("Stored in the Keychain.", systemImage: "checkmark.circle")
+                Label("Saved.", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -319,9 +303,7 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
             }
 
-            Text(
-                "Shown to the station you call and in the EchoLink directory. Both may be left "
-                + "empty.")
+            Text("Shown to the station you call and in the EchoLink directory. Both are optional.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -337,11 +319,7 @@ struct SettingsView: View {
             Text("Your own proxy")
                 .font(.title3.weight(.semibold))
 
-            Text(
-                "Optional. Leave this empty and a public proxy is found for you each time you "
-                + "connect — that is the normal way to use the app. Fill it in if you run your "
-                + "own proxy: public ones carry one user at a time and are meant for brief use, "
-                + "so a private one is the answer for sustained operating.")
+            Text("Optional. Left empty, a public proxy is found each time you connect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -365,7 +343,7 @@ struct SettingsView: View {
             }
 
             LabelledField(label: "Proxy password", systemImage: "lock") {
-                SecureField("stored in the Keychain", text: $proxyPasswordText)
+                SecureField("", text: $proxyPasswordText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { saveProxy() }
             }
@@ -398,16 +376,8 @@ struct SettingsView: View {
             if session.echoLinkProxy.isConfigured {
                 Label(
                     "Every EchoLink channel goes through "
-                        + "\(session.echoLinkProxy.host):\(session.echoLinkProxy.port). Its "
-                        + "password is in the Keychain.",
+                        + "\(session.echoLinkProxy.host):\(session.echoLinkProxy.port).",
                     systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Label(
-                    "No private proxy — a public one is found when you connect.",
-                    systemImage: "circle.dashed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -151,7 +151,7 @@ struct RootView: View {
 
             // Leaving this tab while keyed unkeys; see the type's doc comment.
             ScrollView {
-                sessionPane(showsHeader: true)
+                sessionPane
                     .padding(20)
                     .paneColumn()
             }
@@ -272,7 +272,7 @@ struct RootView: View {
                 Divider()
             #endif
 
-            sessionPane(showsHeader: false)
+            sessionPane
                 .padding(20)
                 .paneColumn()
 
@@ -352,10 +352,9 @@ struct RootView: View {
 
     // MARK: - Shared pieces
 
-    private func sessionPane(showsHeader: Bool) -> some View {
+    private var sessionPane: some View {
         SessionPane(
             session: session,
-            showsHeader: showsHeader,
             linkAction: { Task { await sessionLinkAction() } })
     }
 

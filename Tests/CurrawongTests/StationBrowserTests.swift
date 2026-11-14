@@ -189,7 +189,7 @@ final class StationBrowserTests: XCTestCase {
         browser.load(for: echoLinkSettings(), identity: identity, accountPassword: "pw", proxy: publicProxy)
         await waitUntil("the empty listing is reported") { browser.failure != nil }
 
-        XCTAssertEqual(browser.failure, "The directory server listed no stations.")
+        XCTAssertEqual(browser.failure, "No stations are listed right now.")
     }
 
     /// A second fetch replaces the first — the operator changed something and
