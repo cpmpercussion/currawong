@@ -7,15 +7,16 @@
 #   scripts/screenshots.sh macos            # one platform
 #   IOS_DEVICES='iPhone 17 Pro Max' scripts/screenshots.sh ios
 #
-# The defaults are the sizes App Store Connect requires: the 6.9" iPhone and
-# the 13" iPad. The Mac window is sized by the stage to 1280x800 points, which
+# The defaults are the sizes App Store Connect has slots for: the 6.9" iPhone
+# (1320x2868), the 6.3" iPhone (1206x2622) and the 13" iPad (2064x2752). The
+# 6.9" and 6.3" slots do not take each other's images. The Mac window is sized by the stage to 1280x800 points, which
 # is 2560x1600 on a Retina display.
 set -eu
 failed=0
 
 cd "$(dirname "$0")/.."
 PLATFORMS=${1:-ios macos}
-IOS_DEVICES=${IOS_DEVICES:-"iPhone 17 Pro Max|iPad Pro 13-inch (M5)"}
+IOS_DEVICES=${IOS_DEVICES:-"iPhone 17 Pro Max|iPhone 17 Pro|iPad Pro 13-inch (M5)"}
 OUT=build/screenshots
 XCB="xcodebuild -project Currawong.xcodeproj -scheme CurrawongScreenshots -derivedDataPath DerivedData"
 
