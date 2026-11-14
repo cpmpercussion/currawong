@@ -65,7 +65,7 @@ jobs:
       # test, at four times the cost. The iOS-only source that does exist is
       # mostly view modifiers, which is compile risk — and `Build (iOS)` above
       # catches that in 61s. No test references `ActivityKitPresenter`, and
-      # `AudioIO` and `CoreBluetoothCentral` are reached through `Fakes.swift`.
+      # `AudioIO` is reached through `Fakes.swift`.
       #
       # It still runs on every merge to `main`, nightly, and on demand, so an
       # iOS-only runtime regression is caught within a day and cannot reach a

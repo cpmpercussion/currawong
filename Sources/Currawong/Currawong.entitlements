@@ -24,7 +24,7 @@
 	no such entitlement — every iOS app is sandboxed and nothing declares it.
 	macOS does, and since APP-32 the Mac build is signed with a file of its
 	own, `Currawong-macOS.entitlements`, which turns the sandbox on and names
-	the network, microphone and Bluetooth access this app is built on. That is
+	the network and microphone access this app is built on. That is
 	the split `project.yml` makes with
 	`CODE_SIGN_ENTITLEMENTS[sdk=macosx*]`; the reason for it is ITMS-90296,
 	which rejects an un-sandboxed macOS upload outright.

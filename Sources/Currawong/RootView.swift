@@ -20,8 +20,6 @@ import SwiftUI
 /// transmitter keyed by a button the operator cannot see is the SF-3 failure.
 struct RootView: View {
     @ObservedObject var session: RadioSession
-    @ObservedObject var accessory: BLEPTTController
-    @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var browser: StationBrowser
     @ObservedObject var reflectorBrowser: ReflectorBrowser
     @ObservedObject var proxyPicker: ProxyPicker
@@ -71,7 +69,6 @@ struct RootView: View {
             // ``TransmitBanner``.
             TransmitBanner(
                 isTransmitting: status.isTransmitting,
-                source: session.activeSource,
                 keyDownsInHold: session.keyDownsInCurrentHold,
                 routeTrace: "\(session.lastKeyDownRoute) "
                     + "prep=\(session.routeSignalsDuringPreparation) "
@@ -383,8 +380,6 @@ struct RootView: View {
     private func sessionPane(showsHeader: Bool) -> some View {
         SessionPane(
             session: session,
-            accessory: accessory,
-            remoteCommand: remoteCommand,
             showsHeader: showsHeader,
             linkAction: { Task { await sessionLinkAction() } })
     }
@@ -449,13 +444,10 @@ struct RootView: View {
         await session.toggleConnection(proxy: proxy)
     }
 
-    /// The settings screen: the operator, the stored accounts, the PTT
-    /// accessory.
+    /// The settings screen: the operator and the stored accounts.
     private var settingsPane: some View {
         SettingsView(
             session: session,
-            accessory: accessory,
-            remoteCommand: remoteCommand,
             portalLogin: portalLogin)
     }
 
@@ -481,8 +473,6 @@ private extension View {
     let root = CompositionRoot()
     RootView(
         session: root.session,
-        accessory: root.accessory,
-        remoteCommand: root.remoteCommand,
         browser: root.stationBrowser,
         reflectorBrowser: root.reflectorBrowser,
         proxyPicker: root.proxyPicker,

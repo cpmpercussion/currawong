@@ -42,8 +42,6 @@ final class WindowSizingTests: XCTestCase {
             secretStore: InMemorySecretStore())
         return RootView(
             session: root.session,
-            accessory: root.accessory,
-            remoteCommand: root.remoteCommand,
             browser: root.stationBrowser,
             reflectorBrowser: root.reflectorBrowser,
             proxyPicker: root.proxyPicker,

@@ -5,8 +5,8 @@ import Foundation
 /// **APP-18.** Which controls the session screen has, given what the link is
 /// doing.
 ///
-/// A pure value like ``SessionLinkControl`` and ``AccessoryIndicator``, shared
-/// because the decision has two halves in *different files* — ``SessionPane``
+/// A pure value like ``SessionLinkControl``, shared because the decision has
+/// two halves in *different files* — ``SessionPane``
 /// owns the meters and the PTT button, ``RootView`` owns the connect form and
 /// the pane picker — and they must not drift into showing both or neither.
 ///

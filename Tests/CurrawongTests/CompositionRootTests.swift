@@ -248,43 +248,6 @@ final class CompositionRootTests: XCTestCase {
         XCTAssertEqual(link.transmitState(), .idle)
     }
 
-    // MARK: - The SF-2 wire
-
-    /// **The wiring test SF-2 depends on.** Both input controllers take a *weak*
-    /// sink, and before this was assembled `BLEPTTController` computed perfectly
-    /// correct press and release edges and delivered them to `nil`. A test that
-    /// only exercises the controller cannot catch that; this one can.
-    func testTheInputControllersAreWiredToTheSession() {
-        let root = makeRoot()
-
-        XCTAssertIdentical(root.accessory.sink, root.session)
-        XCTAssertIdentical(root.remoteCommand.sink, root.session)
-    }
-
-    /// Activation must not construct a `CBCentralManager` or take over the
-    /// system's media controls for an operator who has configured neither.
-    func testActivatingWithNothingConfiguredArmsNothing() {
-        let root = CompositionRoot(
-            audio: FakeAudioIO(),
-            settingsStore: InMemorySettingsStore(),
-            secretStore: InMemorySecretStore(),
-            accessory: BLEPTTController(
-                makeCentral: { XCTFail("a central was built"); return FakeBLECentral() },
-                store: InMemoryPTTSettingsStore(),
-                retryDelay: {}),
-            remoteCommand: RemoteCommandPTTController(
-                makeSource: {
-                    XCTFail("a remote command source was built")
-                    return FakeRemoteCommandSource()
-                },
-                store: InMemoryPTTSettingsStore()))
-
-        root.activate()
-
-        XCTAssertEqual(root.accessory.linkState, .noAccessory)
-        XCTAssertFalse(root.remoteCommand.isEnabled)
-    }
-
     /// **AU-4.** The library's leveller targets −18 dBFS RMS, which is 6 dB
     /// quieter than a phone speaker wants. Pinned because the symptom of losing
     /// this — audio that is merely a bit quiet — is one nobody files a bug about

@@ -3,15 +3,12 @@
 import SwiftUI
 
 /// The app-wide settings screen (APP-12): identity, the SF-1 watchdog, the
-/// operator's own accounts and proxy, and the PTT accessory. Nothing here is
-/// per channel. The connect form edits the same callsign.
+/// operator's own accounts and proxy. Nothing here is per channel. The connect form edits the same callsign.
 ///
 /// "EchoLink" is nominative use only (OQ-1b): no logo, nothing implying the
 /// app is an EchoLink product.
 struct SettingsView: View {
     @ObservedObject var session: RadioSession
-    @ObservedObject var accessory: BLEPTTController
-    @ObservedObject var remoteCommand: RemoteCommandPTTController
     @ObservedObject var portalLogin: PortalLoginController
 
     /// The token, as typed or pasted. Committed on submit or loss of focus, so
@@ -46,8 +43,6 @@ struct SettingsView: View {
                 echoLinkSection
                 Divider()
                 proxySection
-                Divider()
-                accessorySection
             }
             .padding(20)
             .frame(maxWidth: 520)
@@ -421,20 +416,5 @@ struct SettingsView: View {
         proxyHostText = session.echoLinkProxy.host
         proxyPortText = String(session.echoLinkProxy.port)
         proxyPasswordText = session.echoLinkProxyPassword
-    }
-
-    // MARK: - PTT accessory
-
-    /// The accessory screen, embedded rather than reimplemented.
-    private var accessorySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("PTT accessories")
-                .font(.title3.weight(.semibold))
-
-            AccessoryPane(
-                accessory: accessory,
-                remoteCommand: remoteCommand,
-                isEmbedded: true)
-        }
     }
 }

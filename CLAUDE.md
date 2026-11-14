@@ -42,8 +42,9 @@ history and its own agents.
 - **PD-4: CallKit MUST NOT be used.** Wrong semantics, regionally restricted.
 - **PT-6: volume-button interception MUST NOT be used.** Fails App Store review.
 - **PT-5: do not rely on `GCKeyboard`** — foreground-only.
-- Background modes are **`audio` and `bluetooth-central` only** (PD-2). Do not
-  add `voip`. Do not request `com.apple.developer.networking.multicast` (PD-3).
+- Background modes are **`audio` and `bluetooth-central` only** (PD-2), and
+  only `audio` is declared while the app has no Bluetooth LE input (APP-41). Do
+  not add `voip`. Do not request `com.apple.developer.networking.multicast` (PD-3).
 - **The app talks to the library through `RadioCore.NetworkClient`.** Views and
   view models use `NetworkClient` and `TransmitState` and know nothing about
   IAX2, M17 or EchoLink. The one exception is the composition root
@@ -58,7 +59,9 @@ history and its own agents.
 ## Safety requirements that shape the UI
 
 - **SF-1** transmit watchdog: enforced by the library's client, 180 s default.
-- **SF-2** BLE link loss during transmit must drop transmit.
+- **SF-2** BLE link loss during transmit must drop transmit. Nothing to apply
+  it to since APP-41 removed the accessory input; it binds again the day one
+  returns.
 - **SF-3** audio interruption or route change must drop transmit. Whoever wires
   `RadioCore.AudioPipeline` **must** consume its `signals` stream — the pipeline
   deliberately does not act on interruptions itself. Note also that

@@ -28,13 +28,6 @@ final class SessionPaneStateTests: XCTestCase {
     private func sessionPane(_ harness: SessionHarness) -> some View {
         SessionPane(
             session: harness.session,
-            accessory: BLEPTTController(
-                makeCentral: { FakeBLECentral() },
-                store: InMemoryPTTSettingsStore(),
-                retryDelay: {}),
-            remoteCommand: RemoteCommandPTTController(
-                makeSource: { FakeRemoteCommandSource() },
-                store: InMemoryPTTSettingsStore()),
             showsHeader: false,
             linkAction: {})
     }

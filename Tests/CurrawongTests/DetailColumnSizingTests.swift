@@ -75,13 +75,6 @@ final class DetailColumnSizingTests: XCTestCase {
     private func rootView(_ harness: SessionHarness) -> some View {
         RootView(
             session: harness.session,
-            accessory: BLEPTTController(
-                makeCentral: { FakeBLECentral() },
-                store: InMemoryPTTSettingsStore(),
-                retryDelay: {}),
-            remoteCommand: RemoteCommandPTTController(
-                makeSource: { FakeRemoteCommandSource() },
-                store: InMemoryPTTSettingsStore()),
             browser: StationBrowser(directory: FakeStationDirectory()),
             reflectorBrowser: ReflectorBrowser(directory: FakeReflectorDirectory()),
             proxyPicker: ProxyPicker(finder: FakeProxyFinder()),

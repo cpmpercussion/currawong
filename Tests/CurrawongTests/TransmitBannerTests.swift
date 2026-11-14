@@ -29,60 +29,32 @@ final class TransmitBannerTests: XCTestCase {
     /// and not another — which is exactly what the first version of this strip
     /// did, and what the operator asked to have removed.
     func testEveryStateIsTheSameHeight() throws {
-        let standby = fittingSize(TransmitBanner(isTransmitting: false, source: nil))
+        let standby = fittingSize(TransmitBanner(isTransmitting: false))
 
-        for source in [PTTSource.onScreen, .accessory, .remoteCommand] {
-            XCTAssertEqual(
-                fittingSize(TransmitBanner(isTransmitting: true, source: source)).height,
-                standby.height, accuracy: 1,
-                "keying from \(source) changed the strip's height — everything below it moves")
-        }
-
-        // And with no source known, which is the state a resumed transmission
-        // can be in.
         XCTAssertEqual(
-            fittingSize(TransmitBanner(isTransmitting: true, source: nil)).height,
-            standby.height, accuracy: 1)
+            fittingSize(TransmitBanner(isTransmitting: true)).height,
+            standby.height, accuracy: 1,
+            "keying changed the strip's height — everything below it moves")
     }
 
-    /// **PT-4.** The one thing worth saying beyond "on air": a latched key does
-    /// not stop when the operator lets go. An operator who believes a latched
-    /// key is momentary is how this app would leave a microphone open.
-    func testALatchedTransmissionSaysSoInPlaceOfOnAir() {
-        let latched = TransmitBanner(isTransmitting: true, source: .remoteCommand)
-        XCTAssertEqual(latched.trailingWord, "LATCHED")
-
-        // And the momentary inputs do not, because for them TRANSMITTING is the
-        // whole truth and a second word would be noise.
-        for source in [PTTSource.onScreen, .accessory] {
-            XCTAssertEqual(
-                TransmitBanner(isTransmitting: true, source: source).trailingWord, "ON AIR",
-                "\(source) is momentary and must not claim to be latched")
-        }
-        XCTAssertEqual(
-            TransmitBanner(isTransmitting: true, source: nil).trailingWord, "ON AIR",
-            "an unknown source must not be called latched")
-
-        XCTAssertEqual(TransmitBanner(isTransmitting: false, source: nil).trailingWord, "STANDBY")
+    func testTheTrailingWordFollowsTheKey() {
+        XCTAssertEqual(TransmitBanner(isTransmitting: true).trailingWord, "ON AIR")
+        XCTAssertEqual(TransmitBanner(isTransmitting: false).trailingWord, "STANDBY")
     }
 
-    /// VoiceOver has no colour to read, so it still gets PT-4's full sentence —
-    /// the wording that was clutter on screen and is the requirement when spoken.
-    func testVoiceOverGetsTheHoldDescriptionTheStripNoLongerDraws() {
-        for source in [PTTSource.onScreen, .accessory, .remoteCommand] {
-            let banner = TransmitBanner(isTransmitting: true, source: source)
-            XCTAssertTrue(
-                banner.accessibilityDescription.contains(source.holdDescription),
-                "\(source) must say whether letting go unkeys")
-            XCTAssertTrue(banner.accessibilityDescription.contains("On air"))
-        }
+    /// VoiceOver has no colour to read, so it gets the full sentence the strip
+    /// does not draw: that letting go is what unkeys.
+    func testVoiceOverGetsTheHoldDescriptionTheStripDoesNotDraw() {
+        let banner = TransmitBanner(isTransmitting: true)
+        XCTAssertTrue(banner.accessibilityDescription.contains(RadioSession.holdDescription))
+        XCTAssertTrue(banner.accessibilityDescription.contains("On air"))
     }
 
     /// And the idle strip says the opposite in as many words. SF-4 is about
     /// answering "am I on air?" without unlocking, and an operator using
     /// VoiceOver gets that answer from here.
     func testTheIdleStripSaysItIsNotTransmitting() {
-        let banner = TransmitBanner(isTransmitting: false, source: nil)
+        let banner = TransmitBanner(isTransmitting: false)
 
         XCTAssertTrue(banner.accessibilityDescription.contains("Not transmitting"))
         XCTAssertFalse(banner.accessibilityDescription.contains("On air"))

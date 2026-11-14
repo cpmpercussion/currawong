@@ -55,13 +55,6 @@
 	<true/>
 
 	<!--
-	Bluetooth, for the PTT accessory (PT-2, PT-3). Same pairing as above with
-	`NSBluetoothAlwaysUsageDescription`.
-	-->
-	<key>com.apple.security.device.bluetooth</key>
-	<true/>
-
-	<!--
 	Unchanged from the iOS file, and still required for the same reason:
 	`KeychainSecretStore` asks for the data protection keychain, and on macOS
 	opting into that without naming an access group fails every write with

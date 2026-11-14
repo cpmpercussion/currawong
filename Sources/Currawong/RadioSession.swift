@@ -75,8 +75,6 @@ final class RadioSession: ObservableObject {
             case audioInterruption
             /// SF-3.
             case routeChange
-            /// SF-2.
-            case accessoryLinkLost
         }
 
         let kind: Kind
@@ -256,10 +254,7 @@ final class RadioSession: ObservableObject {
     @Published private(set) var lastPreparationMilliseconds = 0
 
     /// The audio route the last key-down went out on (`route=BluetoothHFP`,
-    /// `route=none`, …).
-    ///
-    /// An accessory can be connected over BLE while its Classic side is not the
-    /// audio route; this is how a device test tells the two BU-15 cases apart.
+    /// `route=none`, …). How a device test tells the BU-15 cases apart.
     @Published private(set) var lastKeyDownRoute = ""
 
     /// What the last connect's input warm-up managed (BU-22, BU-24).
@@ -296,11 +291,6 @@ final class RadioSession: ObservableObject {
             if holdTrace.count > 24 { holdTrace.removeFirst() }
         #endif
     }
-
-    /// **PT-4.** Which input keyed the radio, or `nil`. Lets the banner say
-    /// whether letting go will unkey: a remote-command button latches, the
-    /// others are momentary.
-    @Published private(set) var activeSource: PTTSource?
 
     /// The codec the far end agreed to, as a name to display. `nil` until a
     /// connection reports one.
@@ -368,36 +358,6 @@ final class RadioSession: ObservableObject {
 
     private let audio: AudioIO
 
-    /// Called after an audio route change that found the session idle; wired
-    /// to the accessory controller's repair. A closure, so this class need not
-    /// know Bluetooth exists.
-    ///
-    /// Only called when ``isIdleForAccessoryRepair``: a repair is a reconnect,
-    /// and SF-2 makes a disconnection unkey, so a repair mid-over would drop
-    /// the operator.
-    var onIdleAudioRouteChange: (@MainActor () -> Void)?
-
-    /// Called when the SF-1 watchdog unkeys; wired to the accessory
-    /// controller's `radioUnkeyedExternally()`. An accessory link that dies
-    /// silently mid-press delivers no release, so without this its "keyed"
-    /// claim would outlive the transmission and block every repair.
-    var onWatchdogUnkey: (@MainActor () -> Void)?
-
-    /// Whether the accessory link may be rebuilt right now.
-    ///
-    /// A rebuild is a disconnection, and SF-2 makes a disconnection unkey, so
-    /// a rebuild while anything is on air drops the operator. Answered here
-    /// because this class knows. Gates ``onIdleAudioRouteChange``, and the
-    /// controller also asks before a repair on its own timer, since it cannot
-    /// see the on-screen button.
-    var isIdleForAccessoryRepair: Bool {
-        // Nothing on air, no hold the operator is still making, no automatic
-        // resume about to key back down. **And nothing else:** no quiet period
-        // after an over. The accessory link dies during the unkey, so a quiet
-        // period suppresses exactly the repair it needs (BU-14;
-        // `testARouteChangeJustAfterAnOverDoesAskForARepair` holds it).
-        !isTransmitting && heldSource == nil && !routeResumeInFlight
-    }
 
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
@@ -424,12 +384,13 @@ final class RadioSession: ObservableObject {
     private var transmitWork: Task<Void, Never>?
     private var transmitWorkGeneration = 0
 
-    /// Where the *hold* came from, as distinct from ``activeSource``.
+    /// Whether the operator is holding the button, as distinct from
+    /// ``isTransmitting``.
     ///
     /// They differ while recovering from a route change: transmission has
     /// stopped (SF-3) but the operator has not let go. Cleared by every other
     /// stop reason — see `TransmitStopReason.leavesTheHoldAlive`.
-    private var heldSource: PTTSource?
+    private var isHolding = false
 
     /// Automatic key-downs used by the current hold. Reset by a press the
     /// operator makes; never by one this class makes.
@@ -448,7 +409,7 @@ final class RadioSession: ObservableObject {
     /// Whether a route-change recovery is between the stop and the key-down.
     ///
     /// The activity stays up through this gap rather than flickering. Tracked
-    /// explicitly rather than inferred from ``heldSource``, because an
+    /// explicitly rather than inferred from ``isHolding``, because an
     /// unrecoverable route change also leaves the hold alive and must **not**
     /// keep the activity.
     private var routeResumeInFlight = false
@@ -1184,26 +1145,19 @@ final class RadioSession: ObservableObject {
 
     // MARK: - PTT (PT-1)
 
-    /// Touch-down on the PTT button, or a press edge from any other input.
-    /// `source` lets the UI say whether letting go will unkey (PT-4).
-    ///
-    /// Unconnected, only an on-screen press raises an alert: a fob pressed in
-    /// a pocket must not stack up modal alerts.
-    func beginTransmit(from source: PTTSource = .onScreen) {
+    /// Touch-down on the PTT button.
+    func beginTransmit() {
         guard connection.isConnected else {
-            if source == .onScreen {
-                present(
-                    title: "Not connected",
-                    message: "Connect to a node before transmitting.")
-            }
+            present(
+                title: "Not connected",
+                message: "Connect to a node before transmitting.")
             return
         }
 
         // **APP-33** licence gate. After the connected guard, so it is not
         // shown to someone not connected; before everything below, so a
         // refused press does no hold bookkeeping and cannot perturb the
-        // BU-15/BU-16 key-down ordering. Any source raises the sheet; the
-        // radio stays unkeyed either way.
+        // BU-15/BU-16 key-down ordering. The radio stays unkeyed either way.
         guard hasAcknowledgedLicence else {
             needsLicenceAcknowledgement = true
             return
@@ -1213,7 +1167,7 @@ final class RadioSession: ObservableObject {
 
         safetyNotice = nil
         // An operator press, not an automatic resume, starts a fresh hold.
-        if heldSource == nil {
+        if !isHolding {
             automaticResumes = 0
             keyDownsInCurrentHold = 0
             routeSignalsDuringPreparation = 0
@@ -1222,11 +1176,10 @@ final class RadioSession: ObservableObject {
         }
         // SF-4's clock times the hold, so a resume keeps the original stamp.
         if holdBegan == nil { holdBegan = now() }
-        trace(heldSource == nil ? "press" : "resume")
-        heldSource = source
+        trace(isHolding ? "resume" : "press")
+        isHolding = true
         transmitDesired = true
         isKeyDown = true
-        activeSource = source
         scheduleTransmitWork()
     }
 
@@ -1244,17 +1197,16 @@ final class RadioSession: ObservableObject {
             // so a watchdog or route-change drop is told from a release.
             Diagnostics.keying(
                 "endTransmit reason=\(reason) wasTransmitting=\(isTransmitting) "
-                    + "held=\(heldSource != nil)")
+                    + "held=\(isHolding)")
             lastStopReason = reason
             if reason.isUnexpected && explain { noteSafetyStop(reason) }
         }
         if !reason.leavesTheHoldAlive {
-            heldSource = nil
+            isHolding = false
             holdBegan = nil
         }
         transmitDesired = false
         isKeyDown = false
-        activeSource = nil
         watchdogDeadline = nil
         // Only a route change may leave a resume pending. Any other reason
         // cancels one already in flight, so it cannot key back down — above
@@ -1375,7 +1327,7 @@ final class RadioSession: ObservableObject {
                 // The hold ends here too, though this bypasses `endTransmit`:
                 // a live hold could let an automatic resume re-key, and would
                 // leave the lock-screen indicator with no way down.
-                heldSource = nil
+                isHolding = false
                 holdBegan = nil
                 routeResumeInFlight = false
                 watchdogDeadline = nil
@@ -1438,7 +1390,7 @@ final class RadioSession: ObservableObject {
         // (BU-13).
         Diagnostics.route(
             "signal \(signal) isTransmitting=\(isTransmitting) "
-                + "held=\(heldSource != nil) resumes=\(automaticResumes) "
+                + "held=\(isHolding) resumes=\(automaticResumes) "
                 + "audio=\(audio.audioStateDescription)")
         switch signal {
         case .interruptionBegan:
@@ -1457,11 +1409,6 @@ final class RadioSession: ObservableObject {
             if isTransmitting { routeSignalsWhileTransmitting += 1 }
             trace(isTransmitting ? "sigTx" : "sigIdle")
             resumeAcrossRouteChange()
-            // After `resumeAcrossRouteChange`, which decides whether a resume
-            // is in flight.
-            if isIdleForAccessoryRepair {
-                onIdleAudioRouteChange?()
-            }
         case .interruptionEnded:
             // Never resumes: `shouldResume` is about playback, and a radio must
             // not key itself because a call ended. The stop is repeated for
@@ -1480,17 +1427,16 @@ final class RadioSession: ObservableObject {
     /// ends the hold outright, so this cannot hold a transmitter open past the
     /// timeout.
     private func resumeAcrossRouteChange() {
-        let resumable = heldSource.flatMap { source in
-            connection.isConnected && automaticResumes < Self.maximumAutomaticResumes
-                ? source : nil
-        }
+        let resumable =
+            isHolding && connection.isConnected
+            && automaticResumes < Self.maximumAutomaticResumes
 
         // Set before the stop, since `endTransmit` refreshes the lock-screen
         // indicator (SF-4) and this tells it the hold is being repaired. If
         // unrecoverable, it stays false and the activity ends.
-        routeResumeInFlight = resumable != nil
-        endTransmit(reason: .routeChanged, explain: resumable == nil)
-        guard let source = resumable else { return }
+        routeResumeInFlight = resumable
+        endTransmit(reason: .routeChanged, explain: !resumable)
+        guard resumable else { return }
 
         automaticResumes += 1
         // Cancelled, not merely replaced: an earlier resume task must not key
@@ -1503,14 +1449,14 @@ final class RadioSession: ObservableObject {
             // canceller has already cleared `routeResumeInFlight`.
             guard !Task.isCancelled else { return }
             guard let self else { return }
-            guard self.heldSource == source, self.connection.isConnected else {
+            guard self.isHolding, self.connection.isConnected else {
                 // The hold or the link ended while settling: nothing will key
                 // back down, so the indicator must stop saying so.
                 self.routeResumeInFlight = false
                 self.refreshActivity()
                 return
             }
-            self.beginTransmit(from: source)
+            self.beginTransmit()
         }
     }
 
@@ -1541,12 +1487,6 @@ final class RadioSession: ObservableObject {
                 message:
                     "Transmission stopped: the audio route changed. Press and hold to transmit "
                     + "again.")
-        case .accessoryLinkLost:
-            safetyNotice = SafetyNotice(
-                kind: .accessoryLinkLost,
-                message:
-                    "Transmission stopped: the Bluetooth accessory disconnected, so its button "
-                    + "could no longer be trusted to release. Currawong will reconnect to it.")
         default:
             break
         }
@@ -1554,53 +1494,50 @@ final class RadioSession: ObservableObject {
 
     // MARK: - SF-4 (APP-3)
 
+    /// Shown while transmitting, on the strip and the lock screen: the button
+    /// is momentary, and letting go is what unkeys.
+    static let holdDescription = "Transmitting while held. Let go to stop."
+
     /// What the lock screen should show right now, or `nil`. A pure function
     /// of session state, so no path has its own idea of how to take the banner
     /// down.
     ///
-    /// **`isOnAir` follows ``isTransmitting`` only** — not ``isKeyDown`` or
-    /// ``transmitDesired``, which lead the client — so it is neither red early
-    /// nor red late.
+    /// **`isOnAir` needs both ``isTransmitting`` and ``transmitDesired``.** The
+    /// first lags the button at key-down, so the indicator is not red before
+    /// the client is keyed; the second is cleared the moment a stop begins,
+    /// with the microphone already shut, so it is not red while the client is
+    /// still answering the key-up.
     private var desiredActivity: TransmitActivityRequest? {
         guard connection.isConnected else { return nil }
         let channel = lastConnectedChannel ?? settings
 
-        if isTransmitting, let source = activeSource {
+        if isTransmitting, transmitDesired {
             return TransmitActivityRequest(
                 channel: channel.displayName,
                 mode: channel.mode.displayName,
                 state: TransmitActivityState(
                     isOnAir: true,
                     headline: "ON AIR",
-                    detail: source.holdDescription,
+                    detail: Self.holdDescription,
                     holdBegan: holdBegan ?? now(),
                     watchdogDeadline: watchdogDeadline))
         }
 
         // A route-change recovery, mid-gap: not on air, but kept up rather
         // than blinking off under a held button.
-        if routeResumeInFlight, let source = heldSource {
+        if routeResumeInFlight, isHolding {
             return TransmitActivityRequest(
                 channel: channel.displayName,
                 mode: channel.mode.displayName,
                 state: TransmitActivityState(
                     isOnAir: false,
                     headline: "NOT TRANSMITTING",
-                    detail: source.isMomentary
-                        ? "The audio route changed. Keying back down — keep holding."
-                        : "The audio route changed. Keying back down.",
+                    detail: "The audio route changed. Keying back down — keep holding.",
                     holdBegan: holdBegan ?? now(),
                     watchdogDeadline: nil))
         }
 
         // Nothing is keyed, so nothing is shown.
-        //
-        // **Open question (BU-10):** the activity is requested at key-down,
-        // which for an accessory keying a backgrounded app is a background
-        // request. `Activity.request` is documented as foreground-only; the app
-        // is running (PD-2's `audio` mode), not suspended, which may or may not
-        // count. If a device refuses, return a not-on-air state whenever
-        // connected, so the activity is created at Connect in the foreground.
         return nil
     }
 
@@ -1644,8 +1581,6 @@ final class RadioSession: ObservableObject {
             // SF-1. The client has unkeyed itself; the app still has a
             // microphone open and a button that thinks it is held.
             endTransmit(reason: .watchdogExpired)
-            // And possibly an accessory whose release will never arrive.
-            onWatchdogUnkey?()
             safetyNotice = SafetyNotice(
                 kind: .transmitWatchdog,
                 message:
@@ -1836,7 +1771,6 @@ final class RadioSession: ObservableObject {
         isTransmitting = false
         isKeyDown = false
         transmitDesired = false
-        activeSource = nil
     }
 
     private static func describe(_ duration: Duration) -> String {
@@ -1847,52 +1781,6 @@ final class RadioSession: ObservableObject {
             return minutes == 1 ? "1 minute" : "\(minutes) minutes"
         }
         return seconds == 1 ? "1 second" : "\(Int(seconds.rounded())) seconds"
-    }
-}
-
-// MARK: - PTTSink
-
-/// **The one consumer of every PTT input.** The accessory (PT-2/PT-3) and the
-/// remote-command button (PT-4) reach the microphone only through here, so
-/// every input shares ``RadioSession/endTransmit(reason:)``.
-///
-/// ## Releases are honoured unconditionally
-///
-/// No method checks that the input stopping is the one that started: an
-/// unnecessary stop costs nothing, a swallowed one is an open microphone. An
-/// accessory release while the on-screen button holds the key stops
-/// transmission; the operator presses again.
-extension RadioSession: PTTSink {
-
-    func pttPressed(from source: PTTSource) {
-        beginTransmit(from: source)
-    }
-
-    func pttReleased(from source: PTTSource, reason: TransmitStopReason) {
-        endTransmit(reason: reason)
-    }
-
-    /// **PT-4.** A remote command with no release edge: press to key, press
-    /// again to unkey.
-    ///
-    /// Tests `transmitDesired || isTransmitting`, not `isTransmitting` alone,
-    /// so a second toggle before the client answers unkeys rather than
-    /// latching.
-    func pttToggled(from source: PTTSource) {
-        if transmitDesired || isTransmitting {
-            endTransmit(reason: .remoteCommandToggled)
-        } else {
-            beginTransmit(from: source)
-        }
-    }
-
-    /// **SF-2.** The Bluetooth accessory's link dropped.
-    ///
-    /// Called by ``BLEPTTController`` on every disconnection, whether or not
-    /// the accessory held the key; `endTransmit` is safe when nothing is
-    /// transmitting and notes a reason only when it stopped something.
-    func accessoryLinkLost() {
-        endTransmit(reason: .accessoryLinkLost)
     }
 }
 
