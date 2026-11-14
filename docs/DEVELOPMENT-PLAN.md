@@ -2090,12 +2090,13 @@ UI tests that walk the channel lifecycle walk the new one.
   form moves to another channel or the app leaves the foreground, never as an
   empty value.
 
-**Not verified here:** `ChannelLifecycleUITests` is rewritten for this flow and
-builds, but the macOS UI-test runner on the development machine had lost its
-Accessibility grant (`BRINGUP.md`), so it has not been run. The same walk —
-callsign, `Add channel`, M17, an address, `Add`, and the link button naming the
-channel — passed on the iPhone simulator through
-`HierarchyDumpUITests/testDumpAfterFillingTheForm`. Nothing was tried on air.
+**Verified in the running app, 2026-11-14 (macOS):** `ChannelLifecycleUITests`
+passes — the callsign, a cancelled `Add channel`, a typed M17 channel, an edit
+that reaches the row with no Save, and a delete. Its second test,
+`testAReflectorChosenFromTheListBecomesAChannel`, is the done-when: a callsign
+and one tap in the live reflector list give a channel the link button offers to
+connect to. **Still not tried:** the EchoLink route through `Add channel`,
+which needs a real account password, and anything on air.
 
 ### APP-43 — the copy pass, and the app stops announcing its own name
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-11-14: *"The in-app

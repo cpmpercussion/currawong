@@ -80,6 +80,54 @@ final class ChannelLifecycleUITests: XCTestCase {
             "the channel was still listed after Delete")
     }
 
+    /// APP-42's done-when, in the running app: a callsign and a tap in the
+    /// reflector list give a channel the link button will connect to, with no
+    /// address typed and Settings never opened. Stops before connecting.
+    ///
+    /// **Needs the internet**: the list is the M17 Project's published file,
+    /// and which reflector comes first is whatever it says that day, so the
+    /// assertions are about there being a new M17 row and not about its name.
+    func testAReflectorChosenFromTheListBecomesAChannel() throws {
+        let app = IsolatedApp.launched()
+        giveCallsign("VK1TEST", in: app)
+
+        let add = app.buttons["Add channel"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add channel button")
+        add.click()
+        let network = app.buttons["addChannel.network.m17"].firstMatch
+        XCTAssertTrue(network.waitForExistence(timeout: 5), "Add channel did not offer M17")
+        network.click()
+
+        // A module button is labelled "Add <reflector> module <letter>".
+        let module = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Add ", " module ")
+        ).firstMatch
+        guard module.waitForExistence(timeout: 30) else {
+            throw XCTSkip("the reflector list did not load — no network, or the file has moved")
+        }
+        module.click()
+
+        let m17Rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", M17,"))
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { m17Rows.count == 1 },
+            "choosing a module did not add exactly one M17 channel")
+        XCTAssertFalse(
+            app.buttons["addChannel.cancel"].firstMatch.exists,
+            "the Add channel sheet stayed up after a module was chosen")
+
+        let connect = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Connect to ")).firstMatch
+        XCTAssertTrue(
+            connect.waitForExistence(timeout: 5),
+            "no link button for the channel that was just chosen")
+        XCTAssertTrue(connect.isEnabled)
+
+        // Leave the suite as it was found.
+        let label = m17Rows.firstMatch.label
+        let name = String(label.prefix(while: { $0 != "," }))
+        XCTAssertTrue(deleteOneRow(named: name, in: app), "could not delete the chosen channel")
+    }
+
     // MARK: - Rows
 
     private func rowCount(named name: String, in app: XCUIApplication) -> Int {
