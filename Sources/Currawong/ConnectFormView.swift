@@ -187,9 +187,7 @@ struct ConnectFormView: View {
         LabelledField(label: "Port", systemImage: "number") {
             TextField(String(settings.mode.defaultPort), text: $portText)
                 .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                    .keyboardType(.numberPad)
-                #endif
+                .numberPadWithDone()
         }
     }
 
@@ -197,6 +195,7 @@ struct ConnectFormView: View {
     private var nodeNumberField: some View {
         LabelledField(label: "Node number", systemImage: "antenna.radiowaves.left.and.right") {
             TextField("55553", text: $settings.node)
+                .accessibilityIdentifier("connect.node")
                 .textFieldStyle(.roundedBorder)
                 #if os(iOS)
                     .keyboardType(.numbersAndPunctuation)
@@ -517,6 +516,7 @@ struct ConnectFormView: View {
             } else {
                 LabelledField(label: "Username", systemImage: "person") {
                     TextField("optional", text: $settings.username)
+                        .accessibilityIdentifier("connect.username")
                         .textFieldStyle(.roundedBorder)
                         #if os(iOS)
                             .textInputAutocapitalization(.never)
@@ -527,6 +527,7 @@ struct ConnectFormView: View {
                 LabelledField(label: "Secret", systemImage: "key") {
                     // Kept in the Keychain; never in defaults or logs.
                     SecureField("", text: $secret)
+                        .accessibilityIdentifier("connect.secret")
                         .textFieldStyle(.roundedBorder)
                 }
             }
