@@ -1878,6 +1878,10 @@ and the licence notice's wording. A change to any of those is a change to
 `/docs` with the site live at the URL above, and all four URLs are entered in
 App Store Connect.
 
+**The listing's own text is in `docs/APP-STORE.md`** since 2026-11-15, written
+for 1.0.0. It makes the same claims as the pages and is held to the same rule:
+a change to what the app does is a change to that file in the same PR.
+
 ### APP-40 — a notarised Mac download on GitHub releases
 **Where:** `currawong`, `scripts/`. **Raised by:** the maintainer, 2026-09-26,
 closing `#43` (`APP-26`) as superseded: most of that PR was LGPL §6 compliance

@@ -10,7 +10,7 @@
 [![Platforms](https://img.shields.io/badge/platforms-iOS%2016.2%20%7C%20macOS%2013-lightgrey)](project.yml)
 [![Modes](https://img.shields.io/badge/modes-AllStarLink%20%7C%20M17%20%7C%20EchoLink-brightgreen)](#what-it-does)
 [![Codecs](https://img.shields.io/badge/codecs-%CE%BC--law%20%7C%20GSM%20%7C%20Codec2-blue)](docs/CODEC2.md)
-[![Library](https://img.shields.io/badge/swift--hamvoip-0.5.4-informational)](https://github.com/cpmpercussion/swift-hamvoip)
+[![Library](https://img.shields.io/badge/swift--hamvoip-0.8.1-informational)](https://github.com/cpmpercussion/swift-hamvoip)
 [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
 Currawong is an iOS and macOS app for communicating on internet-linked
@@ -195,38 +195,31 @@ whose whole purpose is a screen nobody was looking at.
 ## Maturity
 
 All three modes have been used on the air, in both directions, from the app.
-This is version 0.1.0 and has not been released; the audio quality judged from
-the far end, sustained receive, and the watchdog and interruption paths on real
-equipment are all still being worked through in
-[`docs/BRINGUP.md`](docs/BRINGUP.md) — faults rather than features, landing
-straight on `main` until that list is clear. What is planned rather than built
-is in [`docs/DEVELOPMENT-PLAN.md`](docs/DEVELOPMENT-PLAN.md).
+Version 1.0.0 is being prepared on the `v1.0.0-rc` branch and is the first
+release meant for the App Store; earlier tags were TestFlight builds. Faults
+found on real equipment, open and settled, are in
+[`docs/BRINGUP.md`](docs/BRINGUP.md). What is planned rather than built is in
+[`docs/DEVELOPMENT-PLAN.md`](docs/DEVELOPMENT-PLAN.md), and the App Store
+listing's text is in [`docs/APP-STORE.md`](docs/APP-STORE.md).
 
 ## Building and testing from the terminal
 
-You need Xcode, [xcodegen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`) and `cmake` (`brew install cmake`). The library is
-resolved from its tag, so this repository is all you need to clone.
-
-`cmake` is there for `Codec2.xcframework`, which the app embeds for M17 audio
-(FR-2.4) and which is not in version control — 7.6 MB of LGPL-2.1 binary. The
-`make` targets below build it automatically the first time, which takes about
-four minutes and then never again unless you run `make distclean`. Why the app
-builds its own rather than getting one from the library:
-[`docs/CODEC2.md`](docs/CODEC2.md).
+You need Xcode and [xcodegen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`). The library is resolved from its tag, so this
+repository is all you need to clone. Codec 2 for M17 audio (FR-2.4) comes from
+the library in pure Swift; [`docs/CODEC2.md`](docs/CODEC2.md) has the history.
 
 The `.xcodeproj` is generated from `project.yml` and is not in version control,
 so generate it first:
 
 ```sh
 make generate      # xcodegen generate
-make codec2        # build Codec2.xcframework (implied by the targets below)
 make build         # build for a generic iOS device
 make build-macos   # build for macOS
 make test          # run the unit tests on an iOS simulator
 make test-macos    # run the unit tests on macOS
 make clean         # remove the generated project and all build output
-make distclean     # ...and the Codec2 framework, forcing a four-minute rebuild
+make distclean     # ...and any local build tree
 ```
 
 `make test` picks an installed iPhone simulator for you
@@ -271,14 +264,14 @@ VM on the same machine: no device, no provisioning, no local-network prompt.
 ## Dependency on the library
 
 `project.yml` declares `swift-hamvoip` as an ordinary versioned SPM dependency,
-`from: 0.5.4`. Note that the library is 0.x and says in its own changelog that
+`from: 0.8.1`. Note that the library is 0.x and says in its own changelog that
 the API may change in any release, so `from:` is a looser promise here than it
 would be after 1.0.
 
-Nothing in this repository pins the resolved version: the `Package.resolved`
-that would do it lives inside the generated `.xcodeproj`, which is not in
-version control, so a fresh `make generate` takes the newest matching release.
-Pin the version in `project.yml` if that ever matters.
+A local `make generate` takes the newest matching release, because the
+`Package.resolved` it writes lives inside the generated `.xcodeproj`. Xcode
+Cloud builds from the pin committed as `ci_scripts/Package.resolved`; `make
+resolved` refreshes it.
 
 To work on the app and the library together, swap the dependency for a path
 dependency on a sibling checkout and regenerate — there is a commented-out
