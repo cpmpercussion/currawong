@@ -2308,6 +2308,43 @@ run.
 against a deliberately broken product — the `BU-15` preparation gate removed —
 and they fail. A test that cannot fail is not a fix.
 
+#### 4. Addendum, 2026-11-15: the cascade ran twice and waited once
+
+`testARouteChangeAfterPreparationStillDropsTransmit` was still failing on macOS
+after the above, intermittently, at its final `isTransmitting` assertion. The
+fix in part 1 had a flaw of its own. The helper waited for
+`routeSignalsDuringPreparation` to reach 1, 2, 3 — but that counter lasts the
+whole hold, and the `onSettleRoute` hook runs for every preparation in it. This
+test is the only one in the file whose hold is repaired by SF-3, so it is the
+only one where the hook runs twice. On the repair the counter was already 3,
+every wait returned at once, and the three signals were left queued with nothing
+ensuring they were handled before the key-down.
+
+One failure was captured, in 150 runs of the test alone with every core loaded,
+with `holdTrace` in the assertion message:
+
+```
+press@0 prep@0 mic@0 sigPrep@0 sigPrep@1 sigPrep@1 prepped@3 carrier@3 onair@3
+sigTx@4 resume@306 prep@306 mic@307 sigPrep@307 sigPrep@307 prepped@309
+sigIdle@309 carrier@309 onair@309
+```
+
+with the client's call log ending `startTransmit, stopTransmit, startTransmit,
+stopTransmit`. Two of the repair's three signals landed inside its preparation;
+the third was handled after `prepped`, dropped the hold again, and the assertion
+read the client between that drop and the next repair.
+
+The helper now reads the counter when each preparation begins and waits for that
+baseline plus the signal number, so the repair's cascade is delivered inside its
+own window as the first one is. After the change the test passed 700 of 700
+loaded runs and the class 150 of 150, on macOS. The full suite and the iOS
+simulator were not run for this change.
+
+**The trace is also the first recorded sighting of `BU-21`'s window** —
+`sigIdle` between `prepped` and `carrier`, exactly as that entry predicts — but
+in a test, produced by the test's own stale signals. It is not an on-air
+observation and does not change `BU-21`'s status.
+
 ### BU-21 — the preparation gate closes one step early 🔧 OPEN 2026-08-26
 
 **Found by reading, not by watching.** `applyTransmit` clears
