@@ -223,6 +223,4 @@ Known and not worth reporting:
 
 ### Feedback email
 
-Not set.
-
-Required for external testing. Fill in the address you want tester feedback to reach.
+Kept out of this file; it is on the copy sheet.
