@@ -14,8 +14,11 @@ import Foundation
 ///           -currawong-defaults-reset YES
 /// ```
 ///
-/// **`#if DEBUG` only**: a release build always uses `.standard`. The Keychain
-/// is not isolated — a test that stores a secret stores it for real.
+/// **`#if DEBUG` only**: a release build always uses `.standard`.
+///
+/// The Keychain follows the suite: a named suite gets a Keychain service of the
+/// same name, emptied by the same reset, so a test that types a secret into the
+/// app cannot overwrite or delete the operator's. See ``secretStore``.
 enum DefaultsSuite {
     /// Names the suite to use instead of `.standard`.
     static let suiteArgument = "currawong-defaults-suite"
@@ -32,6 +35,26 @@ enum DefaultsSuite {
     /// The defaults the app should use. Resolved once, so both stores agree and
     /// the reset precedes any read.
     static let resolved: UserDefaults = resolve()
+
+    /// The secret store to match ``resolved``: the operator's Keychain items,
+    /// or a throwaway service when a UI test named a suite.
+    static let secretStore: KeychainSecretStore = {
+        guard let service = secretService() else { return KeychainSecretStore() }
+        let store = KeychainSecretStore(service: service)
+        if UserDefaults.standard.bool(forKey: resetArgument) { store.removeAll() }
+        return store
+    }()
+
+    /// The Keychain service a named suite uses, or `nil` for the operator's
+    /// own. The suite's name, so the two cannot be pointed at different places.
+    static func secretService(reading source: UserDefaults = .standard) -> String? {
+        #if DEBUG
+        guard let name = source.string(forKey: suiteArgument), !name.isEmpty else { return nil }
+        return name
+        #else
+        return nil
+        #endif
+    }
 
     /// - Parameter source: where to look for the launch arguments. The argument
     ///   domain is part of `.standard`; a test passes its own.

@@ -69,7 +69,8 @@ final class CompositionRoot {
         // A UI test may substitute a throwaway suite; see ``DefaultsSuite``.
         settingsStore: SettingsStore = UserDefaultsSettingsStore(
             defaults: DefaultsSuite.resolved),
-        secretStore: SecretStore = KeychainSecretStore(),
+        // The Keychain service follows the defaults suite, for the same reason.
+        secretStore: SecretStore = DefaultsSuite.secretStore,
         stationDirectory: any StationDirectory = EchoLinkStationDirectory(),
         proxyFinder: any ProxyFinder = EchoLinkPublicProxyFinder(),
         reflectorDirectory: any ReflectorDirectory = HostFileReflectorDirectory(),

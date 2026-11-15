@@ -84,6 +84,18 @@ final class KeychainSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
+    /// Removes every item under this service. For the throwaway service a UI
+    /// test asks for (``DefaultsSuite/secretStore``): nothing calls this on
+    /// the operator's own.
+    func removeAll() {
+        _ = SecItemDelete(
+            [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecUseDataProtectionKeychain as String: true,
+            ] as CFDictionary)
+    }
+
     private func delete(account: String) throws {
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
