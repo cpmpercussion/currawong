@@ -59,15 +59,22 @@ final class BU15FirstOverTests: XCTestCase {
         let audio = harness.audio
         let session = harness.session!
         return {
+            // Counted from where this preparation began, not from zero. The
+            // counter lasts the whole hold and the hook runs for every
+            // preparation in it, an SF-3 repair's included; an absolute target
+            // is already met there, and the signals would be left queued to
+            // land after the key-down.
+            let before = await MainActor.run { session.routeSignalsDuringPreparation }
             for signal in 1...count {
                 audio.emit(.routeChanged(.oldDeviceUnavailable))
-                await Self.waitUntilHandled(signal, by: session, file: file, line: line)
+                await Self.waitUntilHandled(
+                    before + signal, by: session, file: file, line: line)
             }
         }
     }
 
-    /// Waits until the session has counted the `n`th signal of a cascade as
-    /// having arrived during preparation.
+    /// Waits until the session has counted `n` signals in this hold as having
+    /// arrived during preparation.
     ///
     /// Off the main actor by necessity — this runs inside `settleRoute()`,
     /// which the session is awaiting, so the main actor is free and hopping to
@@ -90,7 +97,7 @@ final class BU15FirstOverTests: XCTestCase {
             return
         }
         XCTFail(
-            "the session never handled signal \(n) of the cascade as a preparation signal",
+            "the session never counted \(n) preparation signals in this hold",
             file: file, line: line)
     }
 
