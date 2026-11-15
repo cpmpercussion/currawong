@@ -105,10 +105,9 @@ struct SettingsView: View {
 
             LabelledField(label: "Transmit watchdog (seconds)", systemImage: "timer") {
                 TextField(String(TransmitTimeout.default.wholeSeconds), text: $timeoutText)
+                    .accessibilityIdentifier("settings.transmitTimeout")
                     .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .keyboardType(.numberPad)
-                    #endif
+                    .numberPadWithDone()
             }
 
             // SF-1 is enforced in the library, not here, and is not optional:
@@ -337,9 +336,7 @@ struct SettingsView: View {
             LabelledField(label: "Proxy port", systemImage: "number") {
                 TextField(String(EchoLinkProxySettings.defaultPort), text: $proxyPortText)
                     .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .keyboardType(.numberPad)
-                    #endif
+                    .numberPadWithDone()
             }
 
             LabelledField(label: "Proxy password", systemImage: "lock") {

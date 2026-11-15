@@ -29,3 +29,6 @@ xcuserdata/
 # Coverage counters dropped in the working tree by an instrumented run.
 default.profraw
 *.profraw
+
+# Store artwork is rebuilt by Design/app-store/make.py from the screenshots.
+Design/app-store/out/

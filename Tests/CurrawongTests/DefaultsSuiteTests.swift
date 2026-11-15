@@ -35,6 +35,21 @@ final class DefaultsSuiteTests: XCTestCase {
         XCTAssertEqual(DefaultsSuite.resolve(reading: source), .standard)
     }
 
+    /// The Keychain half of the same decision: no argument, the operator's own
+    /// items. A throwaway service here would look like every secret vanishing.
+    func testWithNoArgumentTheOperatorsOwnKeychainServiceIsUsed() {
+        XCTAssertNil(DefaultsSuite.secretService(reading: source))
+        source.set("", forKey: DefaultsSuite.suiteArgument)
+        XCTAssertNil(DefaultsSuite.secretService(reading: source))
+    }
+
+    /// A UI test that types a secret must not reach the operator's Keychain,
+    /// and the service is the suite's name so the two cannot disagree.
+    func testANamedSuiteGetsAKeychainServiceOfTheSameName() {
+        source.set(targetName, forKey: DefaultsSuite.suiteArgument)
+        XCTAssertEqual(DefaultsSuite.secretService(reading: source), targetName)
+    }
+
     func testAnEmptySuiteNameIsIgnored() {
         source.set("", forKey: DefaultsSuite.suiteArgument)
         XCTAssertEqual(DefaultsSuite.resolve(reading: source), .standard)
